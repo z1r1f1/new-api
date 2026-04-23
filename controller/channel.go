@@ -473,18 +473,8 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	if channel.Type == constant.ChannelTypeCodex {
 		trimmedKey := strings.TrimSpace(channel.Key)
 		if isAdd || trimmedKey != "" {
-			if !strings.HasPrefix(trimmedKey, "{") {
-				return fmt.Errorf("Codex key must be a valid JSON object")
-			}
-			var keyMap map[string]any
-			if err := common.Unmarshal([]byte(trimmedKey), &keyMap); err != nil {
-				return fmt.Errorf("Codex key must be a valid JSON object")
-			}
-			if v, ok := keyMap["access_token"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
-				return fmt.Errorf("Codex key JSON must include access_token")
-			}
-			if v, ok := keyMap["account_id"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
-				return fmt.Errorf("Codex key JSON must include account_id")
+			if _, err := normalizeCodexKey(trimmedKey); err != nil {
+				return err
 			}
 		}
 	}
@@ -571,6 +561,21 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	preparedCodexKeys := make([]string, 0)
+	if addChannelRequest.Channel != nil &&
+		addChannelRequest.Channel.Type == constant.ChannelTypeCodex &&
+		addChannelRequest.Mode == "batch" {
+		preparedCodexKeys, err = getCodexBatchKeys(addChannelRequest.Channel.Key)
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+		addChannelRequest.Channel.Key = preparedCodexKeys[0]
+	}
+
 	// 使用统一的校验函数
 	if err := validateChannel(addChannelRequest.Channel, true); err != nil {
 		c.JSON(http.StatusOK, gin.H{
@@ -611,7 +616,20 @@ func AddChannel(c *gin.Context) {
 		}
 		keys = []string{addChannelRequest.Channel.Key}
 	case "batch":
-		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
+		if addChannelRequest.Channel.Type == constant.ChannelTypeCodex {
+			if len(preparedCodexKeys) > 0 {
+				keys = preparedCodexKeys
+			} else {
+				keys, err = getCodexBatchKeys(addChannelRequest.Channel.Key)
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": err.Error(),
+					})
+					return
+				}
+			}
+		} else if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
 			// multi json
 			keys, err = getVertexArrayKeys(addChannelRequest.Channel.Key)
 			if err != nil {
@@ -635,20 +653,24 @@ func AddChannel(c *gin.Context) {
 	}
 
 	channels := make([]model.Channel, 0, len(keys))
+	originalName := addChannelRequest.Channel.Name
 	for _, key := range keys {
 		if key == "" {
 			continue
 		}
-		localChannel := addChannelRequest.Channel
+		localChannel := *addChannelRequest.Channel
 		localChannel.Key = key
-		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 {
+		if localChannel.Type == constant.ChannelTypeCodex {
+			localChannel.Name = getCodexChannelName(key, localChannel.Name)
+		}
+		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 && strings.TrimSpace(originalName) != "" {
 			keyPrefix := localChannel.Key
 			if len(localChannel.Key) > 8 {
 				keyPrefix = localChannel.Key[:8]
 			}
 			localChannel.Name = fmt.Sprintf("%s %s", localChannel.Name, keyPrefix)
 		}
-		channels = append(channels, *localChannel)
+		channels = append(channels, localChannel)
 	}
 	err = model.BatchInsertChannels(channels)
 	if err != nil {
@@ -661,6 +683,111 @@ func AddChannel(c *gin.Context) {
 		"message": "",
 	})
 	return
+}
+
+func validateCodexKeyObject(keyMap map[string]any) error {
+	if v, ok := keyMap["access_token"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
+		return fmt.Errorf("Codex key JSON must include access_token")
+	}
+	if v, ok := keyMap["account_id"]; !ok || v == nil || strings.TrimSpace(fmt.Sprintf("%v", v)) == "" {
+		return fmt.Errorf("Codex key JSON must include account_id")
+	}
+	return nil
+}
+
+func normalizeCodexKey(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if !strings.HasPrefix(trimmed, "{") {
+		return "", fmt.Errorf("Codex key must be a valid JSON object")
+	}
+	var keyMap map[string]any
+	if err := common.Unmarshal([]byte(trimmed), &keyMap); err != nil {
+		return "", fmt.Errorf("Codex key must be a valid JSON object")
+	}
+	if err := validateCodexKeyObject(keyMap); err != nil {
+		return "", err
+	}
+	normalizedBytes, err := common.Marshal(keyMap)
+	if err != nil {
+		return "", fmt.Errorf("Codex key JSON 编码失败: %w", err)
+	}
+	return string(normalizedBytes), nil
+}
+
+func normalizeCodexKeyValue(value any) (string, error) {
+	switch v := value.(type) {
+	case string:
+		return normalizeCodexKey(v)
+	case map[string]any:
+		if err := validateCodexKeyObject(v); err != nil {
+			return "", err
+		}
+		normalizedBytes, err := common.Marshal(v)
+		if err != nil {
+			return "", fmt.Errorf("Codex key JSON 编码失败: %w", err)
+		}
+		return string(normalizedBytes), nil
+	default:
+		rawBytes, err := common.Marshal(v)
+		if err != nil {
+			return "", fmt.Errorf("Codex key JSON 编码失败: %w", err)
+		}
+		return normalizeCodexKey(string(rawBytes))
+	}
+}
+
+func getCodexChannelName(rawKey string, currentName string) string {
+	if strings.TrimSpace(currentName) != "" {
+		return currentName
+	}
+
+	var keyMap map[string]any
+	if err := common.Unmarshal([]byte(strings.TrimSpace(rawKey)), &keyMap); err != nil {
+		return currentName
+	}
+
+	email, ok := keyMap["email"]
+	if !ok || email == nil {
+		return fmt.Sprintf("codex-%s", strings.ToLower(common.GetRandomString(6)))
+	}
+
+	emailStr := strings.TrimSpace(fmt.Sprintf("%v", email))
+	if emailStr == "" {
+		return fmt.Sprintf("codex-%s", strings.ToLower(common.GetRandomString(6)))
+	}
+
+	return emailStr
+}
+
+func getCodexBatchKeys(keys string) ([]string, error) {
+	trimmed := strings.TrimSpace(keys)
+	if trimmed == "" {
+		return nil, fmt.Errorf("批量添加 Codex 渠道的 keys 不能为空")
+	}
+
+	if !strings.HasPrefix(trimmed, "[") {
+		return nil, fmt.Errorf("批量添加 Codex 必须使用标准 JsonArray 格式")
+	}
+
+	var keyArray []any
+	if err := common.Unmarshal([]byte(trimmed), &keyArray); err != nil {
+		return nil, fmt.Errorf("批量添加 Codex 必须使用标准 JsonArray 格式，请检查输入: %w", err)
+	}
+
+	cleanKeys := make([]string, 0, len(keyArray))
+	for index, keyValue := range keyArray {
+		normalizedKey, err := normalizeCodexKeyValue(keyValue)
+		if err != nil {
+			return nil, fmt.Errorf("第 %d 个 Codex key 无效: %w", index+1, err)
+		}
+		if normalizedKey != "" {
+			cleanKeys = append(cleanKeys, normalizedKey)
+		}
+	}
+	if len(cleanKeys) == 0 {
+		return nil, fmt.Errorf("批量添加 Codex 的 keys 不能为空")
+	}
+	return cleanKeys, nil
 }
 
 func DeleteChannel(c *gin.Context) {

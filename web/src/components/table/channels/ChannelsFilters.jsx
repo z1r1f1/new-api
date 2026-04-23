@@ -56,6 +56,25 @@ const ChannelsFilters = ({
 
         <Button
           size='small'
+          theme='light'
+          type='secondary'
+          className='w-full md:w-auto'
+          onClick={() => {
+            setEditingChannel({
+              id: undefined,
+              create_mode: 'batch',
+              type: 57,
+              groups: ['vip'],
+              test_model: 'gpt-5.4',
+            });
+            setShowEdit(true);
+          }}
+        >
+          {t('批量添加渠道')}
+        </Button>
+
+        <Button
+          size='small'
           type='tertiary'
           className='w-full md:w-auto'
           onClick={refresh}
