@@ -30,6 +30,7 @@ import CompactModeToggle from '../../common/ui/CompactModeToggle';
 
 const ChannelsActions = ({
   enableBatchDelete,
+  batchTestSelectedChannels,
   batchDeleteChannels,
   setShowBatchSetTag,
   testAllChannels,
@@ -64,6 +65,24 @@ const ChannelsActions = ({
       <div className='flex flex-col md:flex-row justify-between gap-2'>
         {/* 左侧：批量操作按钮 */}
         <div className='flex flex-wrap md:flex-nowrap items-center gap-2 w-full md:w-auto order-2 md:order-1'>
+          <Button
+            size='small'
+            disabled={!enableBatchDelete}
+            type='primary'
+            className='w-full md:w-auto'
+            onClick={() => {
+              Modal.confirm({
+                title: t('确定是否要测试所选渠道？'),
+                content: t(
+                  '将按每个渠道的测试模型进行测试；测试失败会按自动测试规则自动禁用，测试成功会将自动禁用渠道恢复为已启用。',
+                ),
+                onOk: () => batchTestSelectedChannels(),
+              });
+            }}
+          >
+            {t('测试所选渠道')}
+          </Button>
+
           <Button
             size='small'
             disabled={!enableBatchDelete}
@@ -105,14 +124,16 @@ const ChannelsActions = ({
                     onClick={() => {
                       Modal.confirm({
                         title: t('确定？'),
-                        content: t('确定要测试所有未手动禁用渠道吗？'),
+                        content: t(
+                          '确定要按测试模型测试所有未手动禁用渠道吗？测试失败会按自动测试规则自动禁用，测试成功会将自动禁用渠道恢复为已启用。',
+                        ),
                         onOk: () => testAllChannels(),
                         size: 'small',
                         centered: true,
                       });
                     }}
                   >
-                    {t('测试所有未手动禁用渠道')}
+                    {t('按测试模型测试全部渠道')}
                   </Button>
                 </Dropdown.Item>
                 <Dropdown.Item>

@@ -606,6 +606,22 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	return channel != nil && channel.Type == constant.ChannelTypeCodex
 }
 
+func shouldDeleteChannelAfterTest(result testResult) bool {
+	candidates := []error{result.localErr}
+	if result.newAPIError != nil {
+		candidates = append(candidates, result.newAPIError)
+	}
+	for _, err := range candidates {
+		if err == nil {
+			continue
+		}
+		if strings.Contains(strings.ToLower(err.Error()), "deactivated_workspace") {
+			return true
+		}
+	}
+	return false
+}
+
 func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	if len(jsonBytes) == 0 {
 		return ""
@@ -827,8 +843,7 @@ func TestChannel(c *gin.Context) {
 var testAllChannelsLock sync.Mutex
 var testAllChannelsRunning bool = false
 
-func testAllChannels(notify bool) error {
-
+func runChannelAutoTests(channels []*model.Channel, notify bool) error {
 	testAllChannelsLock.Lock()
 	if testAllChannelsRunning {
 		testAllChannelsLock.Unlock()
@@ -836,10 +851,7 @@ func testAllChannels(notify bool) error {
 	}
 	testAllChannelsRunning = true
 	testAllChannelsLock.Unlock()
-	channels, getChannelErr := model.GetAllChannels(0, 0, true, false)
-	if getChannelErr != nil {
-		return getChannelErr
-	}
+
 	var disableThreshold = int64(common.ChannelDisableThreshold * 1000)
 	if disableThreshold == 0 {
 		disableThreshold = 10000000 // a impossible value
@@ -861,6 +873,17 @@ func testAllChannels(notify bool) error {
 			result := testChannel(channel, "", "", shouldUseStreamForAutomaticChannelTest(channel))
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
+
+			if shouldDeleteChannelAfterTest(result) {
+				if err := channel.Delete(); err != nil {
+					common.SysError(fmt.Sprintf("failed to delete channel after deactivated_workspace: channel_id=%d err=%v", channel.Id, err))
+				} else {
+					common.SysLog(fmt.Sprintf("deleted channel #%d (%s) because test response contains deactivated_workspace", channel.Id, channel.Name))
+					model.InitChannelCache()
+				}
+				time.Sleep(common.RequestInterval)
+				continue
+			}
 
 			shouldBanChannel := false
 			newAPIError := result.newAPIError
@@ -899,6 +922,14 @@ func testAllChannels(notify bool) error {
 	return nil
 }
 
+func testAllChannels(notify bool) error {
+	channels, getChannelErr := model.GetAllChannels(0, 0, true, false)
+	if getChannelErr != nil {
+		return getChannelErr
+	}
+	return runChannelAutoTests(channels, notify)
+}
+
 func TestAllChannels(c *gin.Context) {
 	err := testAllChannels(true)
 	if err != nil {
@@ -908,6 +939,45 @@ func TestAllChannels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
+	})
+}
+
+func TestChannelsBatch(c *gin.Context) {
+	channelBatch := ChannelBatch{}
+	if err := c.ShouldBindJSON(&channelBatch); err != nil || len(channelBatch.Ids) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "参数错误",
+		})
+		return
+	}
+
+	channelRecords := make([]model.Channel, 0, len(channelBatch.Ids))
+	if err := model.DB.Where("id in (?)", channelBatch.Ids).Find(&channelRecords).Error; err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if len(channelRecords) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "未找到可测试的渠道",
+		})
+		return
+	}
+	channels := make([]*model.Channel, 0, len(channelRecords))
+	for index := range channelRecords {
+		channels = append(channels, &channelRecords[index])
+	}
+
+	if err := runChannelAutoTests(channels, true); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    len(channels),
 	})
 }
 

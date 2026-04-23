@@ -719,6 +719,27 @@ export const useChannelsData = () => {
     setLoading(false);
   };
 
+  const batchTestSelectedChannels = async () => {
+    if (selectedChannels.length === 0) {
+      showError(t('请先选择要测试的渠道！'));
+      return;
+    }
+
+    const ids = selectedChannels.map((channel) => channel.id);
+    const res = await API.post('/api/channel/test/batch', { ids });
+    const { success, message, data } = res.data;
+    if (success) {
+      showInfo(
+        t('已开始批量测试 ${count} 个所选渠道，将按测试模型自动禁用或恢复启用。请稍后刷新页面查看结果。').replace(
+          '${count}',
+          data || ids.length,
+        ),
+      );
+    } else {
+      showError(message);
+    }
+  };
+
   // Channel operations
   const testAllChannels = async () => {
     const res = await API.get(`/api/channel/test`);
@@ -1229,6 +1250,7 @@ export const useChannelsData = () => {
     handleRow,
     batchSetChannelTag,
     batchDeleteChannels,
+    batchTestSelectedChannels,
     testAllChannels,
     deleteAllDisabledChannels,
     updateAllChannelsBalance,
