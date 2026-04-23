@@ -20,6 +20,7 @@ tiktoken_cache
 .gomodcache/
 .cache
 web/bun.lock
+.runtime/
 plans
 .claude
 
@@ -31,3 +32,4 @@ data/
 .gopath
 
 token_estimator_test.go
+.gitnexus

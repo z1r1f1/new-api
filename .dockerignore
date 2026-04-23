@@ -8,3 +8,8 @@ docs
 .eslintcache
 .gocache
 /web/node_modules
+/web/node_modules.bad*
+/web/dist.bad*
+/web/dist-check*
+/web/dist
+/.runtime
