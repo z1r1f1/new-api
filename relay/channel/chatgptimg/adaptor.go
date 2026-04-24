@@ -167,7 +167,8 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if err != nil {
 		return nil, err
 	}
-	res, err := runImageGeneration(c.Request.Context(), client, req, refs)
+	testMode := info != nil && info.IsChannelTest
+	res, err := runImageGeneration(c.Request.Context(), client, req, refs, testMode)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +185,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		}
 	}
 
-	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res)
+	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res, testMode)
 	if err != nil {
 		return nil, err
 	}
@@ -389,14 +390,20 @@ func guessExtensionFromDataURLMeta(meta string) string {
 	}
 }
 
-func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile) (*imageRunResult, error) {
+func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool) (*imageRunResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, 6*time.Minute)
 	defer cancel()
 
 	result := &imageRunResult{}
 	maxAttempts := 2
-	if len(refs) > 0 {
+	if len(refs) > 0 || testMode {
 		maxAttempts = 1
+	}
+	pollMaxWait := 300 * time.Second
+	sameConvMax := 3
+	if testMode {
+		pollMaxWait = 45 * time.Second
+		sameConvMax = 1
 	}
 
 	cr, err := client.ChatRequirementsV2(ctx)
@@ -407,7 +414,6 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	if cr.Proofofwork.Required {
 		proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
 	}
-	const sameConvMax = 3
 	var convID string
 	parentID := uuid.NewString()
 	messageID := uuid.NewString()
@@ -486,7 +492,7 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 			if convID == "" {
 				return nil, errors.New("chatgpt image channel: missing conversation id from SSE")
 			}
-			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{MaxWait: 300 * time.Second, BaselineToolIDs: baselineTools})
+			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{MaxWait: pollMaxWait, BaselineToolIDs: baselineTools})
 			switch pollStatus {
 			case PollStatusIMG2:
 				fileRefs = append(fileRefs, fids...)
@@ -496,7 +502,14 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 			case PollStatusPreviewOnly:
 				lastPreviewFids = fids
 				lastPreviewSids = sids
-				if turn < sameConvMax {
+				if testMode {
+					result.IsPreview = true
+					fileRefs = append(fileRefs, fids...)
+					for _, sid := range sids {
+						fileRefs = append(fileRefs, "sed:"+sid)
+					}
+				}
+				if len(fileRefs) == 0 && turn < sameConvMax {
 					if mapping, mappingErr := client.GetConversationMapping(ctx, convID); mappingErr == nil {
 						if rawMapping, ok := mapping["mapping"].(map[string]any); ok {
 							baselineTools = buildToolBaseline(rawMapping)
@@ -555,9 +568,13 @@ func buildToolBaseline(mapping map[string]any) map[string]struct{} {
 	return out
 }
 
-func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult) (*generationResponse, error) {
+func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult, testMode bool) (*generationResponse, error) {
 	data := make([]dto.ImageData, 0, len(run.SignedURLs))
 	for _, signedURL := range run.SignedURLs {
+		if testMode {
+			data = append(data, dto.ImageData{Url: signedURL})
+			continue
+		}
 		imageBytes, contentType, err := client.FetchImage(ctx, signedURL, 20*1024*1024)
 		if err != nil {
 			return nil, err

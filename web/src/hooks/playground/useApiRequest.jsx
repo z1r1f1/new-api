@@ -32,6 +32,33 @@ import {
   processIncompleteThinkTags,
 } from '../../helpers';
 
+const isImageGenerationPayload = (payload) =>
+  payload &&
+  Object.prototype.hasOwnProperty.call(payload, 'prompt') &&
+  !payload.messages;
+
+const getEndpointForPayload = (payload) =>
+  isImageGenerationPayload(payload)
+    ? API_ENDPOINTS.IMAGE_GENERATIONS
+    : API_ENDPOINTS.CHAT_COMPLETIONS;
+
+const imageResponseToMarkdown = (data) => {
+  const items = Array.isArray(data?.data) ? data.data : [];
+  return items
+    .map((item, index) => {
+      const url =
+        item?.url ||
+        (item?.b64_json ? `data:image/png;base64,${item.b64_json}` : '');
+      if (!url) return '';
+      const revised = item?.revised_prompt
+        ? `**Revised prompt:** ${item.revised_prompt}\n\n`
+        : '';
+      return `${revised}![generated image ${index + 1}](${url})`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+};
+
 export const useApiRequest = (
   setMessage,
   setDebugData,
@@ -185,7 +212,8 @@ export const useApiRequest = (
       setActiveDebugTab(DEBUG_TABS.REQUEST);
 
       try {
-        const response = await fetch(API_ENDPOINTS.CHAT_COMPLETIONS, {
+        const endpoint = getEndpointForPayload(payload);
+        const response = await fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -239,13 +267,16 @@ export const useApiRequest = (
         }));
         setActiveDebugTab(DEBUG_TABS.RESPONSE);
 
-        if (data.choices?.[0]) {
-          const choice = data.choices[0];
-          let content = choice.message?.content || '';
-          let reasoningContent =
-            choice.message?.reasoning_content ||
-            choice.message?.reasoning ||
-            '';
+        if (data.choices?.[0] || Array.isArray(data.data)) {
+          const choice = data.choices?.[0];
+          let content = choice
+            ? choice.message?.content || ''
+            : imageResponseToMarkdown(data);
+          let reasoningContent = choice
+            ? choice.message?.reasoning_content ||
+              choice.message?.reasoning ||
+              ''
+            : '';
 
           const processed = processThinkTags(content, reasoningContent);
 
@@ -313,7 +344,7 @@ export const useApiRequest = (
       }));
       setActiveDebugTab(DEBUG_TABS.REQUEST);
 
-      const source = new SSE(API_ENDPOINTS.CHAT_COMPLETIONS, {
+      const source = new SSE(getEndpointForPayload(payload), {
         headers: {
           'Content-Type': 'application/json',
           'New-Api-User': getUserIdFromLocalStorage(),
@@ -421,7 +452,11 @@ export const useApiRequest = (
           setMessage((prevMessage) => {
             const newMessages = [...prevMessage];
             const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage && lastMessage.status !== MESSAGE_STATUS.COMPLETE && lastMessage.status !== MESSAGE_STATUS.ERROR) {
+            if (
+              lastMessage &&
+              lastMessage.status !== MESSAGE_STATUS.COMPLETE &&
+              lastMessage.status !== MESSAGE_STATUS.ERROR
+            ) {
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
                 content: (lastMessage.content || '') + errorMessage,
@@ -537,10 +572,10 @@ export const useApiRequest = (
   // 发送请求
   const sendRequest = useCallback(
     (payload, isStream) => {
-      if (isStream) {
-        handleSSE(payload);
-      } else {
+      if (isImageGenerationPayload(payload) || !isStream) {
         handleNonStreamRequest(payload);
+      } else {
+        handleSSE(payload);
       }
     },
     [handleSSE, handleNonStreamRequest],

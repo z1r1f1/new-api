@@ -63,7 +63,7 @@ export const useDataLoader = (
         const userGroup =
           userState?.user?.group ||
           JSON.parse(localStorage.getItem('user'))?.group;
-        const groupOptions = processGroupsData(data, userGroup);
+        const groupOptions = processGroupsData(data, userGroup, inputs.group);
         setGroups(groupOptions);
 
         const hasCurrentGroup = groupOptions.some(

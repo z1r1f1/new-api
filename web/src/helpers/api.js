@@ -22,6 +22,7 @@ import {
   showError,
   formatMessageForAPI,
   isValidMessage,
+  getTextContent,
 } from './utils';
 import axios from 'axios';
 import { MESSAGE_ROLES } from '../constants/playground.constants';
@@ -36,7 +37,6 @@ export let API = axios.create({
   },
 });
 
-
 function redirectToOAuthUrl(url, options = {}) {
   const { openInNewTab = false } = options;
   const targetUrl = typeof url === 'string' ? url : url.toString();
@@ -48,7 +48,6 @@ function redirectToOAuthUrl(url, options = {}) {
 
   window.location.assign(targetUrl);
 }
-
 
 function patchAPIInstance(instance) {
   const originalGet = instance.get.bind(instance);
@@ -108,6 +107,52 @@ API.interceptors.response.use(
 
 // playground
 
+export const isImageGenerationModel = (model) => {
+  const normalized = String(model || '')
+    .trim()
+    .toLowerCase();
+  return (
+    normalized.startsWith('gpt-image') ||
+    normalized.startsWith('chatgpt-image') ||
+    normalized.startsWith('dall-e')
+  );
+};
+
+const extractImageUrlsFromContent = (content) => {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content
+    .filter((item) => item?.type === 'image_url')
+    .map((item) => item?.image_url?.url || item?.image_url)
+    .filter((url) => typeof url === 'string' && url.trim() !== '')
+    .map((url) => url.trim());
+};
+
+const buildImageGenerationPayload = (messages, systemPrompt, inputs) => {
+  const lastUserMessage = [...messages]
+    .reverse()
+    .find((msg) => msg.role === MESSAGE_ROLES.USER);
+  const promptParts = [];
+  if (systemPrompt && systemPrompt.trim()) {
+    promptParts.push(systemPrompt.trim());
+  }
+  promptParts.push(getTextContent(lastUserMessage) || '生成一张图片');
+
+  const imageUrls = extractImageUrlsFromContent(lastUserMessage?.content);
+  const payload = {
+    model: inputs.model,
+    group: inputs.group,
+    prompt: promptParts.filter(Boolean).join('\n\n'),
+  };
+  if (imageUrls.length === 1) {
+    payload.image = imageUrls[0];
+  } else if (imageUrls.length > 1) {
+    payload.image = imageUrls;
+  }
+  return payload;
+};
+
 // 构建API请求负载
 export const buildApiPayload = (
   messages,
@@ -119,6 +164,10 @@ export const buildApiPayload = (
     .filter(isValidMessage)
     .map(formatMessageForAPI)
     .filter(Boolean);
+
+  if (isImageGenerationModel(inputs.model)) {
+    return buildImageGenerationPayload(processedMessages, systemPrompt, inputs);
+  }
 
   // 如果有系统提示，插入到消息开头
   if (systemPrompt && systemPrompt.trim()) {
@@ -210,7 +259,7 @@ export const processModelsData = (data, currentModel) => {
 };
 
 // 处理分组数据
-export const processGroupsData = (data, userGroup) => {
+export const processGroupsData = (data, userGroup, currentGroup = '') => {
   let groupOptions = Object.entries(data).map(([group, info]) => ({
     label:
       info.desc.length > 20 ? info.desc.substring(0, 20) + '...' : info.desc,
@@ -218,6 +267,16 @@ export const processGroupsData = (data, userGroup) => {
     ratio: info.ratio,
     fullLabel: info.desc,
   }));
+
+  const selectedGroup = String(currentGroup || '').trim();
+  if (selectedGroup && !groupOptions.some((g) => g.value === selectedGroup)) {
+    groupOptions.unshift({
+      label: selectedGroup,
+      value: selectedGroup,
+      ratio: 1,
+      fullLabel: selectedGroup,
+    });
+  }
 
   if (groupOptions.length === 0) {
     groupOptions = [
