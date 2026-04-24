@@ -59,6 +59,48 @@ const imageResponseToMarkdown = (data) => {
     .join('\n\n');
 };
 
+const buildImageTaskContentUrl = (taskId, index) =>
+  `${API_ENDPOINTS.IMAGE_GENERATIONS}/${encodeURIComponent(taskId)}/image/${index}`;
+
+const imageTaskResultToMessageContent = (taskId, taskResult) => {
+  const resultData = taskResult?.data ?? taskResult;
+  const items = Array.isArray(resultData?.data) ? resultData.data : [];
+  const content = [];
+  const textParts = [];
+
+  items.forEach((item, index) => {
+    const url =
+      item?.url ||
+      (item?.b64_json ? buildImageTaskContentUrl(taskId, index) : '');
+    if (url) {
+      content.push({
+        type: 'image_url',
+        image_url: { url },
+      });
+    }
+    if (item?.revised_prompt) {
+      textParts.push(`Revised prompt ${index + 1}: ${item.revised_prompt}`);
+    }
+  });
+
+  if (textParts.length > 0) {
+    content.unshift({
+      type: 'text',
+      text: textParts.join('\n\n'),
+    });
+  }
+
+  if (content.length > 0) {
+    return content;
+  }
+
+  const markdown = imageResponseToMarkdown(resultData);
+  return (
+    markdown ||
+    `图片生成完成，但响应中没有可显示的图片数据。\n\n\`\`\`json\n${JSON.stringify(resultData, null, 2)}\n\`\`\``
+  );
+};
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const isTerminalImageTaskStatus = (status) => {
@@ -348,9 +390,12 @@ export const useApiRequest = (
             imageTaskId,
             submitData,
           );
-          const finalData = taskResult?.data ?? taskResult;
-          const content = imageResponseToMarkdown(finalData);
-          const processed = processThinkTags(content, '');
+          const content = imageTaskResultToMessageContent(
+            imageTaskId,
+            taskResult,
+          );
+          const processed =
+            typeof content === 'string' ? processThinkTags(content, '') : null;
 
           setMessage((prevMessage) => {
             const newMessages = [...prevMessage];
@@ -363,11 +408,12 @@ export const useApiRequest = (
 
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
-                content: processed.content,
-                reasoningContent: processed.reasoningContent,
+                content: processed ? processed.content : content,
+                reasoningContent: processed?.reasoningContent || '',
                 status: MESSAGE_STATUS.COMPLETE,
                 ...autoCollapseState,
               };
+              setTimeout(() => saveMessages(newMessages), 0);
             }
             return newMessages;
           });
@@ -403,6 +449,7 @@ export const useApiRequest = (
                 status: MESSAGE_STATUS.COMPLETE,
                 ...autoCollapseState,
               };
+              setTimeout(() => saveMessages(newMessages), 0);
             }
             return newMessages;
           });
@@ -430,6 +477,7 @@ export const useApiRequest = (
               status: MESSAGE_STATUS.ERROR,
               ...autoCollapseState,
             };
+            setTimeout(() => saveMessages(newMessages), 0);
           }
           return newMessages;
         });
@@ -442,6 +490,7 @@ export const useApiRequest = (
       t,
       applyAutoCollapseLogic,
       pollImageGenerationTask,
+      saveMessages,
     ],
   );
 

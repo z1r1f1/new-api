@@ -3,11 +3,13 @@ package controller
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"time"
 
@@ -72,6 +74,91 @@ func PlaygroundImageGenerationTask(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, resp)
+}
+
+func PlaygroundImageGenerationContent(c *gin.Context) {
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "task_id is required",
+		})
+		return
+	}
+
+	imageIndex, err := strconv.Atoi(strings.TrimSpace(c.Param("index")))
+	if err != nil || imageIndex < 0 {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid image index",
+		})
+		return
+	}
+
+	userID := c.GetInt("id")
+	task, exist, err := model.GetByTaskId(userID, taskID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+	if !exist || task == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "task not found",
+		})
+		return
+	}
+	if len(task.Data) == 0 {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "task image data not found",
+		})
+		return
+	}
+
+	var payload struct {
+		Data []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := common.Unmarshal(task.Data, &payload); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to parse task image data",
+		})
+		return
+	}
+	if imageIndex >= len(payload.Data) {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "image not found",
+		})
+		return
+	}
+
+	image := payload.Data[imageIndex]
+	if imageURL := strings.TrimSpace(image.URL); imageURL != "" {
+		c.Redirect(http.StatusFound, imageURL)
+		return
+	}
+
+	b64Data := strings.TrimSpace(image.B64JSON)
+	if comma := strings.Index(b64Data, ","); strings.HasPrefix(b64Data, "data:") && comma >= 0 {
+		b64Data = b64Data[comma+1:]
+	}
+	if b64Data == "" {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "image data not found",
+		})
+		return
+	}
+
+	imageBytes, err := base64.StdEncoding.DecodeString(b64Data)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to decode image data",
+		})
+		return
+	}
+	c.Header("Cache-Control", "private, max-age=3600")
+	c.Data(http.StatusOK, http.DetectContentType(imageBytes), imageBytes)
 }
 
 func playgroundImageGenerationAsync(c *gin.Context) {
