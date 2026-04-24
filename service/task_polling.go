@@ -144,6 +144,10 @@ func DispatchPlatformUpdate(platform constant.TaskPlatform, taskChannelM map[int
 		// MJ 轮询由其自身处理，这里预留入口
 	case constant.TaskPlatformSuno:
 		_ = UpdateSunoTasks(context.Background(), taskChannelM, taskM)
+	case constant.TaskPlatformPlaygroundImage:
+		// Playground image tasks are fulfilled by an in-process worker and
+		// do not need the upstream polling loop.
+		return
 	default:
 		if err := UpdateVideoTasks(context.Background(), platform, taskChannelM, taskM); err != nil {
 			common.SysLog(fmt.Sprintf("UpdateVideoTasks fail: %s", err))

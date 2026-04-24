@@ -59,6 +59,20 @@ const imageResponseToMarkdown = (data) => {
     .join('\n\n');
 };
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isTerminalImageTaskStatus = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  return ['succeeded', 'failed', 'success', 'failure', 'completed'].includes(
+    normalized,
+  );
+};
+
+const isSuccessfulImageTaskStatus = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  return ['succeeded', 'success', 'completed'].includes(normalized);
+};
+
 export const useApiRequest = (
   setMessage,
   setDebugData,
@@ -198,6 +212,72 @@ export const useApiRequest = (
     [setMessage, applyAutoCollapseLogic, saveMessages],
   );
 
+  const pollImageGenerationTask = useCallback(
+    async (taskId, submitData) => {
+      const endpoint = `${API_ENDPOINTS.IMAGE_GENERATIONS}/${encodeURIComponent(taskId)}`;
+      const maxAttempts = 180;
+
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        await sleep(3000);
+
+        const response = await fetch(endpoint, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json',
+            'New-Api-User': getUserIdFromLocalStorage(),
+          },
+        });
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          throw new Error(
+            `图片任务轮询失败: ${response.status}, body: ${errorBody}`,
+          );
+        }
+
+        const taskData = await response.json();
+        setDebugData((prev) => ({
+          ...prev,
+          response: JSON.stringify(
+            {
+              submit: submitData,
+              poll: taskData,
+            },
+            null,
+            2,
+          ),
+        }));
+        setActiveDebugTab(DEBUG_TABS.RESPONSE);
+
+        const status = String(taskData?.status || '').toLowerCase();
+        if (!isTerminalImageTaskStatus(status)) {
+          setMessage((prevMessage) => {
+            const newMessages = [...prevMessage];
+            const lastMessage = newMessages[newMessages.length - 1];
+            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
+              newMessages[newMessages.length - 1] = {
+                ...lastMessage,
+                content: `图片生成任务 ${taskId} 正在处理${taskData?.progress ? `（${taskData.progress}）` : ''}...`,
+                status: MESSAGE_STATUS.LOADING,
+              };
+            }
+            return newMessages;
+          });
+          continue;
+        }
+
+        if (isSuccessfulImageTaskStatus(status)) {
+          return taskData;
+        }
+
+        throw new Error(taskData?.fail_reason || '图片生成失败');
+      }
+
+      throw new Error('图片生成任务轮询超时');
+    },
+    [setActiveDebugTab, setDebugData, setMessage],
+  );
+
   // 非流式请求
   const handleNonStreamRequest = useCallback(
     async (payload) => {
@@ -223,27 +303,20 @@ export const useApiRequest = (
         });
 
         if (!response.ok) {
-          let errorBody = '';
+          const errorBody = await response.text();
           let parsedError = null;
           try {
-            errorBody = await response.text();
             const errorJson = JSON.parse(errorBody);
-            if (errorJson?.error) {
-              parsedError = errorJson.error;
-            }
-          } catch (e) {
-            if (!errorBody) {
-              errorBody = '无法读取错误响应体';
-            }
+            parsedError = errorJson?.error || null;
+          } catch (_) {
+            // noop
           }
-
           const errorInfo = handleApiError(
             new Error(
               `HTTP error! status: ${response.status}, body: ${errorBody}`,
             ),
             response,
           );
-
           setDebugData((prev) => ({
             ...prev,
             response: JSON.stringify(errorInfo, null, 2),
@@ -259,19 +332,53 @@ export const useApiRequest = (
           throw err;
         }
 
-        const data = await response.json();
+        const submitData = await response.json();
 
         setDebugData((prev) => ({
           ...prev,
-          response: JSON.stringify(data, null, 2),
+          response: JSON.stringify(submitData, null, 2),
         }));
         setActiveDebugTab(DEBUG_TABS.RESPONSE);
 
-        if (data.choices?.[0] || Array.isArray(data.data)) {
-          const choice = data.choices?.[0];
+        const imageTaskId =
+          submitData?.task_id || submitData?.taskId || submitData?.id;
+
+        if (isImageGenerationPayload(payload) && imageTaskId) {
+          const taskResult = await pollImageGenerationTask(
+            imageTaskId,
+            submitData,
+          );
+          const finalData = taskResult?.data ?? taskResult;
+          const content = imageResponseToMarkdown(finalData);
+          const processed = processThinkTags(content, '');
+
+          setMessage((prevMessage) => {
+            const newMessages = [...prevMessage];
+            const lastMessage = newMessages[newMessages.length - 1];
+            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
+              const autoCollapseState = applyAutoCollapseLogic(
+                lastMessage,
+                true,
+              );
+
+              newMessages[newMessages.length - 1] = {
+                ...lastMessage,
+                content: processed.content,
+                reasoningContent: processed.reasoningContent,
+                status: MESSAGE_STATUS.COMPLETE,
+                ...autoCollapseState,
+              };
+            }
+            return newMessages;
+          });
+          return;
+        }
+
+        if (submitData.choices?.[0] || Array.isArray(submitData.data)) {
+          const choice = submitData.choices?.[0];
           let content = choice
             ? choice.message?.content || ''
-            : imageResponseToMarkdown(data);
+            : imageResponseToMarkdown(submitData);
           let reasoningContent = choice
             ? choice.message?.reasoning_content ||
               choice.message?.reasoning ||
@@ -328,7 +435,14 @@ export const useApiRequest = (
         });
       }
     },
-    [setDebugData, setActiveDebugTab, setMessage, t, applyAutoCollapseLogic],
+    [
+      setDebugData,
+      setActiveDebugTab,
+      setMessage,
+      t,
+      applyAutoCollapseLogic,
+      pollImageGenerationTask,
+    ],
   );
 
   // SSE请求
