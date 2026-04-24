@@ -479,7 +479,12 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 				}
 				return nil, err
 			}
-			sseResult := ParseImageSSEUntilConversationReady(stream, 3*time.Second)
+			var sseResult ImageSSEResult
+			if testMode {
+				sseResult = ParseImageSSEUntilConversationReady(stream, 3*time.Second)
+			} else {
+				sseResult = ParseImageSSE(stream)
+			}
 			cancelStream()
 			if sseResult.ConversationID != "" {
 				convID = sseResult.ConversationID
