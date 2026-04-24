@@ -776,52 +776,85 @@ func ParseImageSSE(stream <-chan SSEEvent) ImageSSEResult {
 	seenFile := map[string]struct{}{}
 	seenSed := map[string]struct{}{}
 	for ev := range stream {
-		if ev.Err != nil {
+		if !collectImageSSEEvent(ev, &result, seenFile, seenSed) {
 			return result
 		}
-		if len(ev.Data) == 0 {
-			continue
-		}
-		if string(ev.Data) == "[DONE]" {
+	}
+	return result
+}
+
+func ParseImageSSEUntilConversationReady(stream <-chan SSEEvent, quietAfterConversation time.Duration) ImageSSEResult {
+	var result ImageSSEResult
+	seenFile := map[string]struct{}{}
+	seenSed := map[string]struct{}{}
+	var quietTimer <-chan time.Time
+	for {
+		select {
+		case ev, ok := <-stream:
+			if !ok {
+				return result
+			}
+			if !collectImageSSEEvent(ev, &result, seenFile, seenSed) {
+				return result
+			}
+			if len(result.FileIDs) > 0 || len(result.SedimentIDs) > 0 {
+				return result
+			}
+			if result.ConversationID != "" && quietAfterConversation > 0 {
+				quietTimer = time.After(quietAfterConversation)
+			}
+		case <-quietTimer:
 			return result
 		}
-		for _, m := range reFileRef.FindAllSubmatch(ev.Data, -1) {
-			fid := string(m[1])
-			if _, ok := seenFile[fid]; !ok {
-				seenFile[fid] = struct{}{}
-				result.FileIDs = append(result.FileIDs, fid)
-			}
+	}
+}
+
+func collectImageSSEEvent(ev SSEEvent, result *ImageSSEResult, seenFile, seenSed map[string]struct{}) bool {
+	if ev.Err != nil {
+		return false
+	}
+	if len(ev.Data) == 0 {
+		return true
+	}
+	if string(ev.Data) == "[DONE]" {
+		return false
+	}
+	for _, m := range reFileRef.FindAllSubmatch(ev.Data, -1) {
+		fid := string(m[1])
+		if _, ok := seenFile[fid]; !ok {
+			seenFile[fid] = struct{}{}
+			result.FileIDs = append(result.FileIDs, fid)
 		}
-		for _, m := range reSedRef.FindAllSubmatch(ev.Data, -1) {
-			sid := string(m[1])
-			if _, ok := seenSed[sid]; !ok {
-				seenSed[sid] = struct{}{}
-				result.SedimentIDs = append(result.SedimentIDs, sid)
-			}
+	}
+	for _, m := range reSedRef.FindAllSubmatch(ev.Data, -1) {
+		sid := string(m[1])
+		if _, ok := seenSed[sid]; !ok {
+			seenSed[sid] = struct{}{}
+			result.SedimentIDs = append(result.SedimentIDs, sid)
 		}
-		var obj map[string]any
-		if err := common.Unmarshal(ev.Data, &obj); err != nil {
-			continue
+	}
+	var obj map[string]any
+	if err := common.Unmarshal(ev.Data, &obj); err != nil {
+		return true
+	}
+	if v, ok := obj["v"].(map[string]any); ok {
+		if cid, ok := v["conversation_id"].(string); ok && cid != "" && result.ConversationID == "" {
+			result.ConversationID = cid
 		}
-		if v, ok := obj["v"].(map[string]any); ok {
-			if cid, ok := v["conversation_id"].(string); ok && cid != "" && result.ConversationID == "" {
-				result.ConversationID = cid
-			}
-			if msg, ok := v["message"].(map[string]any); ok {
-				if meta, ok := msg["metadata"].(map[string]any); ok {
-					if tid, ok := meta["image_gen_task_id"].(string); ok {
-						result.ImageGenTaskID = tid
-					}
-					if finish, ok := meta["finish_details"].(map[string]any); ok {
-						if finishType, ok := finish["type"].(string); ok {
-							result.FinishType = finishType
-						}
+		if msg, ok := v["message"].(map[string]any); ok {
+			if meta, ok := msg["metadata"].(map[string]any); ok {
+				if tid, ok := meta["image_gen_task_id"].(string); ok {
+					result.ImageGenTaskID = tid
+				}
+				if finish, ok := meta["finish_details"].(map[string]any); ok {
+					if finishType, ok := finish["type"].(string); ok {
+						result.FinishType = finishType
 					}
 				}
 			}
 		}
 	}
-	return result
+	return true
 }
 
 func (c *Client) GetConversationMapping(ctx context.Context, convID string) (map[string]any, error) {

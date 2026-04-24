@@ -260,13 +260,19 @@ export const processModelsData = (data, currentModel) => {
 
 // 处理分组数据
 export const processGroupsData = (data, userGroup, currentGroup = '') => {
-  let groupOptions = Object.entries(data).map(([group, info]) => ({
-    label:
-      info.desc.length > 20 ? info.desc.substring(0, 20) + '...' : info.desc,
-    value: group,
-    ratio: info.ratio,
-    fullLabel: info.desc,
-  }));
+  let groupOptions = Object.entries(data).map(([group, info]) => {
+    const description = String(info?.desc || '').trim();
+    const labelSource = description || group;
+    return {
+      label:
+        labelSource.length > 20
+          ? labelSource.substring(0, 20) + '...'
+          : labelSource,
+      value: group,
+      ratio: info.ratio,
+      fullLabel: description || group,
+    };
+  });
 
   const selectedGroup = String(currentGroup || '').trim();
   if (selectedGroup && !groupOptions.some((g) => g.value === selectedGroup)) {

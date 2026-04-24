@@ -470,14 +470,17 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 			if conduitToken, conduitErr := client.PrepareFConversation(ctx, convOpt); conduitErr == nil {
 				convOpt.ConduitToken = conduitToken
 			}
-			stream, err := client.StreamFConversation(ctx, convOpt)
+			streamCtx, cancelStream := context.WithCancel(ctx)
+			stream, err := client.StreamFConversation(streamCtx, convOpt)
 			if err != nil {
+				cancelStream()
 				if ue, ok := err.(*UpstreamError); ok && ue.IsRateLimited() && attempt < maxAttempts {
 					break
 				}
 				return nil, err
 			}
-			sseResult := ParseImageSSE(stream)
+			sseResult := ParseImageSSEUntilConversationReady(stream, 3*time.Second)
+			cancelStream()
 			if sseResult.ConversationID != "" {
 				convID = sseResult.ConversationID
 				result.ConversationID = convID
