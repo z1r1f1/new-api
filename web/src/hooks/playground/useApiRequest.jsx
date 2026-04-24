@@ -138,9 +138,22 @@ const getImageGenerationTaskState = (
   updatedAt: Date.now(),
 });
 
-const getImageGenerationWaitMessage = (taskId, taskData, attempt) => {
+const getImageGenerationElapsedSeconds = (attempt, startedAt) => {
+  const parsedStartedAt = Number(startedAt);
+  if (parsedStartedAt > 0) {
+    return Math.max(0, Math.floor((Date.now() - parsedStartedAt) / 1000));
+  }
+  return Math.max(0, attempt + 1) * 5;
+};
+
+const getImageGenerationWaitMessage = (
+  taskId,
+  taskData,
+  attempt,
+  startedAt,
+) => {
   const safeAttempt = Math.max(0, attempt);
-  const elapsedSeconds = Math.max(0, attempt + 1) * 5;
+  const elapsedSeconds = getImageGenerationElapsedSeconds(attempt, startedAt);
   const elapsed = formatImageGenerationElapsed(elapsedSeconds);
   const rawProgress = String(taskData?.progress || '').trim();
   const shouldShowRawProgress = rawProgress && rawProgress !== '1%';
@@ -327,16 +340,26 @@ export const useApiRequest = (
           return prevMessage;
         }
 
-        const updatedMessages = [...prevMessage];
-        updatedMessages[targetIndex] = {
-          ...targetMessage,
-          content: getImageGenerationWaitMessage(taskId, submitData, attempt),
-          status: MESSAGE_STATUS.LOADING,
-          imageGenerationTask: getImageGenerationTaskState(taskId, submitData, {
+        const imageGenerationTask = getImageGenerationTaskState(
+          taskId,
+          submitData,
+          {
             ...(targetMessage.imageGenerationTask || {}),
             startedAt:
               options.startedAt || targetMessage.imageGenerationTask?.startedAt,
-          }),
+          },
+        );
+        const updatedMessages = [...prevMessage];
+        updatedMessages[targetIndex] = {
+          ...targetMessage,
+          content: getImageGenerationWaitMessage(
+            taskId,
+            submitData,
+            attempt,
+            imageGenerationTask.startedAt,
+          ),
+          status: MESSAGE_STATUS.LOADING,
+          imageGenerationTask,
         };
 
         setTimeout(() => saveMessages(updatedMessages), 0);
@@ -493,6 +516,11 @@ export const useApiRequest = (
       const taskId = task?.taskId || task?.id;
       if (!taskId) return;
 
+      updatePendingImageGenerationMessage(taskId, task.submitData || null, -1, {
+        messageId: task.messageId,
+        startedAt: task.startedAt,
+      });
+
       finishImageGenerationTask({
         taskId,
         submitData: task.submitData || null,
@@ -510,6 +538,7 @@ export const useApiRequest = (
       });
     },
     [
+      updatePendingImageGenerationMessage,
       finishImageGenerationTask,
       failImageGenerationMessage,
       setDebugData,
