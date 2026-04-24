@@ -80,6 +80,7 @@ func NewClient(opt ClientOptions) (*Client, error) {
 	if opt.Language == "" {
 		opt.Language = defaultLanguage
 	}
+	opt.ProxyURL = effectiveProxyURL(opt.ProxyURL, opt.BaseURL)
 	jar, _ := cookiejar.New(&cookiejar.Options{PublicSuffixList: publicsuffix.List})
 	var httpClient http.Client
 	transport, err := NewUTLSTransport(strings.TrimSpace(opt.ProxyURL), 30*time.Second)
@@ -113,6 +114,26 @@ func NewClient(opt ClientOptions) (*Client, error) {
 		opts: opt,
 		hc:   &httpClient,
 	}, nil
+}
+
+func effectiveProxyURL(configuredProxyURL, baseURL string) string {
+	configuredProxyURL = strings.TrimSpace(configuredProxyURL)
+	if configuredProxyURL != "" {
+		return configuredProxyURL
+	}
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	req, err := http.NewRequest(http.MethodGet, baseURL, nil)
+	if err != nil {
+		return ""
+	}
+	proxyURL, err := http.ProxyFromEnvironment(req)
+	if err != nil || proxyURL == nil {
+		return ""
+	}
+	return proxyURL.String()
 }
 
 func ResolveAccessToken(ctx context.Context, key *OAuthKey, proxyURL string) (string, error) {

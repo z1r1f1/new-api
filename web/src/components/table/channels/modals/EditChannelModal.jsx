@@ -1932,7 +1932,7 @@ const EditChannelModal = (props) => {
     if (!isEdit) {
       const hasName = String(localInputs.name || '').trim() !== '';
       const hasKey = String(localInputs.key || '').trim() !== '';
-      const nameRequired = localInputs.type !== 57;
+      const nameRequired = localInputs.type !== 57 && localInputs.type !== 58;
 
       if ((nameRequired && !hasName) || !hasKey) {
         showInfo(
