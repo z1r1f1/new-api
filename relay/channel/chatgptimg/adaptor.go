@@ -482,6 +482,9 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 				convID = sseResult.ConversationID
 				result.ConversationID = convID
 			}
+			if testMode && convID != "" {
+				return result, nil
+			}
 			if len(sseResult.FileIDs) > 0 {
 				fileRefs = append(fileRefs, sseResult.FileIDs...)
 				for _, sid := range sseResult.SedimentIDs {
