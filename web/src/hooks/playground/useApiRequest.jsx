@@ -115,6 +115,50 @@ const isSuccessfulImageTaskStatus = (status) => {
   return ['succeeded', 'success', 'completed'].includes(normalized);
 };
 
+const formatImageGenerationElapsed = (seconds) => {
+  if (seconds < 60) {
+    return `${seconds} 秒`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return remainingSeconds > 0
+    ? `${minutes} 分 ${remainingSeconds} 秒`
+    : `${minutes} 分钟`;
+};
+
+const getImageGenerationWaitMessage = (taskId, taskData, attempt) => {
+  const safeAttempt = Math.max(0, attempt);
+  const elapsedSeconds = Math.max(0, attempt + 1) * 5;
+  const elapsed = formatImageGenerationElapsed(elapsedSeconds);
+  const rawProgress = String(taskData?.progress || '').trim();
+  const shouldShowRawProgress = rawProgress && rawProgress !== '1%';
+  const dots = '.'.repeat((safeAttempt % 3) + 1);
+
+  let stage = '已提交任务，正在等待 ChatGPT 开始生图';
+  if (elapsedSeconds >= 20) {
+    stage = 'ChatGPT 正在生成图片，通常需要 1-3 分钟';
+  }
+  if (elapsedSeconds >= 90) {
+    stage = '图片仍在生成中，上游本次响应偏慢';
+  }
+  if (elapsedSeconds >= 240) {
+    stage = '继续等待上游返回结果，最长可等待约 20 分钟';
+  }
+
+  return [
+    `图片生成中${dots}`,
+    '',
+    `**状态：** ${stage}`,
+    `**已等待：** ${elapsed}`,
+    shouldShowRawProgress ? `**上游进度：** ${rawProgress}` : '',
+    '',
+    `任务 ID：\`${taskId}\``,
+    '结果完成后会自动显示，可点击图片放大或下载。',
+  ]
+    .filter(Boolean)
+    .join('\n');
+};
+
 export const useApiRequest = (
   setMessage,
   setDebugData,
@@ -299,7 +343,11 @@ export const useApiRequest = (
             if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
-                content: `图片生成任务 ${taskId} 正在处理${taskData?.progress ? `（${taskData.progress}）` : ''}...`,
+                content: getImageGenerationWaitMessage(
+                  taskId,
+                  taskData,
+                  attempt,
+                ),
                 status: MESSAGE_STATUS.LOADING,
               };
             }
@@ -386,6 +434,23 @@ export const useApiRequest = (
           submitData?.task_id || submitData?.taskId || submitData?.id;
 
         if (isImageGenerationPayload(payload) && imageTaskId) {
+          setMessage((prevMessage) => {
+            const newMessages = [...prevMessage];
+            const lastMessage = newMessages[newMessages.length - 1];
+            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
+              newMessages[newMessages.length - 1] = {
+                ...lastMessage,
+                content: getImageGenerationWaitMessage(
+                  imageTaskId,
+                  submitData,
+                  -1,
+                ),
+                status: MESSAGE_STATUS.LOADING,
+              };
+            }
+            return newMessages;
+          });
+
           const taskResult = await pollImageGenerationTask(
             imageTaskId,
             submitData,

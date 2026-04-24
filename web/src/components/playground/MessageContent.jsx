@@ -17,11 +17,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React, { useRef, useEffect } from 'react';
-import { Typography, TextArea, Button } from '@douyinfe/semi-ui';
+import React, { useRef, useEffect, useState, useCallback } from 'react';
+import { Typography, TextArea, Button, ImagePreview } from '@douyinfe/semi-ui';
 import MarkdownRenderer from '../common/markdown/MarkdownRenderer';
 import ThinkingContent from './ThinkingContent';
-import { Loader2, Check, X, Settings, AlertTriangle } from 'lucide-react';
+import {
+  Loader2,
+  Check,
+  X,
+  Settings,
+  AlertTriangle,
+  Download,
+  Maximize2,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { isAdmin } from '../../helpers/utils';
 
@@ -39,6 +47,41 @@ const MessageContent = ({
   const { t } = useTranslation();
   const previousContentLengthRef = useRef(0);
   const lastContentRef = useRef('');
+  const [previewImageUrl, setPreviewImageUrl] = useState('');
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+
+  const openImagePreview = useCallback((url) => {
+    setPreviewImageUrl(url);
+    setIsPreviewOpen(true);
+  }, []);
+
+  const handleImageDownload = useCallback(async (url, index) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const contentType = blob.type || 'image/png';
+      const extension = contentType.includes('jpeg')
+        ? 'jpg'
+        : contentType.includes('webp')
+          ? 'webp'
+          : contentType.includes('gif')
+            ? 'gif'
+            : 'png';
+      link.href = objectUrl;
+      link.download = `playground-image-${index + 1}.${extension}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  }, []);
 
   const isThinkingStatus =
     message.status === 'loading' || message.status === 'incomplete';
@@ -77,7 +120,10 @@ const MessageContent = ({
           >
             <div className='flex items-center gap-2'>
               <AlertTriangle size={16} className='text-orange-500 shrink-0' />
-              <Typography.Text strong className='!text-[var(--semi-color-text-0)]'>
+              <Typography.Text
+                strong
+                className='!text-[var(--semi-color-text-0)]'
+              >
                 {t('模型价格未配置')}
               </Typography.Text>
             </div>
@@ -93,7 +139,9 @@ const MessageContent = ({
                 theme='light'
                 type='warning'
                 icon={<Settings size={14} />}
-                onClick={() => window.open('/console/setting?tab=ratio', '_blank')}
+                onClick={() =>
+                  window.open('/console/setting?tab=ratio', '_blank')
+                }
               >
                 {t('前往设置')}
               </Button>
@@ -306,27 +354,67 @@ const MessageContent = ({
             return (
               <div>
                 {imageContents.length > 0 && (
-                  <div className='mb-3 space-y-2'>
-                    {imageContents.map((imgItem, index) => (
-                      <div key={index} className='max-w-sm'>
-                        <img
-                          src={imgItem.image_url.url}
-                          alt={`用户上传的图片 ${index + 1}`}
-                          className='rounded-lg max-w-full h-auto shadow-sm border'
-                          style={{ maxHeight: '300px' }}
-                          onError={(e) => {
-                            e.target.style.display = 'none';
-                            e.target.nextSibling.style.display = 'block';
-                          }}
-                        />
-                        <div
-                          className='text-red-500 text-sm p-2 bg-red-50 rounded-lg border border-red-200'
-                          style={{ display: 'none' }}
-                        >
-                          图片加载失败: {imgItem.image_url.url}
+                  <div className='mb-3 space-y-3'>
+                    {imageContents.map((imgItem, index) => {
+                      const imageUrl = imgItem.image_url.url;
+                      const imageAlt =
+                        message.role === 'user'
+                          ? `用户上传的图片 ${index + 1}`
+                          : `生成的图片 ${index + 1}`;
+                      return (
+                        <div key={index} className='max-w-sm'>
+                          <div className='relative group inline-block max-w-full'>
+                            <img
+                              src={imageUrl}
+                              alt={imageAlt}
+                              className='rounded-lg max-w-full h-auto shadow-sm border cursor-zoom-in transition hover:brightness-95'
+                              style={{ maxHeight: '360px' }}
+                              onClick={() => openImagePreview(imageUrl)}
+                              onError={(e) => {
+                                e.target.style.display = 'none';
+                                const errorNode =
+                                  e.target.parentElement?.nextSibling;
+                                if (errorNode) {
+                                  errorNode.style.display = 'block';
+                                }
+                              }}
+                            />
+                            <div className='absolute top-2 right-2 flex gap-1 opacity-95 transition-opacity sm:opacity-0 sm:group-hover:opacity-100'>
+                              <Button
+                                size='small'
+                                theme='solid'
+                                type='tertiary'
+                                icon={<Maximize2 size={14} />}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  openImagePreview(imageUrl);
+                                }}
+                              >
+                                {t('放大')}
+                              </Button>
+                              <Button
+                                size='small'
+                                theme='solid'
+                                type='primary'
+                                icon={<Download size={14} />}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleImageDownload(imageUrl, index);
+                                }}
+                              >
+                                {t('下载')}
+                              </Button>
+                            </div>
+                          </div>
+                          <div
+                            className='text-red-500 text-sm p-2 bg-red-50 rounded-lg border border-red-200'
+                            style={{ display: 'none' }}
+                          >
+                            图片加载失败: {imageUrl}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 
@@ -405,6 +493,11 @@ const MessageContent = ({
           return null;
         })()
       )}
+      <ImagePreview
+        src={previewImageUrl}
+        visible={isPreviewOpen}
+        onVisibleChange={(visible) => setIsPreviewOpen(visible)}
+      />
     </div>
   );
 };
