@@ -48,6 +48,9 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	if normalized != "" {
 		return normalized
 	}
+	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
+		return string(constant.EndpointTypeImageGeneration)
+	}
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
 		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
@@ -119,6 +122,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 		// VolcEngine 图像生成模型
 		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
+			requestPath = "/v1/images/generations"
+		}
+		if channel.Type == constant.ChannelTypeChatGPTImage || common.IsImageGenerationModel(testModel) {
 			requestPath = "/v1/images/generations"
 		}
 
@@ -199,7 +205,8 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		if c.Request.URL.Path == "/v1/embeddings" {
 			relayFormat = types.RelayFormatEmbedding
 		}
-		if c.Request.URL.Path == "/v1/images/generations" {
+		if c.Request.URL.Path == "/v1/images/generations" ||
+			(channel != nil && channel.Type == constant.ChannelTypeChatGPTImage) {
 			relayFormat = types.RelayFormatOpenAIImage
 		}
 		if c.Request.URL.Path == "/v1/messages" {
@@ -757,6 +764,15 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 			}
 			return req
+		}
+	}
+
+	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
+		return &dto.ImageRequest{
+			Model:  model,
+			Prompt: "a cute cat",
+			N:      lo.ToPtr(uint(1)),
+			Size:   "1024x1024",
 		}
 	}
 

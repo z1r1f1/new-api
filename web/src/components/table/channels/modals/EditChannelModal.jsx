@@ -196,6 +196,22 @@ const normalizeCodexCredential = (value) => {
   return JSON.stringify(parsed);
 };
 
+const normalizeChatGPTImageCredential = (value) => {
+  const parsed = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('ChatGPT Image 密钥必须是 JSON 对象');
+  }
+  const accessToken = String(parsed.access_token || '').trim();
+  const refreshToken = String(parsed.refresh_token || '').trim();
+  const sessionToken = String(parsed.session_token || '').trim();
+  if (!accessToken && !refreshToken && !sessionToken) {
+    throw new Error(
+      'ChatGPT Image 密钥 JSON 必须包含 access_token、refresh_token、session_token 其中之一',
+    );
+  }
+  return JSON.stringify(parsed);
+};
+
 const parseCodexBatchCredentialArray = (rawValue) => {
   const trimmedValue = String(rawValue || '').trim();
   if (!trimmedValue) {
@@ -217,9 +233,32 @@ const parseCodexBatchKeys = (rawValue) => {
   );
 };
 
+const parseChatGPTImageBatchCredentialArray = (rawValue) => {
+  const trimmedValue = String(rawValue || '').trim();
+  if (!trimmedValue) {
+    return [];
+  }
+  if (!trimmedValue.startsWith('[')) {
+    throw new Error('ChatGPT Image 批量密钥必须是标准 JSON 数组');
+  }
+  const parsedArray = JSON.parse(trimmedValue);
+  if (!Array.isArray(parsedArray)) {
+    throw new Error('ChatGPT Image 批量密钥必须是 JSON 数组');
+  }
+  return parsedArray.map((item) =>
+    JSON.parse(normalizeChatGPTImageCredential(item)),
+  );
+};
+
+const parseChatGPTImageBatchKeys = (rawValue) => {
+  return parseChatGPTImageBatchCredentialArray(rawValue).map((item) =>
+    JSON.stringify(item),
+  );
+};
+
 // 支持并且已适配通过接口获取模型列表的渠道类型
 const MODEL_FETCHABLE_TYPES = new Set([
-  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43,
+  1, 4, 14, 34, 17, 26, 27, 24, 47, 25, 20, 23, 31, 40, 42, 48, 43, 58,
 ]);
 
 function type2secretPrompt(type) {
@@ -243,6 +282,8 @@ function type2secretPrompt(type) {
       return '按照如下格式输入: AccessKey|SecretAccessKey';
     case 57:
       return '请输入 JSON 格式的 OAuth 凭据（必须包含 access_token 和 account_id）';
+    case 58:
+      return '请输入 JSON 格式的 ChatGPT Image 凭据（access_token、refresh_token、session_token 三选一）';
     default:
       return '请输入渠道对应的鉴权密钥';
   }
@@ -298,6 +339,10 @@ const EditChannelModal = (props) => {
     useState('');
   const [ollamaModalVisible, setOllamaModalVisible] = useState(false);
   const formApiRef = useRef(null);
+  const [codexFileList, setCodexFileList] = useState([]);
+  const codexErroredNames = useRef(new Set());
+  const [chatgptImageFileList, setChatgptImageFileList] = useState([]);
+  const chatgptImageErroredNames = useRef(new Set());
   const [vertexKeys, setVertexKeys] = useState([]);
   const [vertexFileList, setVertexFileList] = useState([]);
   const vertexErroredNames = useRef(new Set()); // 避免重复报错
@@ -727,16 +772,25 @@ const EditChannelModal = (props) => {
       // 重置手动输入模式状态
       setUseManualInput(false);
 
-      if (value === 57) {
+      if (value === 57 || value === 58) {
         setBatch(false);
         setMultiToSingle(false);
         setMultiKeyMode('random');
         setVertexKeys([]);
         setVertexFileList([]);
+        setCodexFileList([]);
+        setChatgptImageFileList([]);
         if (formApiRef.current) {
           formApiRef.current.setValue('vertex_files', []);
+          formApiRef.current.setValue('codex_files', []);
+          formApiRef.current.setValue('chatgpt_image_files', []);
         }
-        setInputs((prev) => ({ ...prev, vertex_files: [] }));
+        setInputs((prev) => ({
+          ...prev,
+          vertex_files: [],
+          codex_files: [],
+          chatgpt_image_files: [],
+        }));
       }
     }
     //setAutoBan
@@ -747,7 +801,12 @@ const EditChannelModal = (props) => {
     if (!rawValue) return;
 
     try {
-      if (fieldName === 'key' && inputs.type === 57 && batch) {
+      if (fieldName === 'key' && (inputs.type === 57 || inputs.type === 58) && batch) {
+        if (inputs.type === 58) {
+          const parsedKeys = parseChatGPTImageBatchCredentialArray(rawValue);
+          handleInputChange('key', JSON.stringify(parsedKeys, null, 2));
+          return;
+        }
         const parsedKeys = parseCodexBatchCredentialArray(rawValue);
         handleInputChange('key', JSON.stringify(parsedKeys, null, 2));
         return;
@@ -1357,7 +1416,8 @@ const EditChannelModal = (props) => {
     if (!isEdit) {
       const initValues = getInitValues();
       const shouldDeferCodexBatchModels =
-        props.editingChannel?.create_mode === 'batch' && initValues.type === 57;
+        props.editingChannel?.create_mode === 'batch' &&
+        (initValues.type === 57 || initValues.type === 58);
       const initialTestModel =
         shouldDeferCodexBatchModels && !String(initValues.test_model || '').trim()
           ? 'gpt-5.4'
@@ -1499,6 +1559,8 @@ const EditChannelModal = (props) => {
     }
     // 重置本地输入，避免下次打开残留上一次的 JSON 字段值
     setInputs(getInitValues());
+    setCodexFileList([]);
+    setChatgptImageFileList([]);
     // 重置密钥显示状态
     resetKeyDisplayState();
     // 重置剪贴板检测状态
@@ -1538,6 +1600,96 @@ const EditChannelModal = (props) => {
         formApiRef.current.setValue('vertex_files', validFiles);
       }
       setInputs((prev) => ({ ...prev, vertex_files: validFiles }));
+
+      if (errorNames.length > 0) {
+        showError(
+          t('以下文件解析失败，已忽略：{{list}}', {
+            list: errorNames.join(', '),
+          }),
+        );
+      }
+    })();
+  };
+
+  const handleCodexUploadChange = ({ fileList }) => {
+    codexErroredNames.current.clear();
+    (async () => {
+      const validFiles = [];
+      const credentials = [];
+      const errorNames = [];
+
+      for (const item of fileList) {
+        const fileObj = item.fileInstance;
+        if (!fileObj) continue;
+        try {
+          const txt = await fileObj.text();
+          credentials.push(JSON.parse(normalizeCodexCredential(txt)));
+          validFiles.push(item);
+        } catch (err) {
+          if (!codexErroredNames.current.has(item.name)) {
+            errorNames.push(item.name);
+            codexErroredNames.current.add(item.name);
+          }
+        }
+      }
+
+      setCodexFileList(validFiles);
+      if (formApiRef.current) {
+        formApiRef.current.setValue('codex_files', validFiles);
+      }
+
+      if (credentials.length > 0) {
+        handleInputChange('key', JSON.stringify(credentials, null, 2));
+      } else if (validFiles.length === 0) {
+        handleInputChange('key', '');
+      }
+
+      setInputs((prev) => ({ ...prev, codex_files: validFiles }));
+
+      if (errorNames.length > 0) {
+        showError(
+          t('以下文件解析失败，已忽略：{{list}}', {
+            list: errorNames.join(', '),
+          }),
+        );
+      }
+    })();
+  };
+
+  const handleChatGPTImageUploadChange = ({ fileList }) => {
+    chatgptImageErroredNames.current.clear();
+    (async () => {
+      const validFiles = [];
+      const credentials = [];
+      const errorNames = [];
+
+      for (const item of fileList) {
+        const fileObj = item.fileInstance;
+        if (!fileObj) continue;
+        try {
+          const txt = await fileObj.text();
+          credentials.push(JSON.parse(normalizeChatGPTImageCredential(txt)));
+          validFiles.push(item);
+        } catch (err) {
+          if (!chatgptImageErroredNames.current.has(item.name)) {
+            errorNames.push(item.name);
+            chatgptImageErroredNames.current.add(item.name);
+          }
+        }
+      }
+
+      setChatgptImageFileList(validFiles);
+      if (formApiRef.current) {
+        formApiRef.current.setValue('chatgpt_image_files', validFiles);
+      }
+
+      if (credentials.length > 0) {
+        handleInputChange('key', JSON.stringify(credentials, null, 2));
+      } else if (validFiles.length === 0) {
+        handleInputChange('key', '');
+      }
+
+      setInputs((prev) => ({ ...prev, chatgpt_image_files: validFiles }));
 
       if (errorNames.length > 0) {
         showError(
@@ -1644,7 +1796,7 @@ const EditChannelModal = (props) => {
     let localInputs = { ...formValues };
     localInputs.param_override = inputs.param_override;
 
-    if (localInputs.type === 57) {
+    if (localInputs.type === 57 || localInputs.type === 58) {
       const rawKey = (localInputs.key || '').trim();
       if (!isEdit && rawKey === '') {
         showInfo(t('请输入密钥！'));
@@ -1654,9 +1806,12 @@ const EditChannelModal = (props) => {
       if (rawKey !== '') {
         try {
           if (batch) {
-            const parsedKeys = parseCodexBatchKeys(rawKey);
+            const parsedKeys =
+              localInputs.type === 57
+                ? parseCodexBatchKeys(rawKey)
+                : parseChatGPTImageBatchKeys(rawKey);
             if (parsedKeys.length === 0) {
-              showInfo(t('请至少输入一个 Codex 密钥'));
+              showInfo(t('请至少输入一个密钥'));
               return;
             }
             localInputs.key = JSON.stringify(
@@ -1667,7 +1822,41 @@ const EditChannelModal = (props) => {
               showInfo(t('密钥必须是合法的 JSON 格式！'));
               return;
             }
-            localInputs.key = normalizeCodexCredential(rawKey);
+            localInputs.key =
+              localInputs.type === 57
+                ? normalizeCodexCredential(rawKey)
+                : normalizeChatGPTImageCredential(rawKey);
+          }
+        } catch (error) {
+          showInfo(t(error?.message || '密钥必须是合法的 JSON 格式！'));
+          return;
+        }
+      }
+    }
+    if (localInputs.type === 58) {
+      const rawKey = (localInputs.key || '').trim();
+      if (!isEdit && rawKey === '') {
+        showInfo(t('请输入密钥！'));
+        return;
+      }
+
+      if (rawKey !== '') {
+        try {
+          if (batch) {
+            const parsedKeys = parseChatGPTImageBatchKeys(rawKey);
+            if (parsedKeys.length === 0) {
+              showInfo(t('请至少输入一个密钥'));
+              return;
+            }
+            localInputs.key = JSON.stringify(
+              parsedKeys.map((key) => JSON.parse(key)),
+            );
+          } else {
+            if (!verifyJSON(rawKey)) {
+              showInfo(t('密钥必须是合法的 JSON 格式！'));
+              return;
+            }
+            localInputs.key = normalizeChatGPTImageCredential(rawKey);
           }
         } catch (error) {
           showInfo(t(error?.message || '密钥必须是合法的 JSON 格式！'));
@@ -2962,13 +3151,15 @@ const EditChannelModal = (props) => {
                         disabled={isIonetLocked}
                       />
 
-                      {inputs.type === 57 && (
-                        <Banner
-                          type='warning'
-                          closeIcon={null}
-                          className='mb-4 rounded-xl'
-                          description={t(
-                            '免责声明：仅限个人使用，请勿分发或共享任何凭证。该渠道存在前置条件与使用门槛，请在充分了解流程与风险后使用，并遵守 OpenAI 的相关条款与政策。相关凭证与配置仅限接入 Codex CLI 使用，不适用于其他客户端、平台或渠道。',
+                        {(inputs.type === 57 || inputs.type === 58) && (
+                          <Banner
+                            type='warning'
+                            closeIcon={null}
+                            className='mb-4 rounded-xl'
+                            description={t(
+                            inputs.type === 57
+                              ? '免责声明：仅限个人使用，请勿分发或共享任何凭证。该渠道存在前置条件与使用门槛，请在充分了解流程与风险后使用，并遵守 OpenAI 的相关条款与政策。相关凭证与配置仅限接入 Codex CLI 使用，不适用于其他客户端、平台或渠道。'
+                              : 'ChatGPT Image 渠道会直接调用 chatgpt.com 图像链路，请妥善保管凭证并确认具备合法使用权限。',
                           )}
                         />
                       )}
@@ -2995,12 +3186,12 @@ const EditChannelModal = (props) => {
                         field='name'
                         label={t('名称')}
                         placeholder={
-                          inputs.type === 57
+                          inputs.type === 57 || inputs.type === 58
                             ? t('可留空，留空时自动使用 JSON 中的 email')
                             : t('请为渠道命名')
                         }
                         rules={
-                          inputs.type === 57
+                          inputs.type === 57 || inputs.type === 58
                             ? []
                             : [{ required: true, message: t('请为渠道命名') }]
                         }
@@ -3010,7 +3201,9 @@ const EditChannelModal = (props) => {
                         extraText={
                           inputs.type === 57
                             ? t('Codex 渠道名称可留空，保存时会自动使用凭据中的 email')
-                            : undefined
+                            : inputs.type === 58
+                              ? t('ChatGPT Image 渠道名称可留空，保存时会自动使用凭据中的 email')
+                              : undefined
                         }
                       />
 
@@ -3063,10 +3256,12 @@ const EditChannelModal = (props) => {
                             if (value === 'api_key') {
                               setBatch(false);
                               setUseManualInput(false);
+                              setCodexFileList([]);
                               setVertexKeys([]);
                               setVertexFileList([]);
                               if (formApiRef.current) {
                                 formApiRef.current.setValue('vertex_files', []);
+                                formApiRef.current.setValue('codex_files', []);
                               }
                             }
                           }}
@@ -3107,87 +3302,143 @@ const EditChannelModal = (props) => {
                             extraText={batchExtra}
                           />
                         ) : (
-                          <Form.TextArea
-                            key={`channel-key-${inputs.type}-batch`}
-                            field='key'
-                            label={t('密钥')}
-                            placeholder={
-                              inputs.type === 33
-                                ? inputs.aws_key_type === 'api_key'
-                                  ? t(
-                                      '请输入 API Key，一行一个，格式：APIKey|Region',
-                                    )
-                                  : t(
-                                      '请输入密钥，一行一个，格式：AccessKey|SecretAccessKey|Region',
-                                    )
-                                : inputs.type === 57
-                                  ? t(
-                                      '请输入 Codex 密钥 JSON 数组',
-                                    )
-                                  : t('请输入密钥，一行一个')
-                            }
-                            rules={
-                              isEdit
-                                ? []
-                                : [{ required: true, message: t('请输入密钥') }]
-                            }
-                            autosize
-                            autoComplete='new-password'
-                            onChange={(value) =>
-                              handleInputChange('key', value)
-                            }
-                            disabled={isIonetLocked}
-                            extraText={
-                              <div className='flex items-center gap-2 flex-wrap'>
-                                {isEdit &&
-                                  isMultiKeyChannel &&
-                                  keyMode === 'append' && (
-                                    <Text type='warning' size='small'>
-                                      {t(
-                                        '追加模式：新密钥将添加到现有密钥列表的末尾',
-                                      )}
-                                    </Text>
-                                  )}
-                                {isEdit && (
-                                  <Button
-                                    size='small'
-                                    type='primary'
-                                    theme='outline'
-                                    onClick={handleShow2FAModal}
-                                  >
-                                    {t('查看密钥')}
-                                  </Button>
+                          <>
+                          {(inputs.type === 57 || inputs.type === 58) && (
+                            <Form.Upload
+                                field={
+                                  inputs.type === 57
+                                    ? 'codex_files'
+                                    : 'chatgpt_image_files'
+                                }
+                                label={
+                                  inputs.type === 57
+                                    ? t('导入 JSON 文件')
+                                    : t('导入 JSON 文件')
+                                }
+                                accept='.json,application/json'
+                                multiple
+                                draggable
+                                dragIcon={<IconBolt />}
+                                dragMainText={t('点击上传文件或拖拽文件到这里')}
+                                dragSubText={t(
+                                  inputs.type === 57
+                                    ? '支持多个 JSON 文件，每个文件为一个 Codex 凭据对象'
+                                    : '支持多个 JSON 文件，每个文件为一个 ChatGPT Image 凭据对象',
                                 )}
-                                {inputs.type === 57 && (
-                                  <>
-                                    <Text type='tertiary' size='small'>
-                                      {t(
-                                        '仅支持标准 JSON 数组；每个对象必须包含 access_token、account_id，名称留空时会自动使用 email',
-                                      )}
-                                    </Text>
+                                style={{ marginTop: 10 }}
+                                uploadTrigger='custom'
+                                beforeUpload={() => false}
+                                onChange={
+                                  inputs.type === 57
+                                    ? handleCodexUploadChange
+                                    : handleChatGPTImageUploadChange
+                                }
+                                fileList={
+                                  inputs.type === 57
+                                    ? codexFileList
+                                    : chatgptImageFileList
+                                }
+                                extraText={t(
+                                  inputs.type === 57
+                                    ? '导入后会自动汇总成标准 JSON 数组填入下方密钥框'
+                                    : '导入后会自动汇总成标准 JSON 数组填入下方密钥框',
+                                )}
+                              />
+                            )}
+
+                            <Form.TextArea
+                              key={`channel-key-${inputs.type}-batch`}
+                              field='key'
+                              label={t('密钥')}
+                              placeholder={
+                                inputs.type === 33
+                                  ? inputs.aws_key_type === 'api_key'
+                                    ? t(
+                                        '请输入 API Key，一行一个，格式：APIKey|Region',
+                                      )
+                                    : t(
+                                        '请输入密钥，一行一个，格式：AccessKey|SecretAccessKey|Region',
+                                      )
+                                  : inputs.type === 57
+                                    ? t(
+                                        '请输入 Codex 密钥 JSON 数组，或通过上方上传多个 JSON 文件导入',
+                                      )
+                                    : inputs.type === 58
+                                      ? t(
+                                          '请输入 ChatGPT Image 密钥 JSON 数组，或通过上方上传多个 JSON 文件导入',
+                                        )
+                                    : t('请输入密钥，一行一个')
+                              }
+                              rules={
+                                isEdit
+                                  ? []
+                                  : [
+                                      {
+                                        required: true,
+                                        message: t('请输入密钥'),
+                                      },
+                                    ]
+                              }
+                              autosize
+                              autoComplete='new-password'
+                              onChange={(value) =>
+                                handleInputChange('key', value)
+                              }
+                              disabled={isIonetLocked}
+                              extraText={
+                                <div className='flex items-center gap-2 flex-wrap'>
+                                  {isEdit &&
+                                    isMultiKeyChannel &&
+                                    keyMode === 'append' && (
+                                      <Text type='warning' size='small'>
+                                        {t(
+                                          '追加模式：新密钥将添加到现有密钥列表的末尾',
+                                        )}
+                                      </Text>
+                                    )}
+                                  {isEdit && (
                                     <Button
                                       size='small'
                                       type='primary'
                                       theme='outline'
-                                      onClick={() => formatJsonField('key')}
-                                      disabled={isIonetLocked}
+                                      onClick={handleShow2FAModal}
                                     >
-                                      {t('格式化 JSON')}
+                                      {t('查看密钥')}
                                     </Button>
-                                  </>
-                                )}
-                                {batchExtra}
-                              </div>
-                            }
-                            showClear
-                          />
+                                  )}
+                                  {(inputs.type === 57 || inputs.type === 58) && (
+                                    <>
+                                      <Text type='tertiary' size='small'>
+                                        {t(
+                                          inputs.type === 57
+                                            ? '仅支持标准 JSON 数组；每个对象必须包含 access_token、account_id，名称留空时会自动使用 email'
+                                            : '仅支持标准 JSON 数组；每个对象必须至少包含 access_token、refresh_token、session_token 其中之一，名称留空时会自动使用 email',
+                                        )}
+                                      </Text>
+                                      <Button
+                                        size='small'
+                                        type='primary'
+                                        theme='outline'
+                                        onClick={() => formatJsonField('key')}
+                                        disabled={isIonetLocked}
+                                      >
+                                        {t('格式化 JSON')}
+                                      </Button>
+                                    </>
+                                  )}
+                                  {batchExtra}
+                                </div>
+                              }
+                              showClear
+                            />
+                          </>
                         )
                       ) : (
                         <>
-                          {inputs.type === 57 ? (
+                          {inputs.type === 57 || inputs.type === 58 ? (
                             <>
                               <Form.TextArea
-                                key={`channel-key-${inputs.type}-single-codex`}
+                                key={`channel-key-${inputs.type}-single-auth`}
                                 field='key'
                                 label={
                                   isEdit
@@ -3199,7 +3450,9 @@ const EditChannelModal = (props) => {
                                 placeholder={t(
                                   batch
                                     ? '请输入 Codex 密钥，支持 JSON 数组或一行一个 JSON 对象，例如：\n[\n  {\n    "access_token": "...",\n    "account_id": "..."\n  },\n  {\n    "access_token": "...",\n    "account_id": "..."\n  }\n]'
-                                    : '请输入 JSON 格式的 OAuth 凭据，例如：\n{\n  "access_token": "...",\n  "account_id": "..." \n}',
+                                    : inputs.type === 57
+                                      ? '请输入 JSON 格式的 OAuth 凭据，例如：\n{\n  "access_token": "...",\n  "account_id": "..." \n}'
+                                      : '请输入 JSON 格式的 ChatGPT Image 凭据，例如：\n{\n  "access_token": "...",\n  "device_id": "...",\n  "session_id": "..."\n}',
                                 )}
                                 rules={
                                   isEdit
@@ -3220,27 +3473,37 @@ const EditChannelModal = (props) => {
                                   <div className='flex flex-col gap-2'>
                                     <Text type='tertiary' size='small'>
                                       {batch
-                                        ? t(
-                                            '批量创建仅支持 JSON 数组；每个对象必须包含 access_token 与 account_id',
-                                          )
-                                        : t(
-                                            '仅支持 JSON 对象，必须包含 access_token 与 account_id',
-                                          )}
+                                        ? inputs.type === 57
+                                          ? t(
+                                              '批量创建仅支持 JSON 数组；每个对象必须包含 access_token 与 account_id',
+                                            )
+                                          : t(
+                                              '批量创建仅支持 JSON 数组；每个对象必须包含 access_token、refresh_token、session_token 其中之一',
+                                            )
+                                        : inputs.type === 57
+                                          ? t(
+                                              '仅支持 JSON 对象，必须包含 access_token 与 account_id',
+                                            )
+                                          : t(
+                                              '仅支持 JSON 对象，必须包含 access_token、refresh_token、session_token 其中之一',
+                                            )}
                                     </Text>
 
                                     <Space wrap spacing='tight'>
-                                      <Button
-                                        size='small'
-                                        type='primary'
-                                        theme='outline'
-                                        onClick={() =>
-                                          setCodexOAuthModalVisible(true)
-                                        }
-                                        disabled={isIonetLocked}
-                                      >
-                                        {t('Codex 授权')}
-                                      </Button>
-                                      {isEdit && (
+                                      {inputs.type === 57 && (
+                                        <Button
+                                          size='small'
+                                          type='primary'
+                                          theme='outline'
+                                          onClick={() =>
+                                            setCodexOAuthModalVisible(true)
+                                          }
+                                          disabled={isIonetLocked}
+                                        >
+                                          {t('Codex 授权')}
+                                        </Button>
+                                      )}
+                                      {inputs.type === 57 && isEdit && (
                                         <Button
                                           size='small'
                                           type='primary'
@@ -3280,13 +3543,15 @@ const EditChannelModal = (props) => {
                                 showClear
                               />
 
-                              <CodexOAuthModal
-                                visible={codexOAuthModalVisible}
-                                onCancel={() =>
-                                  setCodexOAuthModalVisible(false)
-                                }
-                                onSuccess={handleCodexOAuthGenerated}
-                              />
+                              {inputs.type === 57 && (
+                                <CodexOAuthModal
+                                  visible={codexOAuthModalVisible}
+                                  onCancel={() =>
+                                    setCodexOAuthModalVisible(false)
+                                  }
+                                  onSuccess={handleCodexOAuthGenerated}
+                                />
+                              )}
                             </>
                           ) : inputs.type === 41 &&
                             (inputs.vertex_key_type || 'json') === 'json' ? (

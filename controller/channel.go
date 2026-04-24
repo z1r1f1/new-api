@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/chatgptimg"
 	"github.com/QuantumNous/new-api/relay/channel/gemini"
 	"github.com/QuantumNous/new-api/relay/channel/ollama"
 	"github.com/QuantumNous/new-api/service"
@@ -478,6 +479,28 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 			}
 		}
 	}
+	if channel.Type == constant.ChannelTypeChatGPTImage {
+		trimmedKey := strings.TrimSpace(channel.Key)
+		if isAdd || trimmedKey != "" {
+			if strings.HasPrefix(trimmedKey, "[") {
+				if _, err := chatgptimg.GetOAuthBatchKeys(trimmedKey); err != nil {
+					return err
+				}
+			} else if strings.Contains(trimmedKey, "\n") {
+				for _, line := range strings.Split(trimmedKey, "\n") {
+					line = strings.TrimSpace(line)
+					if line == "" {
+						continue
+					}
+					if _, err := chatgptimg.NormalizeOAuthKey(line); err != nil {
+						return err
+					}
+				}
+			} else if _, err := chatgptimg.NormalizeOAuthKey(trimmedKey); err != nil {
+				return err
+			}
+		}
+	}
 
 	return nil
 }
@@ -562,6 +585,7 @@ func AddChannel(c *gin.Context) {
 	}
 
 	preparedCodexKeys := make([]string, 0)
+	preparedChatGPTImageKeys := make([]string, 0)
 	if addChannelRequest.Channel != nil &&
 		addChannelRequest.Channel.Type == constant.ChannelTypeCodex &&
 		addChannelRequest.Mode == "batch" {
@@ -574,6 +598,33 @@ func AddChannel(c *gin.Context) {
 			return
 		}
 		addChannelRequest.Channel.Key = preparedCodexKeys[0]
+	}
+	if addChannelRequest.Channel != nil &&
+		addChannelRequest.Channel.Type == constant.ChannelTypeChatGPTImage &&
+		(addChannelRequest.Mode == "batch" || addChannelRequest.Mode == "multi_to_single") {
+		trimmed := strings.TrimSpace(addChannelRequest.Channel.Key)
+		if strings.HasPrefix(trimmed, "[") {
+			preparedChatGPTImageKeys, err = chatgptimg.GetOAuthBatchKeys(addChannelRequest.Channel.Key)
+			if err != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": err.Error(),
+				})
+				return
+			}
+			addChannelRequest.Channel.Key = preparedChatGPTImageKeys[0]
+		} else {
+			normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(addChannelRequest.Channel.Key)
+			if normalizeErr != nil {
+				c.JSON(http.StatusOK, gin.H{
+					"success": false,
+					"message": normalizeErr.Error(),
+				})
+				return
+			}
+			preparedChatGPTImageKeys = []string{normalized}
+			addChannelRequest.Channel.Key = normalized
+		}
 	}
 
 	// 使用统一的校验函数
@@ -591,7 +642,51 @@ func AddChannel(c *gin.Context) {
 	case "multi_to_single":
 		addChannelRequest.Channel.ChannelInfo.IsMultiKey = true
 		addChannelRequest.Channel.ChannelInfo.MultiKeyMode = addChannelRequest.MultiKeyMode
-		if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
+		if addChannelRequest.Channel.Type == constant.ChannelTypeChatGPTImage {
+			if len(preparedChatGPTImageKeys) == 0 {
+				trimmed := strings.TrimSpace(addChannelRequest.Channel.Key)
+				if strings.HasPrefix(trimmed, "[") {
+					preparedChatGPTImageKeys, err = chatgptimg.GetOAuthBatchKeys(addChannelRequest.Channel.Key)
+					if err != nil {
+						c.JSON(http.StatusOK, gin.H{
+							"success": false,
+							"message": err.Error(),
+						})
+						return
+					}
+				} else if strings.Contains(trimmed, "\n") {
+					lines := strings.Split(trimmed, "\n")
+					preparedChatGPTImageKeys = make([]string, 0, len(lines))
+					for _, line := range lines {
+						line = strings.TrimSpace(line)
+						if line == "" {
+							continue
+						}
+						normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(line)
+						if normalizeErr != nil {
+							c.JSON(http.StatusOK, gin.H{
+								"success": false,
+								"message": normalizeErr.Error(),
+							})
+							return
+						}
+						preparedChatGPTImageKeys = append(preparedChatGPTImageKeys, normalized)
+					}
+				} else {
+					normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(addChannelRequest.Channel.Key)
+					if normalizeErr != nil {
+						c.JSON(http.StatusOK, gin.H{
+							"success": false,
+							"message": normalizeErr.Error(),
+						})
+						return
+					}
+					preparedChatGPTImageKeys = []string{normalized}
+				}
+			}
+			addChannelRequest.Channel.ChannelInfo.MultiKeySize = len(preparedChatGPTImageKeys)
+			addChannelRequest.Channel.Key = strings.Join(preparedChatGPTImageKeys, "\n")
+		} else if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
 			array, err := getVertexArrayKeys(addChannelRequest.Channel.Key)
 			if err != nil {
 				c.JSON(http.StatusOK, gin.H{
@@ -629,6 +724,49 @@ func AddChannel(c *gin.Context) {
 					return
 				}
 			}
+		} else if addChannelRequest.Channel.Type == constant.ChannelTypeChatGPTImage {
+			if len(preparedChatGPTImageKeys) > 0 {
+				keys = preparedChatGPTImageKeys
+			} else {
+				trimmed := strings.TrimSpace(addChannelRequest.Channel.Key)
+				if strings.HasPrefix(trimmed, "[") {
+					keys, err = chatgptimg.GetOAuthBatchKeys(addChannelRequest.Channel.Key)
+					if err != nil {
+						c.JSON(http.StatusOK, gin.H{
+							"success": false,
+							"message": err.Error(),
+						})
+						return
+					}
+				} else if strings.Contains(trimmed, "\n") {
+					keys = make([]string, 0)
+					for _, line := range strings.Split(trimmed, "\n") {
+						line = strings.TrimSpace(line)
+						if line == "" {
+							continue
+						}
+						normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(line)
+						if normalizeErr != nil {
+							c.JSON(http.StatusOK, gin.H{
+								"success": false,
+								"message": normalizeErr.Error(),
+							})
+							return
+						}
+						keys = append(keys, normalized)
+					}
+				} else {
+					normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(addChannelRequest.Channel.Key)
+					if normalizeErr != nil {
+						c.JSON(http.StatusOK, gin.H{
+							"success": false,
+							"message": normalizeErr.Error(),
+						})
+						return
+					}
+					keys = []string{normalized}
+				}
+			}
 		} else if addChannelRequest.Channel.Type == constant.ChannelTypeVertexAi && addChannelRequest.Channel.GetOtherSettings().VertexKeyType != dto.VertexKeyTypeAPIKey {
 			// multi json
 			keys, err = getVertexArrayKeys(addChannelRequest.Channel.Key)
@@ -662,6 +800,8 @@ func AddChannel(c *gin.Context) {
 		localChannel.Key = key
 		if localChannel.Type == constant.ChannelTypeCodex {
 			localChannel.Name = getCodexChannelName(key, localChannel.Name)
+		} else if localChannel.Type == constant.ChannelTypeChatGPTImage {
+			localChannel.Name = chatgptimg.GetOAuthChannelName(key, localChannel.Name)
 		}
 		if addChannelRequest.BatchAddSetKeyPrefix2Name && len(keys) > 1 && strings.TrimSpace(originalName) != "" {
 			keyPrefix := localChannel.Key
@@ -1041,6 +1181,45 @@ func UpdateChannel(c *gin.Context) {
 						// 单个JSON密钥
 						newKeys = []string{channel.Key}
 					}
+				} else if channel.Type == constant.ChannelTypeChatGPTImage {
+					trimmed := strings.TrimSpace(channel.Key)
+					if strings.HasPrefix(trimmed, "[") {
+						newKeys, err = chatgptimg.GetOAuthBatchKeys(channel.Key)
+						if err != nil {
+							c.JSON(http.StatusOK, gin.H{
+								"success": false,
+								"message": "追加密钥解析失败: " + err.Error(),
+							})
+							return
+						}
+					} else if strings.Contains(trimmed, "\n") {
+						inputKeys := strings.Split(trimmed, "\n")
+						for _, key := range inputKeys {
+							key = strings.TrimSpace(key)
+							if key == "" {
+								continue
+							}
+							normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(key)
+							if normalizeErr != nil {
+								c.JSON(http.StatusOK, gin.H{
+									"success": false,
+									"message": "追加密钥解析失败: " + normalizeErr.Error(),
+								})
+								return
+							}
+							newKeys = append(newKeys, normalized)
+						}
+					} else {
+						normalized, normalizeErr := chatgptimg.NormalizeOAuthKey(channel.Key)
+						if normalizeErr != nil {
+							c.JSON(http.StatusOK, gin.H{
+								"success": false,
+								"message": "追加密钥解析失败: " + normalizeErr.Error(),
+							})
+							return
+						}
+						newKeys = []string{normalized}
+					}
 				} else {
 					// 普通渠道的处理
 					inputKeys := strings.Split(channel.Key, "\n")
@@ -1156,6 +1335,13 @@ func FetchModels(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"data":    models,
+		})
+		return
+	}
+	if req.Type == constant.ChannelTypeChatGPTImage {
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"data":    chatgptimg.ModelList,
 		})
 		return
 	}
