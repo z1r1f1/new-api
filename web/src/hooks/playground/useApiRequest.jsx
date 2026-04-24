@@ -126,6 +126,18 @@ const formatImageGenerationElapsed = (seconds) => {
     : `${minutes} 分钟`;
 };
 
+const getImageGenerationTaskState = (
+  taskId,
+  submitData,
+  existingTask = {},
+) => ({
+  ...existingTask,
+  id: taskId,
+  submitData: existingTask?.submitData || submitData || null,
+  startedAt: existingTask?.startedAt || Date.now(),
+  updatedAt: Date.now(),
+});
+
 const getImageGenerationWaitMessage = (taskId, taskData, attempt) => {
   const safeAttempt = Math.max(0, attempt);
   const elapsedSeconds = Math.max(0, attempt + 1) * 5;
@@ -298,8 +310,44 @@ export const useApiRequest = (
     [setMessage, applyAutoCollapseLogic, saveMessages],
   );
 
+  const updatePendingImageGenerationMessage = useCallback(
+    (taskId, submitData, attempt, options = {}) => {
+      setMessage((prevMessage) => {
+        const targetIndex = options.messageId
+          ? prevMessage.findIndex((msg) => msg.id === options.messageId)
+          : prevMessage.length - 1;
+
+        if (targetIndex < 0) return prevMessage;
+
+        const targetMessage = prevMessage[targetIndex];
+        if (
+          targetMessage?.status !== MESSAGE_STATUS.LOADING &&
+          targetMessage?.status !== MESSAGE_STATUS.INCOMPLETE
+        ) {
+          return prevMessage;
+        }
+
+        const updatedMessages = [...prevMessage];
+        updatedMessages[targetIndex] = {
+          ...targetMessage,
+          content: getImageGenerationWaitMessage(taskId, submitData, attempt),
+          status: MESSAGE_STATUS.LOADING,
+          imageGenerationTask: getImageGenerationTaskState(taskId, submitData, {
+            ...(targetMessage.imageGenerationTask || {}),
+            startedAt:
+              options.startedAt || targetMessage.imageGenerationTask?.startedAt,
+          }),
+        };
+
+        setTimeout(() => saveMessages(updatedMessages), 0);
+        return updatedMessages;
+      });
+    },
+    [setMessage, saveMessages],
+  );
+
   const pollImageGenerationTask = useCallback(
-    async (taskId, submitData) => {
+    async (taskId, submitData, options = {}) => {
       const endpoint = `${API_ENDPOINTS.IMAGE_GENERATIONS}/${encodeURIComponent(taskId)}`;
       const maxAttempts = 240;
 
@@ -337,21 +385,8 @@ export const useApiRequest = (
 
         const status = String(taskData?.status || '').toLowerCase();
         if (!isTerminalImageTaskStatus(status)) {
-          setMessage((prevMessage) => {
-            const newMessages = [...prevMessage];
-            const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
-              newMessages[newMessages.length - 1] = {
-                ...lastMessage,
-                content: getImageGenerationWaitMessage(
-                  taskId,
-                  taskData,
-                  attempt,
-                ),
-                status: MESSAGE_STATUS.LOADING,
-              };
-            }
-            return newMessages;
+          updatePendingImageGenerationMessage(taskId, taskData, attempt, {
+            ...options,
           });
           continue;
         }
@@ -365,7 +400,121 @@ export const useApiRequest = (
 
       throw new Error('图片生成任务轮询超时');
     },
-    [setActiveDebugTab, setDebugData, setMessage],
+    [setActiveDebugTab, setDebugData, updatePendingImageGenerationMessage],
+  );
+
+  const completeImageGenerationMessage = useCallback(
+    (content, options = {}) => {
+      const processed =
+        typeof content === 'string' ? processThinkTags(content, '') : null;
+
+      setMessage((prevMessage) => {
+        const targetIndex = options.messageId
+          ? prevMessage.findIndex((msg) => msg.id === options.messageId)
+          : prevMessage.length - 1;
+
+        if (targetIndex < 0) return prevMessage;
+
+        const targetMessage = prevMessage[targetIndex];
+        if (
+          targetMessage?.status !== MESSAGE_STATUS.LOADING &&
+          targetMessage?.status !== MESSAGE_STATUS.INCOMPLETE
+        ) {
+          return prevMessage;
+        }
+
+        const autoCollapseState = applyAutoCollapseLogic(targetMessage, true);
+        const updatedMessages = [...prevMessage];
+        updatedMessages[targetIndex] = {
+          ...targetMessage,
+          content: processed ? processed.content : content,
+          reasoningContent: processed?.reasoningContent || '',
+          status: MESSAGE_STATUS.COMPLETE,
+          imageGenerationTask: undefined,
+          ...autoCollapseState,
+        };
+
+        setTimeout(() => saveMessages(updatedMessages), 0);
+        return updatedMessages;
+      });
+    },
+    [setMessage, applyAutoCollapseLogic, saveMessages],
+  );
+
+  const failImageGenerationMessage = useCallback(
+    (error, options = {}) => {
+      setMessage((prevMessage) => {
+        const targetIndex = options.messageId
+          ? prevMessage.findIndex((msg) => msg.id === options.messageId)
+          : prevMessage.length - 1;
+
+        if (targetIndex < 0) return prevMessage;
+
+        const targetMessage = prevMessage[targetIndex];
+        if (
+          targetMessage?.status !== MESSAGE_STATUS.LOADING &&
+          targetMessage?.status !== MESSAGE_STATUS.INCOMPLETE
+        ) {
+          return prevMessage;
+        }
+
+        const autoCollapseState = applyAutoCollapseLogic(targetMessage, true);
+        const updatedMessages = [...prevMessage];
+        updatedMessages[targetIndex] = {
+          ...targetMessage,
+          content: t('请求发生错误: ') + error.message,
+          errorCode: error.errorCode || null,
+          status: MESSAGE_STATUS.ERROR,
+          imageGenerationTask: undefined,
+          ...autoCollapseState,
+        };
+
+        setTimeout(() => saveMessages(updatedMessages), 0);
+        return updatedMessages;
+      });
+    },
+    [setMessage, applyAutoCollapseLogic, saveMessages, t],
+  );
+
+  const finishImageGenerationTask = useCallback(
+    async ({ taskId, submitData, messageId, startedAt }) => {
+      const taskResult = await pollImageGenerationTask(taskId, submitData, {
+        messageId,
+        startedAt,
+      });
+      const content = imageTaskResultToMessageContent(taskId, taskResult);
+      completeImageGenerationMessage(content, { messageId });
+    },
+    [pollImageGenerationTask, completeImageGenerationMessage],
+  );
+
+  const resumeImageGenerationTask = useCallback(
+    (task) => {
+      const taskId = task?.taskId || task?.id;
+      if (!taskId) return;
+
+      finishImageGenerationTask({
+        taskId,
+        submitData: task.submitData || null,
+        messageId: task.messageId,
+        startedAt: task.startedAt,
+      }).catch((error) => {
+        console.error('Resume image generation task error:', error);
+        const errorInfo = handleApiError(error);
+        setDebugData((prev) => ({
+          ...prev,
+          response: JSON.stringify(errorInfo, null, 2),
+        }));
+        setActiveDebugTab(DEBUG_TABS.RESPONSE);
+        failImageGenerationMessage(error, { messageId: task.messageId });
+      });
+    },
+    [
+      finishImageGenerationTask,
+      failImageGenerationMessage,
+      setDebugData,
+      setActiveDebugTab,
+    ],
   );
 
   // 非流式请求
@@ -434,53 +583,10 @@ export const useApiRequest = (
           submitData?.task_id || submitData?.taskId || submitData?.id;
 
         if (isImageGenerationPayload(payload) && imageTaskId) {
-          setMessage((prevMessage) => {
-            const newMessages = [...prevMessage];
-            const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
-              newMessages[newMessages.length - 1] = {
-                ...lastMessage,
-                content: getImageGenerationWaitMessage(
-                  imageTaskId,
-                  submitData,
-                  -1,
-                ),
-                status: MESSAGE_STATUS.LOADING,
-              };
-            }
-            return newMessages;
-          });
-
-          const taskResult = await pollImageGenerationTask(
-            imageTaskId,
+          updatePendingImageGenerationMessage(imageTaskId, submitData, -1);
+          await finishImageGenerationTask({
+            taskId: imageTaskId,
             submitData,
-          );
-          const content = imageTaskResultToMessageContent(
-            imageTaskId,
-            taskResult,
-          );
-          const processed =
-            typeof content === 'string' ? processThinkTags(content, '') : null;
-
-          setMessage((prevMessage) => {
-            const newMessages = [...prevMessage];
-            const lastMessage = newMessages[newMessages.length - 1];
-            if (lastMessage?.status === MESSAGE_STATUS.LOADING) {
-              const autoCollapseState = applyAutoCollapseLogic(
-                lastMessage,
-                true,
-              );
-
-              newMessages[newMessages.length - 1] = {
-                ...lastMessage,
-                content: processed ? processed.content : content,
-                reasoningContent: processed?.reasoningContent || '',
-                status: MESSAGE_STATUS.COMPLETE,
-                ...autoCollapseState,
-              };
-              setTimeout(() => saveMessages(newMessages), 0);
-            }
-            return newMessages;
           });
           return;
         }
@@ -540,6 +646,7 @@ export const useApiRequest = (
               content: t('请求发生错误: ') + error.message,
               errorCode: error.errorCode || null,
               status: MESSAGE_STATUS.ERROR,
+              imageGenerationTask: undefined,
               ...autoCollapseState,
             };
             setTimeout(() => saveMessages(newMessages), 0);
@@ -554,7 +661,8 @@ export const useApiRequest = (
       setMessage,
       t,
       applyAutoCollapseLogic,
-      pollImageGenerationTask,
+      updatePendingImageGenerationMessage,
+      finishImageGenerationTask,
       saveMessages,
     ],
   );
@@ -784,6 +892,7 @@ export const useApiRequest = (
             status: MESSAGE_STATUS.COMPLETE,
             reasoningContent: processed.reasoningContent || null,
             content: processed.content,
+            imageGenerationTask: undefined,
             ...autoCollapseState,
           },
         ];
@@ -814,5 +923,6 @@ export const useApiRequest = (
     onStopGenerator,
     streamMessageUpdate,
     completeMessage,
+    resumeImageGenerationTask,
   };
 };

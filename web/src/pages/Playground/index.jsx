@@ -121,13 +121,39 @@ const Playground = () => {
   } = state;
 
   // API 请求相关
-  const { sendRequest, onStopGenerator } = useApiRequest(
-    setMessage,
-    setDebugData,
-    setActiveDebugTab,
-    sseSourceRef,
-    saveMessagesImmediately,
-  );
+  const { sendRequest, onStopGenerator, resumeImageGenerationTask } =
+    useApiRequest(
+      setMessage,
+      setDebugData,
+      setActiveDebugTab,
+      sseSourceRef,
+      saveMessagesImmediately,
+    );
+
+  const resumedImageTaskOnMountRef = useRef(false);
+
+  useEffect(() => {
+    if (resumedImageTaskOnMountRef.current) return;
+    resumedImageTaskOnMountRef.current = true;
+
+    const pendingImageMessage = [...message]
+      .reverse()
+      .find(
+        (msg) =>
+          (msg.status === 'loading' || msg.status === 'incomplete') &&
+          msg.imageGenerationTask?.id,
+      );
+
+    if (!pendingImageMessage) return;
+
+    const task = pendingImageMessage.imageGenerationTask;
+    resumeImageGenerationTask({
+      id: task.id,
+      submitData: task.submitData,
+      startedAt: task.startedAt,
+      messageId: pendingImageMessage.id,
+    });
+  }, [message, resumeImageGenerationTask]);
 
   // 数据加载
   useDataLoader(userState, inputs, handleInputChange, setModels, setGroups);

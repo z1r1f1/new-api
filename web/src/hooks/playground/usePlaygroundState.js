@@ -233,6 +233,10 @@ export const usePlaygroundState = () => {
       lastMsg.status === MESSAGE_STATUS.LOADING ||
       lastMsg.status === MESSAGE_STATUS.INCOMPLETE
     ) {
+      if (lastMsg.imageGenerationTask?.id) {
+        return;
+      }
+
       const processed = processIncompleteThinkTags(
         lastMsg.content || '',
         lastMsg.reasoningContent || '',
