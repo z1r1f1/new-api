@@ -91,19 +91,51 @@ func playgroundImageGenerationAsync(c *gin.Context) {
 		})
 		return
 	}
+	if relayInfo == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "failed to prepare playground relay info",
+		})
+		return
+	}
 
 	taskID := model.GenerateTaskID()
-	task := model.InitTask(constant.TaskPlatformPlaygroundImage, relayInfo)
-	task.TaskID = taskID
+	usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
+	if usingGroup == "" {
+		usingGroup = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+	}
+	if usingGroup == "" {
+		usingGroup = relayInfo.UsingGroup
+	}
+	imageModel := ""
+	imagePrompt := ""
+	if imageReq != nil {
+		imageModel = strings.TrimSpace(imageReq.Model)
+		imagePrompt = imageReq.Prompt
+	}
+	channelID := 0
+	if relayInfo.ChannelMeta != nil {
+		channelID = relayInfo.ChannelMeta.ChannelId
+	}
+	task := &model.Task{
+		TaskID:     taskID,
+		UserId:     c.GetInt("id"),
+		Group:      usingGroup,
+		SubmitTime: time.Now().Unix(),
+		Status:     model.TaskStatusSubmitted,
+		Progress:   "0%",
+		ChannelId:  channelID,
+		Platform:   constant.TaskPlatformPlaygroundImage,
+		Properties: model.Properties{
+			Input:             imagePrompt,
+			UpstreamModelName: imageModel,
+			OriginModelName:   imageModel,
+		},
+		PrivateData: model.TaskPrivateData{},
+	}
 	task.Status = model.TaskStatusSubmitted
 	task.Progress = "0%"
 	task.Action = constant.TaskActionGenerate
 	task.PrivateData.UpstreamTaskID = taskID
-	if imageReq != nil {
-		task.Properties.Input = imageReq.Prompt
-		task.Properties.OriginModelName = imageReq.Model
-		task.Properties.UpstreamModelName = imageReq.Model
-	}
 	if err := task.Insert(); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
