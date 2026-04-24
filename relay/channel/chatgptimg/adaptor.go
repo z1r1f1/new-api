@@ -391,7 +391,7 @@ func guessExtensionFromDataURLMeta(meta string) string {
 }
 
 func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool) (*imageRunResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
 
 	result := &imageRunResult{}
@@ -422,6 +422,7 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	var lastPreviewSids []string
 	var fileRefs []string
 
+attemptLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		if attempt > 1 {
 			cr, err = client.ChatRequirementsV2(ctx)
@@ -531,8 +532,14 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 					}
 				}
 			case PollStatusTimeout:
+				if attempt < maxAttempts {
+					continue attemptLoop
+				}
 				return nil, errors.New("chatgpt image channel: poll timeout")
 			default:
+				if attempt < maxAttempts {
+					continue attemptLoop
+				}
 				return nil, errors.New("chatgpt image channel: poll failed")
 			}
 			if len(fileRefs) > 0 {

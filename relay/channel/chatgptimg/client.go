@@ -1006,7 +1006,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return PollStatusError, nil, nil
+			return PollStatusTimeout, nil, nil
 		default:
 		}
 		mapping, err := c.getMappingRaw(ctx, convID)

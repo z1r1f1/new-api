@@ -257,10 +257,10 @@ export const useApiRequest = (
   const pollImageGenerationTask = useCallback(
     async (taskId, submitData) => {
       const endpoint = `${API_ENDPOINTS.IMAGE_GENERATIONS}/${encodeURIComponent(taskId)}`;
-      const maxAttempts = 180;
+      const maxAttempts = 240;
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        await sleep(3000);
+        await sleep(5000);
 
         const response = await fetch(endpoint, {
           method: 'GET',
