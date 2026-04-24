@@ -657,7 +657,7 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	return channel != nil && channel.Type == constant.ChannelTypeCodex
 }
 
-func shouldDeleteChannelAfterTest(result testResult) bool {
+func channelDeletionReasonAfterTest(result testResult, deleteUnauthorized bool) string {
 	candidates := []error{result.localErr}
 	if result.newAPIError != nil {
 		candidates = append(candidates, result.newAPIError)
@@ -667,10 +667,17 @@ func shouldDeleteChannelAfterTest(result testResult) bool {
 			continue
 		}
 		if strings.Contains(strings.ToLower(err.Error()), "deactivated_workspace") {
-			return true
+			return "deactivated_workspace"
 		}
 	}
-	return false
+	if deleteUnauthorized && result.newAPIError != nil && result.newAPIError.StatusCode == http.StatusUnauthorized {
+		return "status_code_401"
+	}
+	return ""
+}
+
+func shouldDeleteChannelAfterTest(result testResult) bool {
+	return channelDeletionReasonAfterTest(result, false) != ""
 }
 
 func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
@@ -903,7 +910,7 @@ func TestChannel(c *gin.Context) {
 var testAllChannelsLock sync.Mutex
 var testAllChannelsRunning bool = false
 
-func runChannelAutoTests(channels []*model.Channel, notify bool) error {
+func runChannelAutoTests(channels []*model.Channel, notify bool, deleteUnauthorized bool) error {
 	testAllChannelsLock.Lock()
 	if testAllChannelsRunning {
 		testAllChannelsLock.Unlock()
@@ -934,11 +941,11 @@ func runChannelAutoTests(channels []*model.Channel, notify bool) error {
 			tok := time.Now()
 			milliseconds := tok.Sub(tik).Milliseconds()
 
-			if shouldDeleteChannelAfterTest(result) {
+			if deleteReason := channelDeletionReasonAfterTest(result, deleteUnauthorized); deleteReason != "" {
 				if err := channel.Delete(); err != nil {
-					common.SysError(fmt.Sprintf("failed to delete channel after deactivated_workspace: channel_id=%d err=%v", channel.Id, err))
+					common.SysError(fmt.Sprintf("failed to delete channel after %s: channel_id=%d err=%v", deleteReason, channel.Id, err))
 				} else {
-					common.SysLog(fmt.Sprintf("deleted channel #%d (%s) because test response contains deactivated_workspace", channel.Id, channel.Name))
+					common.SysLog(fmt.Sprintf("deleted channel #%d (%s) because test result matched %s", channel.Id, channel.Name, deleteReason))
 					model.InitChannelCache()
 				}
 				time.Sleep(common.RequestInterval)
@@ -982,16 +989,16 @@ func runChannelAutoTests(channels []*model.Channel, notify bool) error {
 	return nil
 }
 
-func testAllChannels(notify bool) error {
+func testAllChannels(notify bool, deleteUnauthorized bool) error {
 	channels, getChannelErr := model.GetAllChannels(0, 0, true, false)
 	if getChannelErr != nil {
 		return getChannelErr
 	}
-	return runChannelAutoTests(channels, notify)
+	return runChannelAutoTests(channels, notify, deleteUnauthorized)
 }
 
 func TestAllChannels(c *gin.Context) {
-	err := testAllChannels(true)
+	err := testAllChannels(true, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1029,7 +1036,7 @@ func TestChannelsBatch(c *gin.Context) {
 		channels = append(channels, &channelRecords[index])
 	}
 
-	if err := runChannelAutoTests(channels, true); err != nil {
+	if err := runChannelAutoTests(channels, true, true); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -1059,7 +1066,7 @@ func AutomaticallyTestChannels() {
 				time.Sleep(time.Duration(int(math.Round(frequency))) * time.Minute)
 				common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
 				common.SysLog("automatically testing all channels")
-				_ = testAllChannels(false)
+				_ = testAllChannels(false, false)
 				common.SysLog("automatically channel test finished")
 				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
 					break

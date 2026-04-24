@@ -2,6 +2,7 @@ package controller
 
 import (
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
@@ -54,6 +55,22 @@ func TestShouldDeleteChannelAfterTest(t *testing.T) {
 		}
 		if shouldDeleteChannelAfterTest(result) {
 			t.Fatalf("expected non-deactivated_workspace failure to keep channel")
+		}
+	})
+
+	t.Run("manual batch can delete unauthorized", func(t *testing.T) {
+		result := testResult{
+			newAPIError: types.NewOpenAIError(
+				errors.New("bad response status code 401"),
+				types.ErrorCodeBadResponseStatusCode,
+				http.StatusUnauthorized,
+			),
+		}
+		if channelDeletionReasonAfterTest(result, false) != "" {
+			t.Fatalf("expected scheduled/non-manual batch behavior to keep 401 channel")
+		}
+		if got := channelDeletionReasonAfterTest(result, true); got != "status_code_401" {
+			t.Fatalf("expected manual batch 401 to trigger deletion, got %q", got)
 		}
 	})
 }
