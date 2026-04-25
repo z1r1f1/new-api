@@ -193,6 +193,34 @@ const buildImageConversationContext = (messages, lastUserIndex) => {
   return context.length > 4000 ? context.slice(-4000) : context;
 };
 
+const buildChatGPTWebFallbackPrompt = (messages, systemPrompt = '') => {
+  const parts = [];
+  if (systemPrompt && systemPrompt.trim()) {
+    parts.push(`System: ${systemPrompt.trim()}`);
+  }
+  messages.forEach((msg) => {
+    const text = getTextContent(msg).trim();
+    const images = extractImageUrlsFromContent(msg.content)
+      .map(normalizeImageReferenceUrl)
+      .filter(Boolean);
+    if (!text && images.length === 0) {
+      return;
+    }
+    const roleLabel =
+      msg.role === MESSAGE_ROLES.USER
+        ? 'User'
+        : msg.role === MESSAGE_ROLES.ASSISTANT
+          ? 'Assistant'
+          : msg.role === MESSAGE_ROLES.SYSTEM
+            ? 'System'
+            : msg.role || 'Message';
+    const imageText =
+      images.length > 0 ? `\nImages:\n${images.join('\n')}` : '';
+    parts.push(`${roleLabel}: ${[text, imageText].filter(Boolean).join('')}`);
+  });
+  return parts.join('\n\n').trim();
+};
+
 const buildImageGenerationPayload = (
   messages,
   systemPrompt,
@@ -215,6 +243,9 @@ const buildImageGenerationPayload = (
         messages,
         lastUserIndex >= 0 ? lastUserIndex : messages.length,
       );
+  const fallbackPrompt = webConversationId
+    ? buildChatGPTWebFallbackPrompt(messages, systemPrompt)
+    : '';
   const promptParts = [];
   if (systemPrompt && systemPrompt.trim()) {
     promptParts.push(systemPrompt.trim());
@@ -241,6 +272,14 @@ const buildImageGenerationPayload = (
           .flatMap((msg) => extractImageUrlsFromContent(msg.content))
           .map(normalizeImageReferenceUrl),
       );
+  const fallbackReferenceImageUrls = webConversationId
+    ? dedupeStrings(
+        messages
+          .slice(0, lastUserIndex >= 0 ? lastUserIndex : messages.length)
+          .flatMap((msg) => extractImageUrlsFromContent(msg.content))
+          .map(normalizeImageReferenceUrl),
+      )
+    : [];
   const payload = {
     model: inputs.model,
     group: inputs.group,
@@ -248,6 +287,12 @@ const buildImageGenerationPayload = (
   };
   if (webConversationId) {
     payload.conversation_id = webConversationId;
+    if (fallbackPrompt) {
+      payload.fallback_prompt = fallbackPrompt;
+    }
+    if (fallbackReferenceImageUrls.length > 0) {
+      payload.fallback_reference_images = fallbackReferenceImageUrls;
+    }
   }
   if (imageUrls.length === 1) {
     payload.image = imageUrls[0];
@@ -285,6 +330,9 @@ export const buildApiPayload = (
   const webConversationId = String(
     sessionContext.webConversationId || '',
   ).trim();
+  const fallbackPrompt = webConversationId
+    ? buildChatGPTWebFallbackPrompt(processedMessages, systemPrompt)
+    : '';
   if (webConversationId) {
     const lastUserMessage = [...processedMessages]
       .reverse()
@@ -308,6 +356,9 @@ export const buildApiPayload = (
   };
   if (webConversationId) {
     payload.conversation_id = webConversationId;
+    if (fallbackPrompt) {
+      payload.fallback_prompt = fallbackPrompt;
+    }
   }
 
   // 添加启用的参数

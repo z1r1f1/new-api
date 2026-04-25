@@ -41,15 +41,17 @@ const ChannelName = "chatgpt-web"
 type Adaptor struct{}
 
 type generationRequest struct {
-	Model           string   `json:"model"`
-	Prompt          string   `json:"prompt"`
-	N               int      `json:"n,omitempty"`
-	Size            string   `json:"size,omitempty"`
-	Quality         string   `json:"quality,omitempty"`
-	Style           string   `json:"style,omitempty"`
-	ResponseFormat  string   `json:"response_format,omitempty"`
-	ReferenceImages []string `json:"reference_images,omitempty"`
-	ConversationID  string   `json:"conversation_id,omitempty"`
+	Model                   string   `json:"model"`
+	Prompt                  string   `json:"prompt"`
+	N                       int      `json:"n,omitempty"`
+	Size                    string   `json:"size,omitempty"`
+	Quality                 string   `json:"quality,omitempty"`
+	Style                   string   `json:"style,omitempty"`
+	ResponseFormat          string   `json:"response_format,omitempty"`
+	ReferenceImages         []string `json:"reference_images,omitempty"`
+	FallbackPrompt          string   `json:"fallback_prompt,omitempty"`
+	FallbackReferenceImages []string `json:"fallback_reference_images,omitempty"`
+	ConversationID          string   `json:"conversation_id,omitempty"`
 }
 
 type generationResponse struct {
@@ -72,6 +74,7 @@ type chatRequest struct {
 	Messages       []dto.Message       `json:"messages,omitempty"`
 	Stream         *bool               `json:"stream,omitempty"`
 	ResponseFormat *dto.ResponseFormat `json:"response_format,omitempty"`
+	FallbackPrompt string              `json:"fallback_prompt,omitempty"`
 	ConversationID string              `json:"conversation_id,omitempty"`
 }
 
@@ -115,6 +118,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		Messages:       request.Messages,
 		Stream:         request.Stream,
 		ResponseFormat: request.ResponseFormat,
+		FallbackPrompt: extractFallbackPromptFromRawBody(c),
 		ConversationID: extractConversationIDFromRawBody(c),
 	}, nil
 }
@@ -152,6 +156,8 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		converted.Model = ModelList[0]
 	}
 	converted.ConversationID = extractConversationIDFromImageRequest(request)
+	converted.FallbackPrompt = extractStringExtraField(request, "fallback_prompt")
+	converted.FallbackReferenceImages = extractStringSliceExtraField(request, "fallback_reference_images")
 
 	refs, err := extractReferenceImagesFromRequest(c, info, request)
 	if err != nil {
@@ -162,16 +168,48 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 }
 
 func extractConversationIDFromImageRequest(request dto.ImageRequest) string {
-	if raw, ok := request.Extra["conversation_id"]; ok && len(raw) > 0 {
-		var conversationID string
-		if err := common.Unmarshal(raw, &conversationID); err == nil {
-			return strings.TrimSpace(conversationID)
+	return extractStringExtraField(request, "conversation_id")
+}
+
+func extractStringExtraField(request dto.ImageRequest, field string) string {
+	if raw, ok := request.Extra[field]; ok && len(raw) > 0 {
+		var value string
+		if err := common.Unmarshal(raw, &value); err == nil {
+			return strings.TrimSpace(value)
 		}
 	}
 	return ""
 }
 
+func extractStringSliceExtraField(request dto.ImageRequest, field string) []string {
+	if raw, ok := request.Extra[field]; ok && len(raw) > 0 {
+		var values []string
+		if err := common.Unmarshal(raw, &values); err == nil {
+			out := make([]string, 0, len(values))
+			for _, value := range values {
+				if value = strings.TrimSpace(value); value != "" {
+					out = append(out, value)
+				}
+			}
+			return out
+		}
+		var single string
+		if err := common.Unmarshal(raw, &single); err == nil && strings.TrimSpace(single) != "" {
+			return []string{strings.TrimSpace(single)}
+		}
+	}
+	return nil
+}
+
 func extractConversationIDFromRawBody(c *gin.Context) string {
+	return extractStringFromRawBody(c, "conversation_id")
+}
+
+func extractFallbackPromptFromRawBody(c *gin.Context) string {
+	return extractStringFromRawBody(c, "fallback_prompt")
+}
+
+func extractStringFromRawBody(c *gin.Context, field string) string {
 	if c == nil {
 		return ""
 	}
@@ -183,13 +221,15 @@ func extractConversationIDFromRawBody(c *gin.Context) string {
 	if err != nil || len(body) == 0 {
 		return ""
 	}
-	var probe struct {
-		ConversationID string `json:"conversation_id"`
-	}
+	var probe map[string]any
 	if err := common.Unmarshal(body, &probe); err != nil {
 		return ""
 	}
-	return strings.TrimSpace(probe.ConversationID)
+	value, ok := probe[field].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -296,9 +336,9 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, prompt, started.BaselineTools), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.BaselineTools), nil
 	}
-	content, conversationID, baselineTools, err := runChatCompletion(c.Request.Context(), client, req, prompt)
+	content, conversationID, usedPrompt, baselineTools, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +348,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	} else if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
 	}
-	usage := buildChatUsage(prompt, textContent, req.Model)
+	usage := buildChatUsage(usedPrompt, textContent, req.Model)
 	respPayload := chatResponse{
 		Id:      buildChatCompletionID(conversationID),
 		Object:  "chat.completion",
@@ -428,26 +468,27 @@ func messageTextContent(msg dto.Message) string {
 type chatStreamStart struct {
 	Stream        <-chan SSEEvent
 	BaselineTools map[string]struct{}
+	Prompt        string
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, map[string]struct{}, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, map[string]struct{}, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	started, err := startChatStream(ctx, client, req, prompt)
 	if err != nil {
-		return "", "", nil, err
+		return "", "", "", nil, err
 	}
 	result := ParseChatSSE(started.Stream)
 	if result.Err != nil {
-		return "", result.ConversationID, started.BaselineTools, result.Err
+		return "", result.ConversationID, started.Prompt, started.BaselineTools, result.Err
 	}
 	if containsImageGenerationUpstreamErrorText(result.Content) {
-		return "", result.ConversationID, started.BaselineTools, imageGenerationUpstreamError()
+		return "", result.ConversationID, started.Prompt, started.BaselineTools, imageGenerationUpstreamError()
 	}
 	if strings.TrimSpace(result.Content) == "" {
-		return "", result.ConversationID, started.BaselineTools, errors.New("chatgpt web channel: empty chat response")
+		return "", result.ConversationID, started.Prompt, started.BaselineTools, errors.New("chatgpt web channel: empty chat response")
 	}
-	return result.Content, result.ConversationID, started.BaselineTools, nil
+	return result.Content, result.ConversationID, started.Prompt, started.BaselineTools, nil
 }
 
 func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baselineTools map[string]struct{}) (string, error) {
@@ -486,9 +527,9 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	if !hasFileRefs {
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
 			MaxWait:         60 * time.Second,
-			Interval:        10 * time.Second,
+			Interval:        2 * time.Second,
 			StableRounds:    2,
-			PreviewWait:     20 * time.Second,
+			PreviewWait:     8 * time.Second,
 			BaselineToolIDs: baselineTools,
 		})
 		switch pollStatus {
@@ -565,13 +606,20 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 	if cr.Proofofwork.Required {
 		proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
 	}
-	convID := strings.TrimSpace(req.ConversationID)
-	parentID, baselineTools := prepareConversationContinuation(ctx, client, convID)
+	continuation := prepareConversationContinuation(ctx, client, req.ConversationID)
+	convID := ""
+	if continuation.Available {
+		convID = continuation.ConvID
+	}
+	actualPrompt := prompt
+	if !continuation.Available && strings.TrimSpace(req.ConversationID) != "" && strings.TrimSpace(req.FallbackPrompt) != "" {
+		actualPrompt = strings.TrimSpace(req.FallbackPrompt)
+	}
 	convOpt := ChatConvOpts{
-		Prompt:        prompt,
+		Prompt:        actualPrompt,
 		UpstreamModel: chatModelForWeb(req.Model),
 		ConvID:        convID,
-		ParentMsgID:   parentID,
+		ParentMsgID:   continuation.ParentID,
 		MessageID:     uuid.NewString(),
 		ChatToken:     cr.Token,
 		ProofToken:    proofToken,
@@ -584,7 +632,7 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 	if err != nil {
 		return nil, err
 	}
-	return &chatStreamStart{Stream: stream, BaselineTools: baselineTools}, nil
+	return &chatStreamStart{Stream: stream, BaselineTools: continuation.BaselineTools, Prompt: actualPrompt}, nil
 }
 
 func chatModelForWeb(model string) string {
@@ -697,21 +745,33 @@ func buildChatCompletionID(conversationID string) string {
 	return "chatcmpl-chatgptimg-" + conversationID
 }
 
-func prepareConversationContinuation(ctx context.Context, client *Client, conversationID string) (string, map[string]struct{}) {
+type conversationContinuation struct {
+	ConvID        string
+	ParentID      string
+	BaselineTools map[string]struct{}
+	Available     bool
+}
+
+func prepareConversationContinuation(ctx context.Context, client *Client, conversationID string) conversationContinuation {
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
-		return uuid.NewString(), nil
+		return conversationContinuation{ParentID: uuid.NewString()}
 	}
 	mapping, err := client.GetConversationMapping(ctx, conversationID)
 	if err != nil {
-		return uuid.NewString(), nil
+		return conversationContinuation{ParentID: uuid.NewString()}
 	}
 	parentID, _ := mapping["current_node"].(string)
 	if strings.TrimSpace(parentID) == "" {
-		parentID = uuid.NewString()
+		return conversationContinuation{ParentID: uuid.NewString()}
 	}
 	rawMapping, _ := mapping["mapping"].(map[string]any)
-	return parentID, buildToolBaseline(rawMapping)
+	return conversationContinuation{
+		ConvID:        conversationID,
+		ParentID:      parentID,
+		BaselineTools: buildToolBaseline(rawMapping),
+		Available:     true,
+	}
 }
 
 func recordGenerationDrawingLog(info *relaycommon.RelayInfo, req generationRequest, run *imageRunResult, resp *generationResponse) {
@@ -1080,6 +1140,8 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	var lastPreviewFids []string
 	var lastPreviewSids []string
 	var fileRefs []string
+	var fallbackRefs []*UploadedFile
+	var fallbackRefsLoaded bool
 
 attemptLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -1093,13 +1155,37 @@ attemptLoop:
 				proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
 			}
 		}
-		convID = strings.TrimSpace(req.ConversationID)
-		parentID, baselineTools = prepareConversationContinuation(ctx, client, convID)
+		continuation := prepareConversationContinuation(ctx, client, req.ConversationID)
+		convID = ""
+		if continuation.Available {
+			convID = continuation.ConvID
+		}
+		parentID = continuation.ParentID
+		baselineTools = continuation.BaselineTools
 		messageID = uuid.NewString()
 		lastPreviewFids = nil
 		lastPreviewSids = nil
 		fileRefs = nil
 		result.IsPreview = false
+		prompt := req.Prompt
+		activeRefs := refs
+		if !continuation.Available && strings.TrimSpace(req.ConversationID) != "" {
+			if fallbackPrompt := strings.TrimSpace(req.FallbackPrompt); fallbackPrompt != "" {
+				prompt = fallbackPrompt
+			}
+			if len(req.FallbackReferenceImages) > 0 {
+				if !fallbackRefsLoaded {
+					fallbackRefs, err = uploadReferenceImages(ctx, client, req.FallbackReferenceImages)
+					if err != nil {
+						return nil, err
+					}
+					fallbackRefsLoaded = true
+				}
+				if len(fallbackRefs) > 0 {
+					activeRefs = append(append([]*UploadedFile{}, fallbackRefs...), refs...)
+				}
+			}
+		}
 
 		for turn := 1; turn <= sameConvMax; turn++ {
 			result.TurnsInConv = turn
@@ -1114,14 +1200,14 @@ attemptLoop:
 				}
 			}
 			convOpt := ImageConvOpts{
-				Prompt:        req.Prompt,
+				Prompt:        prompt,
 				UpstreamModel: "auto",
 				ConvID:        convID,
 				ParentMsgID:   parentID,
 				MessageID:     messageID,
 				ChatToken:     cr.Token,
 				ProofToken:    proofToken,
-				References:    refs,
+				References:    activeRefs,
 			}
 			if turn > 1 {
 				convOpt.MessageID = uuid.NewString()
@@ -1168,7 +1254,13 @@ attemptLoop:
 			if convID == "" {
 				return nil, errors.New("chatgpt web channel: missing conversation id from SSE")
 			}
-			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{MaxWait: pollMaxWait, BaselineToolIDs: baselineTools})
+			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{
+				MaxWait:         pollMaxWait,
+				Interval:        2 * time.Second,
+				StableRounds:    2,
+				PreviewWait:     8 * time.Second,
+				BaselineToolIDs: baselineTools,
+			})
 			switch pollStatus {
 			case PollStatusIMG2:
 				fileRefs = append(fileRefs, fids...)

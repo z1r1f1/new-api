@@ -1475,13 +1475,13 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		opt.MaxWait = 300 * time.Second
 	}
 	if opt.Interval == 0 {
-		opt.Interval = 6 * time.Second
+		opt.Interval = 2 * time.Second
 	}
 	if opt.StableRounds == 0 {
-		opt.StableRounds = 4
+		opt.StableRounds = 2
 	}
 	if opt.PreviewWait == 0 {
-		opt.PreviewWait = 30 * time.Second
+		opt.PreviewWait = 8 * time.Second
 	}
 	baseline := opt.BaselineToolIDs
 	deadline := time.Now().Add(opt.MaxWait)

@@ -69,7 +69,7 @@ func TestParsePlaygroundImageReference(t *testing.T) {
 }
 
 func TestConvertImageRequestCarriesConversationID(t *testing.T) {
-	raw := []byte(`{"model":"gpt-image-2","prompt":"draw","conversation_id":"conv-123"}`)
+	raw := []byte(`{"model":"gpt-image-2","prompt":"draw","conversation_id":"conv-123","fallback_prompt":"full local context","fallback_reference_images":["data:image/png;base64,abc"]}`)
 	var req dto.ImageRequest
 	if err := req.UnmarshalJSON(raw); err != nil {
 		t.Fatalf("UnmarshalJSON returned error: %v", err)
@@ -84,5 +84,11 @@ func TestConvertImageRequestCarriesConversationID(t *testing.T) {
 	}
 	if got.ConversationID != "conv-123" {
 		t.Fatalf("expected conversation id conv-123, got %q", got.ConversationID)
+	}
+	if got.FallbackPrompt != "full local context" {
+		t.Fatalf("expected fallback prompt, got %q", got.FallbackPrompt)
+	}
+	if len(got.FallbackReferenceImages) != 1 || got.FallbackReferenceImages[0] != "data:image/png;base64,abc" {
+		t.Fatalf("unexpected fallback reference images: %#v", got.FallbackReferenceImages)
 	}
 }
