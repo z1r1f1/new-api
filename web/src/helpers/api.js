@@ -167,6 +167,50 @@ const dedupeStrings = (items) => {
   });
 };
 
+const MAX_FALLBACK_REFERENCE_IMAGES = 4;
+const MAX_FALLBACK_REFERENCE_BYTES = 6 * 1024 * 1024;
+
+const isDataUrl = (url) => String(url || '').trim().startsWith('data:');
+
+const estimateStringBytes = (value) => {
+  const text = String(value || '');
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(text).length;
+  }
+  return text.length;
+};
+
+const describeImageForPrompt = (url) => {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return '';
+  if (!isDataUrl(trimmed)) {
+    return trimmed;
+  }
+  const mime = trimmed.slice(5, trimmed.indexOf(';')).trim() || 'image';
+  return `[图片 data URL 已省略，mime=${mime}，大小约 ${Math.ceil(estimateStringBytes(trimmed) / 1024)}KB]`;
+};
+
+const limitFallbackReferenceImages = (urls) => {
+  const out = [];
+  let totalBytes = 0;
+  dedupeStrings(urls)
+    .slice(-MAX_FALLBACK_REFERENCE_IMAGES * 2)
+    .reverse()
+    .some((url) => {
+      const bytes = estimateStringBytes(url);
+      if (out.length >= MAX_FALLBACK_REFERENCE_IMAGES) {
+        return true;
+      }
+      if (isDataUrl(url) && totalBytes + bytes > MAX_FALLBACK_REFERENCE_BYTES) {
+        return false;
+      }
+      out.push(url);
+      totalBytes += bytes;
+      return false;
+    });
+  return out.reverse();
+};
+
 const buildImageConversationContext = (messages, lastUserIndex) => {
   const contextMessages = messages.slice(
     Math.max(0, lastUserIndex - 8),
@@ -175,7 +219,9 @@ const buildImageConversationContext = (messages, lastUserIndex) => {
   const parts = contextMessages
     .map((msg) => {
       const text = getTextContent(msg).trim();
-      const images = extractImageUrlsFromContent(msg.content);
+      const images = extractImageUrlsFromContent(msg.content).map(
+        describeImageForPrompt,
+      );
       const roleLabel =
         msg.role === MESSAGE_ROLES.USER
           ? '用户'
@@ -202,6 +248,7 @@ const buildChatGPTWebFallbackPrompt = (messages, systemPrompt = '') => {
     const text = getTextContent(msg).trim();
     const images = extractImageUrlsFromContent(msg.content)
       .map(normalizeImageReferenceUrl)
+      .map(describeImageForPrompt)
       .filter(Boolean);
     if (!text && images.length === 0) {
       return;
@@ -273,7 +320,7 @@ const buildImageGenerationPayload = (
           .map(normalizeImageReferenceUrl),
       );
   const fallbackReferenceImageUrls = webConversationId
-    ? dedupeStrings(
+    ? limitFallbackReferenceImages(
         messages
           .slice(0, lastUserIndex >= 0 ? lastUserIndex : messages.length)
           .flatMap((msg) => extractImageUrlsFromContent(msg.content))
