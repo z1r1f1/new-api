@@ -15,6 +15,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -189,6 +190,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if err != nil {
 		return nil, err
 	}
+	recordGenerationDrawingLog(info, req, res, respPayload)
 	payloadBytes, err := common.Marshal(respPayload)
 	if err != nil {
 		return nil, fmt.Errorf("chatgpt image channel: marshal synthetic response failed: %w", err)
@@ -198,6 +200,74 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
 	}, nil
+}
+
+func recordGenerationDrawingLog(info *relaycommon.RelayInfo, req generationRequest, run *imageRunResult, resp *generationResponse) {
+	if info == nil || info.IsChannelTest || resp == nil || len(resp.Data) == 0 {
+		return
+	}
+
+	submitTime := time.Now().UnixMilli()
+	if !info.StartTime.IsZero() {
+		submitTime = info.StartTime.UnixMilli()
+	}
+	finishTime := time.Now().UnixMilli()
+	taskIDPrefix := strings.TrimSpace(run.ConversationID)
+	if taskIDPrefix == "" {
+		taskIDPrefix = "chatgptimg-" + uuid.NewString()
+	}
+
+	propertiesBytes, _ := common.Marshal(map[string]any{
+		"source":          ChannelName,
+		"model":           strings.TrimSpace(req.Model),
+		"conversation_id": strings.TrimSpace(run.ConversationID),
+		"preview":         run.IsPreview,
+	})
+	properties := string(propertiesBytes)
+
+	for index, item := range resp.Data {
+		imageURL := getGenerationLogImageURL(item)
+		if imageURL == "" {
+			continue
+		}
+
+		taskID := taskIDPrefix
+		if len(resp.Data) > 1 {
+			taskID = fmt.Sprintf("%s-%d", taskIDPrefix, index+1)
+		}
+
+		_ = (&model.Midjourney{
+			Code:        1,
+			UserId:      info.UserId,
+			Action:      "IMAGINE",
+			MjId:        taskID,
+			Prompt:      req.Prompt,
+			Description: ChannelName,
+			State:       strings.TrimSpace(req.Model),
+			SubmitTime:  submitTime,
+			StartTime:   submitTime,
+			FinishTime:  finishTime,
+			ImageUrl:    imageURL,
+			Status:      string(model.TaskStatusSuccess),
+			Progress:    "100%",
+			ChannelId:   info.ChannelId,
+			Quota:       info.FinalPreConsumedQuota,
+			Properties:  properties,
+		}).Insert()
+	}
+}
+
+func getGenerationLogImageURL(item dto.ImageData) string {
+	if url := strings.TrimSpace(item.Url); url != "" {
+		return url
+	}
+	if b64 := strings.TrimSpace(item.B64Json); b64 != "" {
+		if strings.HasPrefix(b64, "data:") {
+			return b64
+		}
+		return "data:image/png;base64," + b64
+	}
+	return ""
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
