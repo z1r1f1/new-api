@@ -135,6 +135,18 @@ func PlaygroundImageGenerationContent(c *gin.Context) {
 
 	image := payload.Data[imageIndex]
 	if imageURL := strings.TrimSpace(image.URL); imageURL != "" {
+		if strings.HasPrefix(imageURL, "data:") {
+			imageBytes, contentType, err := decodePlaygroundImageDataURL(imageURL)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{
+					"error": "failed to decode image data",
+				})
+				return
+			}
+			c.Header("Cache-Control", "private, max-age=3600")
+			c.Data(http.StatusOK, contentType, imageBytes)
+			return
+		}
 		c.Redirect(http.StatusFound, imageURL)
 		return
 	}
@@ -159,6 +171,28 @@ func PlaygroundImageGenerationContent(c *gin.Context) {
 	}
 	c.Header("Cache-Control", "private, max-age=3600")
 	c.Data(http.StatusOK, http.DetectContentType(imageBytes), imageBytes)
+}
+
+func decodePlaygroundImageDataURL(dataURL string) ([]byte, string, error) {
+	dataURL = strings.TrimSpace(dataURL)
+	comma := strings.Index(dataURL, ",")
+	if !strings.HasPrefix(dataURL, "data:") || comma < 0 {
+		return nil, "", errors.New("invalid data url")
+	}
+	meta := dataURL[len("data:"):comma]
+	payload := strings.TrimSpace(dataURL[comma+1:])
+	if payload == "" {
+		return nil, "", errors.New("empty data url payload")
+	}
+	imageBytes, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return nil, "", err
+	}
+	contentType := strings.TrimSpace(strings.Split(meta, ";")[0])
+	if contentType == "" {
+		contentType = http.DetectContentType(imageBytes)
+	}
+	return imageBytes, contentType, nil
 }
 
 func playgroundImageGenerationAsync(c *gin.Context) {
