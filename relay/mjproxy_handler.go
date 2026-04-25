@@ -2,6 +2,7 @@ package relay
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,6 +50,10 @@ func RelayMidjourneyImage(c *gin.Context) {
 	if httpClient == nil {
 		httpClient = service.GetHttpClient()
 	}
+	if strings.HasPrefix(strings.TrimSpace(midjourneyTask.ImageUrl), "data:") {
+		serveDataURLImage(c, midjourneyTask.ImageUrl)
+		return
+	}
 	fetchSetting := system_setting.GetFetchSetting()
 	if err := common.ValidateURLWithFetchSetting(midjourneyTask.ImageUrl, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{
@@ -85,6 +90,41 @@ func RelayMidjourneyImage(c *gin.Context) {
 		log.Println("Failed to stream image:", err)
 	}
 	return
+}
+
+func serveDataURLImage(c *gin.Context, dataURL string) {
+	dataURL = strings.TrimSpace(dataURL)
+	comma := strings.Index(dataURL, ",")
+	if comma < 0 || !strings.HasPrefix(dataURL, "data:") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "invalid_data_url",
+		})
+		return
+	}
+
+	metadata := dataURL[len("data:"):comma]
+	payload := dataURL[comma+1:]
+	if !strings.Contains(strings.ToLower(metadata), ";base64") {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "unsupported_data_url_encoding",
+		})
+		return
+	}
+
+	imageBytes, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "decode_data_url_failed",
+		})
+		return
+	}
+
+	contentType := strings.TrimSpace(strings.Split(metadata, ";")[0])
+	if contentType == "" {
+		contentType = http.DetectContentType(imageBytes)
+	}
+	c.Header("Cache-Control", "private, max-age=3600")
+	c.Data(http.StatusOK, contentType, imageBytes)
 }
 
 func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {
