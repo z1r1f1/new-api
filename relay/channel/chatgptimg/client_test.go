@@ -1,6 +1,9 @@
 package chatgptimg
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -58,6 +61,51 @@ func TestMappingContainsImageGenerationError(t *testing.T) {
 	}
 	if !mappingContainsImageGenerationError(mapping) {
 		t.Fatal("expected mapping error detector to match upstream image generation error")
+	}
+}
+
+func TestPollConversationForImagesReturnsPreviewWhenSedimentIsReady(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/conversation/conv-1" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"mapping": {
+				"tool-1": {
+					"message": {
+						"author": {"role": "tool", "name": "image_gen"},
+						"metadata": {"async_task_type": "image_gen"},
+						"content": {
+							"content_type": "multimodal_text",
+							"parts": [{"asset_pointer": "sediment://sed_ready"}]
+						},
+						"create_time": 1,
+						"recipient": "image_gen.text2im"
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+
+	status, fids, sids := client.PollConversationForImages(context.Background(), "conv-1", PollOpts{
+		MaxWait:     50 * time.Millisecond,
+		Interval:    time.Millisecond,
+		PreviewWait: time.Millisecond,
+	})
+	if status != PollStatusPreviewOnly {
+		t.Fatalf("expected preview status, got %s", status)
+	}
+	if len(fids) != 0 {
+		t.Fatalf("expected no file ids, got %#v", fids)
+	}
+	if len(sids) != 1 || sids[0] != "sed_ready" {
+		t.Fatalf("expected sediment id, got %#v", sids)
 	}
 }
 

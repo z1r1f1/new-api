@@ -1026,7 +1026,7 @@ attemptLoop:
 			case PollStatusPreviewOnly:
 				lastPreviewFids = fids
 				lastPreviewSids = sids
-				if testMode {
+				if len(fids) > 0 || len(sids) > 0 {
 					result.IsPreview = true
 					fileRefs = append(fileRefs, fids...)
 					for _, sid := range sids {
@@ -1056,6 +1056,14 @@ attemptLoop:
 					return nil, imageGenerationUpstreamError()
 				}
 				if pollStatus == PollStatusRateLimited {
+					if len(lastPreviewFids) > 0 || len(lastPreviewSids) > 0 {
+						result.IsPreview = true
+						fileRefs = append(fileRefs, lastPreviewFids...)
+						for _, sid := range lastPreviewSids {
+							fileRefs = append(fileRefs, "sed:"+sid)
+						}
+						break
+					}
 					return nil, errors.New("chatgpt web channel: upstream rate limited while polling image result")
 				}
 				return nil, errors.New("chatgpt web channel: poll failed")
