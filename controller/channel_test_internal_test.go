@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
@@ -68,4 +70,28 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 	require.Equal(t, "tiered_expr", other["billing_mode"])
 	require.Equal(t, "base", other["matched_tier"])
 	require.NotEmpty(t, other["expr_b64"])
+}
+
+func TestChatGPTImageChannelTestEndpointDependsOnModelKind(t *testing.T) {
+	channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
+
+	require.Equal(t,
+		string(constant.EndpointTypeImageGeneration),
+		normalizeChannelTestEndpoint(channel, "gpt-image-2", ""),
+	)
+	require.Equal(t,
+		string(constant.EndpointTypeOpenAI),
+		normalizeChannelTestEndpoint(channel, "gpt-5.4-pro", ""),
+	)
+}
+
+func TestBuildTestRequestForChatGPTImageTextModelUsesChatRequest(t *testing.T) {
+	req := buildTestRequest("gpt-5.4-pro", "", &model.Channel{Type: constant.ChannelTypeChatGPTImage}, true)
+
+	chatReq, ok := req.(*dto.GeneralOpenAIRequest)
+	require.True(t, ok, "expected text model to use chat request, got %T", req)
+	require.Equal(t, "gpt-5.4-pro", chatReq.Model)
+	require.NotNil(t, chatReq.Stream)
+	require.True(t, *chatReq.Stream)
+	require.Len(t, chatReq.Messages, 1)
 }

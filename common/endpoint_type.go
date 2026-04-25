@@ -29,7 +29,11 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 	case constant.ChannelTypeXai:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse}
 	case constant.ChannelTypeChatGPTImage:
-		endpointTypes = []constant.EndpointType{constant.EndpointTypeImageGeneration, constant.EndpointTypeOpenAI}
+		if IsImageGenerationModel(modelName) {
+			endpointTypes = []constant.EndpointType{constant.EndpointTypeImageGeneration, constant.EndpointTypeOpenAI}
+		} else {
+			endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeImageGeneration}
+		}
 	case constant.ChannelTypeSora:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	default:

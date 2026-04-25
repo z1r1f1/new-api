@@ -49,6 +49,9 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 		return normalized
 	}
 	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
+		if !common.IsImageGenerationModel(modelName) {
+			return string(constant.EndpointTypeOpenAI)
+		}
 		return string(constant.EndpointTypeImageGeneration)
 	}
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
@@ -775,6 +778,15 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 	}
 
 	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
+		if !common.IsImageGenerationModel(model) {
+			maxTokens := uint(16)
+			return &dto.GeneralOpenAIRequest{
+				Model:     model,
+				Stream:    lo.ToPtr(isStream),
+				Messages:  []dto.Message{{Role: "user", Content: "hi"}},
+				MaxTokens: lo.ToPtr(maxTokens),
+			}
+		}
 		return &dto.ImageRequest{
 			Model:  model,
 			Prompt: "a cute cat",
