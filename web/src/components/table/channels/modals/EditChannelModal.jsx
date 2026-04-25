@@ -131,6 +131,7 @@ const PARAM_OVERRIDE_OPERATIONS_TEMPLATE = {
 };
 
 const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
+const CHATGPT_WEB_DEFAULT_TEST_MODEL = 'gpt-5.4-instant';
 
 const DEFAULT_NEW_CHANNEL_INPUTS = {
   name: '',
@@ -766,6 +767,15 @@ const EditChannelModal = (props) => {
       }
       if (inputs.models.length === 0) {
         setInputs((inputs) => ({ ...inputs, models: localModels }));
+      }
+      if (value === 58 && !String(inputs.test_model || '').trim()) {
+        setInputs((inputs) => ({
+          ...inputs,
+          test_model: CHATGPT_WEB_DEFAULT_TEST_MODEL,
+        }));
+        if (formApiRef.current) {
+          formApiRef.current.setValue('test_model', CHATGPT_WEB_DEFAULT_TEST_MODEL);
+        }
       }
       setBasicModels(localModels);
 
@@ -1418,9 +1428,13 @@ const EditChannelModal = (props) => {
       const shouldDeferCodexBatchModels =
         props.editingChannel?.create_mode === 'batch' &&
         (initValues.type === 57 || initValues.type === 58);
+      const deferredBatchDefaultTestModel =
+        initValues.type === 58 ? CHATGPT_WEB_DEFAULT_TEST_MODEL : 'gpt-5.4';
       const initialTestModel =
-        shouldDeferCodexBatchModels && !String(initValues.test_model || '').trim()
-          ? 'gpt-5.4'
+        initValues.type === 58 && !String(initValues.test_model || '').trim()
+          ? CHATGPT_WEB_DEFAULT_TEST_MODEL
+          : shouldDeferCodexBatchModels && !String(initValues.test_model || '').trim()
+          ? deferredBatchDefaultTestModel
           : initValues.test_model;
       const initialModels =
         shouldDeferCodexBatchModels

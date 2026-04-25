@@ -32,6 +32,35 @@ func TestParseImageSSEUntilConversationReadyReturnsOnImageRef(t *testing.T) {
 	}
 }
 
+func TestParseImageSSEDetectsUpstreamGenerationError(t *testing.T) {
+	stream := make(chan SSEEvent, 1)
+	stream <- SSEEvent{Data: []byte(`{"v":{"message":{"author":{"role":"assistant"},"content":{"parts":["We experienced an error when generating images."]}}}}`)}
+	close(stream)
+
+	result := ParseImageSSE(stream)
+	if result.Err == nil {
+		t.Fatal("expected upstream image generation error")
+	}
+	if !containsImageGenerationUpstreamErrorText(result.Err.Error()) {
+		t.Fatalf("expected specific upstream error text, got %v", result.Err)
+	}
+}
+
+func TestMappingContainsImageGenerationError(t *testing.T) {
+	mapping := map[string]any{
+		"node-1": map[string]any{
+			"message": map[string]any{
+				"content": map[string]any{
+					"parts": []any{"We experienced an error when generating images"},
+				},
+			},
+		},
+	}
+	if !mappingContainsImageGenerationError(mapping) {
+		t.Fatal("expected mapping error detector to match upstream image generation error")
+	}
+}
+
 func TestParseChatSSEExtractsAssistantTextDelta(t *testing.T) {
 	stream := make(chan SSEEvent, 3)
 	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["hel"]}}}}`)}

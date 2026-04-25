@@ -29,6 +29,9 @@ var ModelList = []string{
 	"gpt-image-2",
 	"gpt-5.5-pro",
 	"gpt-5.5-thinking",
+	"gpt-5.4-thinking",
+	"gpt-5.4-pro",
+	"gpt-5.4-instant",
 }
 
 const ChannelName = "chatgpt-web"
@@ -254,13 +257,19 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(stream, req, prompt), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, stream, req, prompt), nil
 	}
 	content, conversationID, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
-	usage := buildChatUsage(prompt, content, req.Model)
+	textContent := content
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID); err != nil {
+		return nil, err
+	} else if imageMarkdown != "" {
+		content = appendMarkdownBlock(content, imageMarkdown)
+	}
+	usage := buildChatUsage(prompt, textContent, req.Model)
 	respPayload := chatResponse{
 		Id:      buildChatCompletionID(conversationID),
 		Object:  "chat.completion",
@@ -387,10 +396,109 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 	if result.Err != nil {
 		return "", result.ConversationID, result.Err
 	}
+	if containsImageGenerationUpstreamErrorText(result.Content) {
+		return "", result.ConversationID, imageGenerationUpstreamError()
+	}
 	if strings.TrimSpace(result.Content) == "" {
 		return "", result.ConversationID, errors.New("chatgpt web channel: empty chat response")
 	}
 	return result.Content, result.ConversationID, nil
+}
+
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string) (string, error) {
+	conversationID = strings.TrimSpace(conversationID)
+	if client == nil || conversationID == "" {
+		return "", nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+
+	mapping, err := client.getMappingRaw(ctx, conversationID)
+	if err != nil {
+		return "", nil
+	}
+	if mappingContainsImageGenerationError(mapping) {
+		return "", imageGenerationUpstreamError()
+	}
+	toolMsgs := ExtractImageToolMsgs(mapping)
+	if len(toolMsgs) == 0 {
+		return "", nil
+	}
+
+	fileRefs, hasFileRefs := imageRefsFromToolMsgs(toolMsgs)
+	if !hasFileRefs {
+		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
+			MaxWait:      90 * time.Second,
+			Interval:     3 * time.Second,
+			StableRounds: 2,
+			PreviewWait:  15 * time.Second,
+		})
+		switch pollStatus {
+		case PollStatusIMG2, PollStatusPreviewOnly:
+			fileRefs = append(fileRefs, fids...)
+			for _, sid := range sids {
+				fileRefs = append(fileRefs, "sed:"+sid)
+			}
+		case PollStatusError:
+			return "", imageGenerationUpstreamError()
+		}
+	}
+	if len(fileRefs) == 0 {
+		return "", nil
+	}
+	return imageRefsToMarkdown(ctx, client, conversationID, fileRefs), nil
+}
+
+func imageRefsFromToolMsgs(toolMsgs []ImageToolMsg) ([]string, bool) {
+	fileRefs := make([]string, 0)
+	hasFileRefs := false
+	for _, msg := range toolMsgs {
+		for _, fid := range msg.FileIDs {
+			hasFileRefs = true
+			fileRefs = append(fileRefs, fid)
+		}
+		for _, sid := range msg.SedimentIDs {
+			fileRefs = append(fileRefs, "sed:"+sid)
+		}
+	}
+	return dedupeStrings(fileRefs), hasFileRefs
+}
+
+func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID string, fileRefs []string) string {
+	var b strings.Builder
+	for index, ref := range dedupeStrings(fileRefs) {
+		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
+		if err != nil || strings.TrimSpace(signedURL) == "" {
+			continue
+		}
+		imageURL := signedURL
+		if imageBytes, contentType, fetchErr := client.FetchImage(ctx, signedURL, 20*1024*1024); fetchErr == nil && len(imageBytes) > 0 {
+			if contentType == "" {
+				contentType = http.DetectContentType(imageBytes)
+			}
+			imageURL = fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(imageBytes))
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(fmt.Sprintf("![image_%d](%s)", index+1, imageURL))
+	}
+	return b.String()
+}
+
+func appendMarkdownBlock(content, markdown string) string {
+	content = strings.TrimSpace(content)
+	markdown = strings.TrimSpace(markdown)
+	if markdown == "" {
+		return content
+	}
+	if content == "" {
+		return markdown
+	}
+	return content + "\n\n" + markdown
 }
 
 func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string) (<-chan SSEEvent, error) {
@@ -425,9 +533,9 @@ func chatModelForWeb(model string) string {
 	return model
 }
 
-func buildStreamingChatResponse(stream <-chan SSEEvent, req chatRequest, prompt string) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string) *http.Response {
 	pr, pw := io.Pipe()
-	go streamChatCompletion(stream, req, prompt, pw)
+	go streamChatCompletion(ctx, client, stream, req, prompt, pw)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -435,7 +543,7 @@ func buildStreamingChatResponse(stream <-chan SSEEvent, req chatRequest, prompt 
 	}
 }
 
-func streamChatCompletion(stream <-chan SSEEvent, req chatRequest, prompt string, pw *io.PipeWriter) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, pw *io.PipeWriter) {
 	defer pw.Close()
 	id := buildChatCompletionID("")
 	created := time.Now().Unix()
@@ -460,6 +568,19 @@ func streamChatCompletion(stream <-chan SSEEvent, req chatRequest, prompt string
 		if done {
 			break
 		}
+	}
+	if containsImageGenerationUpstreamErrorText(state.Content) {
+		_ = pw.CloseWithError(imageGenerationUpstreamError())
+		return
+	}
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID); err != nil {
+		_ = pw.CloseWithError(err)
+		return
+	} else if imageMarkdown != "" {
+		if strings.TrimSpace(state.Content) != "" {
+			imageMarkdown = "\n\n" + imageMarkdown
+		}
+		writeChatStreamChunk(pw, id, created, model, "", imageMarkdown, nil, nil)
 	}
 	finish := "stop"
 	usage := buildChatUsage(prompt, state.Content, model)
@@ -875,6 +996,9 @@ attemptLoop:
 				sseResult = ParseImageSSE(stream)
 			}
 			cancelStream()
+			if sseResult.Err != nil {
+				return nil, sseResult.Err
+			}
 			if sseResult.ConversationID != "" {
 				convID = sseResult.ConversationID
 				result.ConversationID = convID
@@ -927,6 +1051,9 @@ attemptLoop:
 			default:
 				if attempt < maxAttempts {
 					continue attemptLoop
+				}
+				if pollStatus == PollStatusError {
+					return nil, imageGenerationUpstreamError()
 				}
 				return nil, errors.New("chatgpt web channel: poll failed")
 			}

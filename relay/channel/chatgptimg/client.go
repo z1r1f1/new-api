@@ -931,6 +931,7 @@ type ImageSSEResult struct {
 	SedimentIDs    []string
 	FinishType     string
 	ImageGenTaskID string
+	Err            error
 }
 
 type ChatSSEResult struct {
@@ -951,6 +952,16 @@ var (
 	reFileRef = regexp.MustCompile(`file-service://([A-Za-z0-9_-]+)`)
 	reSedRef  = regexp.MustCompile(`sediment://([A-Za-z0-9_-]+)`)
 )
+
+const imageGenerationUpstreamErrorText = "We experienced an error when generating images"
+
+func containsImageGenerationUpstreamErrorText(text string) bool {
+	return strings.Contains(strings.ToLower(text), strings.ToLower(imageGenerationUpstreamErrorText))
+}
+
+func imageGenerationUpstreamError() error {
+	return fmt.Errorf("chatgpt web channel: upstream image generation failed: %s", imageGenerationUpstreamErrorText)
+}
 
 func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 	state := &ChatSSEState{}
@@ -1214,12 +1225,17 @@ func ParseImageSSEUntilConversationReady(stream <-chan SSEEvent, quietAfterConve
 
 func collectImageSSEEvent(ev SSEEvent, result *ImageSSEResult, seenFile, seenSed map[string]struct{}) bool {
 	if ev.Err != nil {
+		result.Err = ev.Err
 		return false
 	}
 	if len(ev.Data) == 0 {
 		return true
 	}
 	if string(ev.Data) == "[DONE]" {
+		return false
+	}
+	if containsImageGenerationUpstreamErrorText(string(ev.Data)) {
+		result.Err = imageGenerationUpstreamError()
 		return false
 	}
 	for _, m := range reFileRef.FindAllSubmatch(ev.Data, -1) {
@@ -1426,6 +1442,9 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 			continue
 		}
 		consecutive429 = 0
+		if mappingContainsImageGenerationError(mapping) {
+			return PollStatusError, nil, nil
+		}
 		msgs := ExtractImageToolMsgs(mapping)
 		var newMsgs []ImageToolMsg
 		if len(baseline) > 0 {
@@ -1484,6 +1503,17 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		sleepContext(ctx, opt.Interval)
 	}
 	return PollStatusTimeout, nil, nil
+}
+
+func mappingContainsImageGenerationError(mapping map[string]any) bool {
+	if len(mapping) == 0 {
+		return false
+	}
+	data, err := common.Marshal(mapping)
+	if err != nil {
+		return false
+	}
+	return containsImageGenerationUpstreamErrorText(string(data))
 }
 
 func (c *Client) getMappingRaw(ctx context.Context, convID string) (map[string]any, error) {
