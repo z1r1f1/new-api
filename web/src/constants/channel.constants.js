@@ -192,7 +192,7 @@ export const CHANNEL_OPTIONS = [
   {
     value: 58,
     color: 'blue',
-    label: 'ChatGPT Image',
+    label: 'ChatGPT Web',
   },
 ];
 

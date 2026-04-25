@@ -38,6 +38,7 @@ import { useDataLoader } from '../../hooks/playground/useDataLoader';
 import {
   MESSAGE_ROLES,
   ERROR_MESSAGES,
+  DEBUG_TABS,
 } from '../../constants/playground.constants';
 import {
   getLogo,
@@ -456,12 +457,42 @@ const Playground = () => {
     debouncedSaveConfig,
   ]);
 
+  const resetDebugState = useCallback(() => {
+    setDebugData({
+      request: null,
+      response: null,
+      timestamp: null,
+      previewRequest: null,
+      previewTimestamp: null,
+    });
+    setActiveDebugTab(DEBUG_TABS.PREVIEW);
+    setPreviewPayload(null);
+  }, [setActiveDebugTab, setDebugData, setPreviewPayload]);
+
   // 清空对话的处理函数
   const handleClearMessages = useCallback(() => {
     setMessage([]);
     // 清空对话后保存，传入空数组
     setTimeout(() => saveMessagesImmediately([]), 0);
   }, [setMessage, saveMessagesImmediately]);
+
+  const handleNewSession = useCallback(() => {
+    if (sseSourceRef.current) {
+      sseSourceRef.current.close();
+      sseSourceRef.current = null;
+    }
+    setMessage([]);
+    resetDebugState();
+    handleInputChange('imageEnabled', false);
+    handleInputChange('imageUrls', []);
+    setTimeout(() => saveMessagesImmediately([]), 0);
+  }, [
+    handleInputChange,
+    resetDebugState,
+    saveMessagesImmediately,
+    setMessage,
+    sseSourceRef,
+  ]);
 
   // 处理粘贴图片
   const handlePasteImage = useCallback(
@@ -538,6 +569,7 @@ const Playground = () => {
                   onMessageDelete={messageActions.handleMessageDelete}
                   onStopGenerator={onStopGenerator}
                   onClearMessages={handleClearMessages}
+                  onNewSession={handleNewSession}
                   onToggleDebugPanel={() => setShowDebugPanel(!showDebugPanel)}
                   renderCustomChatContent={renderCustomChatContent}
                   renderChatBoxAction={renderChatBoxAction}
@@ -580,6 +612,7 @@ const Playground = () => {
               showDebugPanel={showDebugPanel}
               onToggleSettings={() => setShowSettings(!showSettings)}
               onToggleDebugPanel={() => setShowDebugPanel(!showDebugPanel)}
+              onNewSession={handleNewSession}
             />
           </Layout.Content>
         </Layout>

@@ -34,7 +34,7 @@ var ModelList = []string{
 	"gpt-4o",
 }
 
-const ChannelName = "chatgpt-image"
+const ChannelName = "chatgpt-web"
 
 type Adaptor struct{}
 
@@ -82,20 +82,20 @@ type chatResponse struct {
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {}
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
-	return nil, errors.New("chatgpt image channel: /v1beta/models endpoint not supported")
+	return nil, errors.New("chatgpt web channel: /v1beta/models endpoint not supported")
 }
 
 func (a *Adaptor) ConvertClaudeRequest(*gin.Context, *relaycommon.RelayInfo, *dto.ClaudeRequest) (any, error) {
-	return nil, errors.New("chatgpt image channel: /v1/messages endpoint not supported")
+	return nil, errors.New("chatgpt web channel: /v1/messages endpoint not supported")
 }
 
 func (a *Adaptor) ConvertAudioRequest(*gin.Context, *relaycommon.RelayInfo, dto.AudioRequest) (io.Reader, error) {
-	return nil, errors.New("chatgpt image channel: audio endpoint not supported")
+	return nil, errors.New("chatgpt web channel: audio endpoint not supported")
 }
 
 func (a *Adaptor) ConvertOpenAIRequest(_ *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
 	if request == nil || len(request.Messages) == 0 {
-		return nil, errors.New("chatgpt image channel: messages are required")
+		return nil, errors.New("chatgpt web channel: messages are required")
 	}
 	model := strings.TrimSpace(request.Model)
 	if model == "" && info != nil {
@@ -113,15 +113,15 @@ func (a *Adaptor) ConvertOpenAIRequest(_ *gin.Context, info *relaycommon.RelayIn
 }
 
 func (a *Adaptor) ConvertRerankRequest(*gin.Context, int, dto.RerankRequest) (any, error) {
-	return nil, errors.New("chatgpt image channel: /v1/rerank endpoint not supported")
+	return nil, errors.New("chatgpt web channel: /v1/rerank endpoint not supported")
 }
 
 func (a *Adaptor) ConvertEmbeddingRequest(*gin.Context, *relaycommon.RelayInfo, dto.EmbeddingRequest) (any, error) {
-	return nil, errors.New("chatgpt image channel: /v1/embeddings endpoint not supported")
+	return nil, errors.New("chatgpt web channel: /v1/embeddings endpoint not supported")
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(*gin.Context, *relaycommon.RelayInfo, dto.OpenAIResponsesRequest) (any, error) {
-	return nil, errors.New("chatgpt image channel: /v1/responses endpoint not supported")
+	return nil, errors.New("chatgpt web channel: /v1/responses endpoint not supported")
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
@@ -168,7 +168,7 @@ func (a *Adaptor) SetupRequestHeader(*gin.Context, *http.Header, *relaycommon.Re
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	body, err := io.ReadAll(requestBody)
 	if err != nil {
-		return nil, fmt.Errorf("chatgpt image channel: read request body failed: %w", err)
+		return nil, fmt.Errorf("chatgpt web channel: read request body failed: %w", err)
 	}
 	var probe struct {
 		Messages []dto.Message `json:"messages"`
@@ -182,10 +182,10 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (any, error) {
 	var req generationRequest
 	if err := common.Unmarshal(body, &req); err != nil {
-		return nil, fmt.Errorf("chatgpt image channel: invalid image request json: %w", err)
+		return nil, fmt.Errorf("chatgpt web channel: invalid image request json: %w", err)
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
-		return nil, errors.New("chatgpt image channel: prompt is required")
+		return nil, errors.New("chatgpt web channel: prompt is required")
 	}
 
 	client, err := newClientFromRelayInfo(c.Request.Context(), info)
@@ -221,7 +221,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 	recordGenerationDrawingLog(info, req, res, respPayload)
 	payloadBytes, err := common.Marshal(respPayload)
 	if err != nil {
-		return nil, fmt.Errorf("chatgpt image channel: marshal synthetic response failed: %w", err)
+		return nil, fmt.Errorf("chatgpt web channel: marshal synthetic response failed: %w", err)
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -233,10 +233,10 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (any, error) {
 	var req chatRequest
 	if err := common.Unmarshal(body, &req); err != nil {
-		return nil, fmt.Errorf("chatgpt image channel: invalid chat request json: %w", err)
+		return nil, fmt.Errorf("chatgpt web channel: invalid chat request json: %w", err)
 	}
 	if len(req.Messages) == 0 {
-		return nil, errors.New("chatgpt image channel: messages are required")
+		return nil, errors.New("chatgpt web channel: messages are required")
 	}
 	if strings.TrimSpace(req.Model) == "" && info != nil {
 		req.Model = strings.TrimSpace(info.UpstreamModelName)
@@ -246,7 +246,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	}
 	prompt := buildChatPrompt(req)
 	if strings.TrimSpace(prompt) == "" {
-		return nil, errors.New("chatgpt image channel: chat prompt is empty")
+		return nil, errors.New("chatgpt web channel: chat prompt is empty")
 	}
 	client, err := newClientFromRelayInfo(c.Request.Context(), info)
 	if err != nil {
@@ -281,7 +281,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	}
 	payloadBytes, err := common.Marshal(respPayload)
 	if err != nil {
-		return nil, fmt.Errorf("chatgpt image channel: marshal chat response failed: %w", err)
+		return nil, fmt.Errorf("chatgpt web channel: marshal chat response failed: %w", err)
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -292,7 +292,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 
 func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo) (*Client, error) {
 	if info == nil {
-		return nil, errors.New("chatgpt image channel: relay info is required")
+		return nil, errors.New("chatgpt web channel: relay info is required")
 	}
 	oauthKey, err := ParseOAuthKey(info.ApiKey)
 	if err != nil {
@@ -391,7 +391,7 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 		return "", result.ConversationID, result.Err
 	}
 	if strings.TrimSpace(result.Content) == "" {
-		return "", result.ConversationID, errors.New("chatgpt image channel: empty chat response")
+		return "", result.ConversationID, errors.New("chatgpt web channel: empty chat response")
 	}
 	return result.Content, result.ConversationID, nil
 }
@@ -587,7 +587,7 @@ func getGenerationLogImageURL(item dto.ImageData) string {
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	if resp == nil {
-		return nil, types.NewError(errors.New("chatgpt image channel: nil response"), types.ErrorCodeBadResponse)
+		return nil, types.NewError(errors.New("chatgpt web channel: nil response"), types.ErrorCodeBadResponse)
 	}
 	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
 		return openai.OpenaiHandlerWithUsage(c, info, resp)
@@ -613,7 +613,7 @@ func extractReferenceImagesFromRequest(c *gin.Context, info *relaycommon.RelayIn
 	if raw, ok := request.Extra["reference_images"]; ok && len(raw) > 0 {
 		parsed, err := parseStringOrStringArray(raw)
 		if err != nil {
-			return nil, fmt.Errorf("chatgpt image channel: invalid reference_images: %w", err)
+			return nil, fmt.Errorf("chatgpt web channel: invalid reference_images: %w", err)
 		}
 		refs = append(refs, parsed...)
 	}
@@ -664,7 +664,7 @@ func extractMultipartReferenceImages(c *gin.Context) ([]string, error) {
 	}
 	if c.Request.MultipartForm == nil {
 		if _, err := c.MultipartForm(); err != nil && !errors.Is(err, http.ErrNotMultipart) {
-			return nil, fmt.Errorf("chatgpt image channel: parse multipart form failed: %w", err)
+			return nil, fmt.Errorf("chatgpt web channel: parse multipart form failed: %w", err)
 		}
 	}
 	if c.Request.MultipartForm == nil {
@@ -686,12 +686,12 @@ func extractMultipartReferenceImages(c *gin.Context) ([]string, error) {
 	for _, fileHeader := range fileHeaders {
 		file, err := fileHeader.Open()
 		if err != nil {
-			return nil, fmt.Errorf("chatgpt image channel: open multipart image failed: %w", err)
+			return nil, fmt.Errorf("chatgpt web channel: open multipart image failed: %w", err)
 		}
 		data, readErr := io.ReadAll(file)
 		_ = file.Close()
 		if readErr != nil {
-			return nil, fmt.Errorf("chatgpt image channel: read multipart image failed: %w", readErr)
+			return nil, fmt.Errorf("chatgpt web channel: read multipart image failed: %w", readErr)
 		}
 		mimeType := http.DetectContentType(data)
 		refs = append(refs, fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data)))
@@ -893,7 +893,7 @@ attemptLoop:
 				break
 			}
 			if convID == "" {
-				return nil, errors.New("chatgpt image channel: missing conversation id from SSE")
+				return nil, errors.New("chatgpt web channel: missing conversation id from SSE")
 			}
 			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{MaxWait: pollMaxWait, BaselineToolIDs: baselineTools})
 			switch pollStatus {
@@ -926,12 +926,12 @@ attemptLoop:
 				if attempt < maxAttempts {
 					continue attemptLoop
 				}
-				return nil, errors.New("chatgpt image channel: poll timeout")
+				return nil, errors.New("chatgpt web channel: poll timeout")
 			default:
 				if attempt < maxAttempts {
 					continue attemptLoop
 				}
-				return nil, errors.New("chatgpt image channel: poll failed")
+				return nil, errors.New("chatgpt web channel: poll failed")
 			}
 			if len(fileRefs) > 0 {
 				break
@@ -949,7 +949,7 @@ attemptLoop:
 		}
 	}
 	if len(fileRefs) == 0 {
-		return nil, errors.New("chatgpt image channel: no image result returned")
+		return nil, errors.New("chatgpt web channel: no image result returned")
 	}
 	result.FileRefs = fileRefs
 	for _, ref := range fileRefs {
@@ -960,7 +960,7 @@ attemptLoop:
 		result.SignedURLs = append(result.SignedURLs, signedURL)
 	}
 	if len(result.SignedURLs) == 0 {
-		return nil, errors.New("chatgpt image channel: no downloadable image url returned")
+		return nil, errors.New("chatgpt web channel: no downloadable image url returned")
 	}
 	return result, nil
 }

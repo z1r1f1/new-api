@@ -57,7 +57,7 @@ type Client struct {
 
 func NewClient(opt ClientOptions) (*Client, error) {
 	if strings.TrimSpace(opt.AuthToken) == "" {
-		return nil, errors.New("chatgpt image channel: auth_token required")
+		return nil, errors.New("chatgpt web channel: auth_token required")
 	}
 	if strings.TrimSpace(opt.DeviceID) == "" {
 		opt.DeviceID = uuid.NewString()
@@ -93,7 +93,7 @@ func NewClient(opt ClientOptions) (*Client, error) {
 	} else {
 		baseClient, baseErr := service.GetHttpClientWithProxy(strings.TrimSpace(opt.ProxyURL))
 		if baseErr != nil {
-			return nil, fmt.Errorf("chatgpt image channel: init http client failed: utls=%v fallback=%w", err, baseErr)
+			return nil, fmt.Errorf("chatgpt web channel: init http client failed: utls=%v fallback=%w", err, baseErr)
 		}
 		if baseClient == nil {
 			baseClient = &http.Client{}
@@ -138,7 +138,7 @@ func effectiveProxyURL(configuredProxyURL, baseURL string) string {
 
 func ResolveAccessToken(ctx context.Context, key *OAuthKey, proxyURL string) (string, error) {
 	if key == nil {
-		return "", errors.New("chatgpt image channel: oauth key is nil")
+		return "", errors.New("chatgpt web channel: oauth key is nil")
 	}
 	if accessTokenUsable(key.AccessToken) {
 		return strings.TrimSpace(key.AccessToken), nil
@@ -163,7 +163,7 @@ func ResolveAccessToken(ctx context.Context, key *OAuthKey, proxyURL string) (st
 	if strings.TrimSpace(key.AccessToken) != "" {
 		return strings.TrimSpace(key.AccessToken), nil
 	}
-	return "", errors.New("chatgpt image channel: no usable access token, please provide access_token or refresh/session token")
+	return "", errors.New("chatgpt web channel: no usable access token, please provide access_token or refresh/session token")
 }
 
 func accessTokenUsable(token string) bool {

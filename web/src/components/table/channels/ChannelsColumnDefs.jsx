@@ -541,7 +541,7 @@ export const getChannelsColumns = ({
                     record.type === 57
                       ? t('查看 Codex 帐号信息与用量')
                       : record.type === 58
-                        ? t('ChatGPT Image 渠道暂不支持后台余额查询，请直接测试生图能力')
+                        ? t('ChatGPT Web 渠道暂不支持后台余额查询，请直接测试模型能力')
                       : t('剩余额度') +
                         ': ' +
                         renderQuotaWithAmount(record.balance) +

@@ -177,7 +177,7 @@ var ChannelTypeNames = map[int]string{
 	ChannelTypeSora:           "Sora",
 	ChannelTypeReplicate:      "Replicate",
 	ChannelTypeCodex:          "Codex",
-	ChannelTypeChatGPTImage:   "ChatGPTImage",
+	ChannelTypeChatGPTImage:   "ChatGPTWeb",
 }
 
 func GetChannelTypeName(channelType int) string {

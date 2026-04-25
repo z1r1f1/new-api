@@ -199,14 +199,14 @@ const normalizeCodexCredential = (value) => {
 const normalizeChatGPTImageCredential = (value) => {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value;
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('ChatGPT Image 密钥必须是 JSON 对象');
+    throw new Error('ChatGPT Web 密钥必须是 JSON 对象');
   }
   const accessToken = String(parsed.access_token || '').trim();
   const refreshToken = String(parsed.refresh_token || '').trim();
   const sessionToken = String(parsed.session_token || '').trim();
   if (!accessToken && !refreshToken && !sessionToken) {
     throw new Error(
-      'ChatGPT Image 密钥 JSON 必须包含 access_token、refresh_token、session_token 其中之一',
+      'ChatGPT Web 密钥 JSON 必须包含 access_token、refresh_token、session_token 其中之一',
     );
   }
   return JSON.stringify(parsed);
@@ -239,11 +239,11 @@ const parseChatGPTImageBatchCredentialArray = (rawValue) => {
     return [];
   }
   if (!trimmedValue.startsWith('[')) {
-    throw new Error('ChatGPT Image 批量密钥必须是标准 JSON 数组');
+    throw new Error('ChatGPT Web 批量密钥必须是标准 JSON 数组');
   }
   const parsedArray = JSON.parse(trimmedValue);
   if (!Array.isArray(parsedArray)) {
-    throw new Error('ChatGPT Image 批量密钥必须是 JSON 数组');
+    throw new Error('ChatGPT Web 批量密钥必须是 JSON 数组');
   }
   return parsedArray.map((item) =>
     JSON.parse(normalizeChatGPTImageCredential(item)),
@@ -283,7 +283,7 @@ function type2secretPrompt(type) {
     case 57:
       return '请输入 JSON 格式的 OAuth 凭据（必须包含 access_token 和 account_id）';
     case 58:
-      return '请输入 JSON 格式的 ChatGPT Image 凭据（access_token、refresh_token、session_token 三选一）';
+      return '请输入 JSON 格式的 ChatGPT Web 凭据（access_token、refresh_token、session_token 三选一）';
     default:
       return '请输入渠道对应的鉴权密钥';
   }
@@ -3159,7 +3159,7 @@ const EditChannelModal = (props) => {
                             description={t(
                             inputs.type === 57
                               ? '免责声明：仅限个人使用，请勿分发或共享任何凭证。该渠道存在前置条件与使用门槛，请在充分了解流程与风险后使用，并遵守 OpenAI 的相关条款与政策。相关凭证与配置仅限接入 Codex CLI 使用，不适用于其他客户端、平台或渠道。'
-                              : 'ChatGPT Image 渠道会直接调用 chatgpt.com 图像链路，请妥善保管凭证并确认具备合法使用权限。',
+                              : 'ChatGPT Web 渠道会直接调用 chatgpt.com 网页端对话与图像链路，请妥善保管凭证并确认具备合法使用权限。',
                           )}
                         />
                       )}
@@ -3202,7 +3202,7 @@ const EditChannelModal = (props) => {
                           inputs.type === 57
                             ? t('Codex 渠道名称可留空，保存时会自动使用凭据中的 email')
                             : inputs.type === 58
-                              ? t('ChatGPT Image 渠道名称可留空，保存时会自动使用凭据中的 email')
+                              ? t('ChatGPT Web 渠道名称可留空，保存时会自动使用凭据中的 email')
                               : undefined
                         }
                       />
@@ -3323,7 +3323,7 @@ const EditChannelModal = (props) => {
                                 dragSubText={t(
                                   inputs.type === 57
                                     ? '支持多个 JSON 文件，每个文件为一个 Codex 凭据对象'
-                                    : '支持多个 JSON 文件，每个文件为一个 ChatGPT Image 凭据对象',
+                                    : '支持多个 JSON 文件，每个文件为一个 ChatGPT Web 凭据对象',
                                 )}
                                 style={{ marginTop: 10 }}
                                 uploadTrigger='custom'
@@ -3365,7 +3365,7 @@ const EditChannelModal = (props) => {
                                       )
                                     : inputs.type === 58
                                       ? t(
-                                          '请输入 ChatGPT Image 密钥 JSON 数组，或通过上方上传多个 JSON 文件导入',
+                                          '请输入 ChatGPT Web 密钥 JSON 数组，或通过上方上传多个 JSON 文件导入',
                                         )
                                     : t('请输入密钥，一行一个')
                               }
@@ -3452,7 +3452,7 @@ const EditChannelModal = (props) => {
                                     ? '请输入 Codex 密钥，支持 JSON 数组或一行一个 JSON 对象，例如：\n[\n  {\n    "access_token": "...",\n    "account_id": "..."\n  },\n  {\n    "access_token": "...",\n    "account_id": "..."\n  }\n]'
                                     : inputs.type === 57
                                       ? '请输入 JSON 格式的 OAuth 凭据，例如：\n{\n  "access_token": "...",\n  "account_id": "..." \n}'
-                                      : '请输入 JSON 格式的 ChatGPT Image 凭据，例如：\n{\n  "access_token": "...",\n  "device_id": "...",\n  "session_id": "..."\n}',
+                                      : '请输入 JSON 格式的 ChatGPT Web 凭据，例如：\n{\n  "access_token": "...",\n  "device_id": "...",\n  "session_id": "..."\n}',
                                 )}
                                 rules={
                                   isEdit

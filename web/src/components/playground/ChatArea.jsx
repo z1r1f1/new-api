@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 
 import React from 'react';
 import { Card, Chat, Typography, Button } from '@douyinfe/semi-ui';
-import { MessageSquare, Eye, EyeOff } from 'lucide-react';
+import { MessageSquare, Eye, EyeOff, PlusCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import CustomInputRender from './CustomInputRender';
 
@@ -36,6 +36,7 @@ const ChatArea = ({
   onMessageDelete,
   onStopGenerator,
   onClearMessages,
+  onNewSession,
   onToggleDebugPanel,
   renderCustomChatContent,
   renderChatBoxAction,
@@ -78,6 +79,16 @@ const ChatArea = ({
               </div>
             </div>
             <div className='flex items-center gap-2'>
+              <Button
+                icon={<PlusCircle size={14} />}
+                onClick={onNewSession}
+                theme='borderless'
+                type='primary'
+                size='small'
+                className='!rounded-lg !text-white/80 hover:!text-white hover:!bg-white/10'
+              >
+                {t('新建会话')}
+              </Button>
               <Button
                 icon={showDebugPanel ? <EyeOff size={14} /> : <Eye size={14} />}
                 onClick={onToggleDebugPanel}

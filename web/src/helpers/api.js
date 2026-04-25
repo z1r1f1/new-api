@@ -114,6 +114,7 @@ export const isImageGenerationModel = (model) => {
   return (
     normalized.startsWith('gpt-image') ||
     normalized.startsWith('chatgpt-image') ||
+    normalized.startsWith('chatgpt-web') ||
     normalized.startsWith('dall-e')
   );
 };

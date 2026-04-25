@@ -788,7 +788,7 @@ export const useChannelsData = () => {
       return;
     }
     if (record?.type === 58) {
-      showInfo(t('ChatGPT Image 渠道暂不支持后台余额查询，请直接测试生图能力'));
+      showInfo(t('ChatGPT Web 渠道暂不支持后台余额查询，请直接测试模型能力'));
       return;
     }
 
