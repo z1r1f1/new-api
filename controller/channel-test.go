@@ -127,7 +127,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
 			requestPath = "/v1/images/generations"
 		}
-		if channel.Type == constant.ChannelTypeChatGPTImage || common.IsImageGenerationModel(testModel) {
+		if common.IsImageGenerationModel(testModel) {
 			requestPath = "/v1/images/generations"
 		}
 
@@ -208,8 +208,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		if c.Request.URL.Path == "/v1/embeddings" {
 			relayFormat = types.RelayFormatEmbedding
 		}
-		if c.Request.URL.Path == "/v1/images/generations" ||
-			(channel != nil && channel.Type == constant.ChannelTypeChatGPTImage) {
+		if c.Request.URL.Path == "/v1/images/generations" {
 			relayFormat = types.RelayFormatOpenAIImage
 		}
 		if c.Request.URL.Path == "/v1/messages" {

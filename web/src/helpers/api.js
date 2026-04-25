@@ -114,7 +114,6 @@ export const isImageGenerationModel = (model) => {
   return (
     normalized.startsWith('gpt-image') ||
     normalized.startsWith('chatgpt-image') ||
-    normalized.startsWith('chatgpt-web') ||
     normalized.startsWith('dall-e')
   );
 };
@@ -170,7 +169,10 @@ const dedupeStrings = (items) => {
 const MAX_FALLBACK_REFERENCE_IMAGES = 4;
 const MAX_FALLBACK_REFERENCE_BYTES = 6 * 1024 * 1024;
 
-const isDataUrl = (url) => String(url || '').trim().startsWith('data:');
+const isDataUrl = (url) =>
+  String(url || '')
+    .trim()
+    .startsWith('data:');
 
 const estimateStringBytes = (value) => {
   const text = String(value || '');

@@ -104,6 +104,58 @@ func TestExtractImageRefsFromMappingFindsNestedAssets(t *testing.T) {
 	}
 }
 
+func TestExtractImageRefsFromMappingSkipsUserUploadedAssets(t *testing.T) {
+	mapping := map[string]any{
+		"user-1": map[string]any{
+			"message": map[string]any{
+				"author": map[string]any{"role": "user"},
+				"content": map[string]any{
+					"parts": []any{
+						map[string]any{"asset_pointer": "file-service://uploaded_input"},
+						map[string]any{"asset_pointer": "sediment://uploaded_preview"},
+					},
+				},
+			},
+		},
+		"tool-1": map[string]any{
+			"message": map[string]any{
+				"author":   map[string]any{"role": "tool", "name": "image_gen"},
+				"metadata": map[string]any{"async_task_type": "image_gen"},
+				"content": map[string]any{
+					"parts": []any{
+						map[string]any{"asset_pointer": "file-service://generated_output"},
+						map[string]any{"asset_pointer": "sediment://generated_preview"},
+					},
+				},
+			},
+		},
+	}
+
+	fileIDs, sedimentIDs := ExtractImageRefsFromMapping(mapping)
+	if len(fileIDs) != 1 || fileIDs[0] != "generated_output" {
+		t.Fatalf("expected only generated file id, got %#v", fileIDs)
+	}
+	if len(sedimentIDs) != 1 || sedimentIDs[0] != "generated_preview" {
+		t.Fatalf("expected only generated sediment id, got %#v", sedimentIDs)
+	}
+}
+
+func TestParseImageSSEIgnoresUserUploadedAssetPointer(t *testing.T) {
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"user"},"content":{"parts":[{"asset_pointer":"file-service://uploaded_input"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"parts":[{"asset_pointer":"file-service://generated_output"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	result := ParseImageSSE(stream)
+	if result.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id, got %q", result.ConversationID)
+	}
+	if len(result.FileIDs) != 1 || result.FileIDs[0] != "generated_output" {
+		t.Fatalf("expected only generated output file id, got %#v", result.FileIDs)
+	}
+}
+
 func TestFilterExcludedFileIDsRemovesUploadedReference(t *testing.T) {
 	got := filterExcludedFileIDs([]string{"uploaded_input", "generated_output"}, map[string]struct{}{
 		"uploaded_input": {},

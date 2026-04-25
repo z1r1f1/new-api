@@ -1273,42 +1273,65 @@ func collectImageSSEEvent(ev SSEEvent, result *ImageSSEResult, seenFile, seenSed
 		result.Err = imageGenerationUpstreamError()
 		return false
 	}
-	for _, m := range reFileRef.FindAllSubmatch(ev.Data, -1) {
+
+	var obj map[string]any
+	hasJSON := common.Unmarshal(ev.Data, &obj) == nil
+	if hasJSON {
+		if v, ok := obj["v"].(map[string]any); ok {
+			if cid, ok := v["conversation_id"].(string); ok && cid != "" && result.ConversationID == "" {
+				result.ConversationID = cid
+			}
+			if msg, ok := v["message"].(map[string]any); ok {
+				if meta, ok := msg["metadata"].(map[string]any); ok {
+					if tid, ok := meta["image_gen_task_id"].(string); ok {
+						result.ImageGenTaskID = tid
+					}
+					if finish, ok := meta["finish_details"].(map[string]any); ok {
+						if finishType, ok := finish["type"].(string); ok {
+							result.FinishType = finishType
+						}
+					}
+				}
+				collectImageRefsFromMessage(msg, result, seenFile, seenSed)
+				return true
+			}
+		}
+		if msg, ok := obj["message"].(map[string]any); ok {
+			collectImageRefsFromMessage(msg, result, seenFile, seenSed)
+			return true
+		}
+	}
+
+	collectImageRefsFromBytes(ev.Data, result, seenFile, seenSed)
+	return true
+}
+
+func collectImageRefsFromMessage(message map[string]any, result *ImageSSEResult, seenFile, seenSed map[string]struct{}) {
+	if isUserAuthoredMessage(message) {
+		return
+	}
+	data, err := common.Marshal(message)
+	if err != nil {
+		return
+	}
+	collectImageRefsFromBytes(data, result, seenFile, seenSed)
+}
+
+func collectImageRefsFromBytes(data []byte, result *ImageSSEResult, seenFile, seenSed map[string]struct{}) {
+	for _, m := range reFileRef.FindAllSubmatch(data, -1) {
 		fid := string(m[1])
 		if _, ok := seenFile[fid]; !ok {
 			seenFile[fid] = struct{}{}
 			result.FileIDs = append(result.FileIDs, fid)
 		}
 	}
-	for _, m := range reSedRef.FindAllSubmatch(ev.Data, -1) {
+	for _, m := range reSedRef.FindAllSubmatch(data, -1) {
 		sid := string(m[1])
 		if _, ok := seenSed[sid]; !ok {
 			seenSed[sid] = struct{}{}
 			result.SedimentIDs = append(result.SedimentIDs, sid)
 		}
 	}
-	var obj map[string]any
-	if err := common.Unmarshal(ev.Data, &obj); err != nil {
-		return true
-	}
-	if v, ok := obj["v"].(map[string]any); ok {
-		if cid, ok := v["conversation_id"].(string); ok && cid != "" && result.ConversationID == "" {
-			result.ConversationID = cid
-		}
-		if msg, ok := v["message"].(map[string]any); ok {
-			if meta, ok := msg["metadata"].(map[string]any); ok {
-				if tid, ok := meta["image_gen_task_id"].(string); ok {
-					result.ImageGenTaskID = tid
-				}
-				if finish, ok := meta["finish_details"].(map[string]any); ok {
-					if finishType, ok := finish["type"].(string); ok {
-						result.FinishType = finishType
-					}
-				}
-			}
-		}
-	}
-	return true
 }
 
 func (c *Client) GetConversationMapping(ctx context.Context, convID string) (map[string]any, error) {
@@ -1424,31 +1447,61 @@ func ExtractImageRefsFromMapping(mapping map[string]any) ([]string, []string) {
 	if len(mapping) == 0 {
 		return nil, nil
 	}
-	data, err := common.Marshal(mapping)
-	if err != nil {
-		return nil, nil
-	}
 	seenFile := map[string]struct{}{}
 	seenSed := map[string]struct{}{}
 	fileIDs := make([]string, 0)
 	sedimentIDs := make([]string, 0)
-	for _, m := range reFileRef.FindAllSubmatch(data, -1) {
-		fid := string(m[1])
-		if _, ok := seenFile[fid]; ok {
-			continue
+
+	collect := func(data []byte) {
+		for _, m := range reFileRef.FindAllSubmatch(data, -1) {
+			fid := string(m[1])
+			if _, ok := seenFile[fid]; ok {
+				continue
+			}
+			seenFile[fid] = struct{}{}
+			fileIDs = append(fileIDs, fid)
 		}
-		seenFile[fid] = struct{}{}
-		fileIDs = append(fileIDs, fid)
+		for _, m := range reSedRef.FindAllSubmatch(data, -1) {
+			sid := string(m[1])
+			if _, ok := seenSed[sid]; ok {
+				continue
+			}
+			seenSed[sid] = struct{}{}
+			sedimentIDs = append(sedimentIDs, sid)
+		}
 	}
-	for _, m := range reSedRef.FindAllSubmatch(data, -1) {
-		sid := string(m[1])
-		if _, ok := seenSed[sid]; ok {
+
+	for _, raw := range mapping {
+		node, _ := raw.(map[string]any)
+		msg, _ := node["message"].(map[string]any)
+		if msg != nil {
+			if isUserAuthoredMessage(msg) {
+				continue
+			}
+			data, err := common.Marshal(msg)
+			if err == nil {
+				collect(data)
+			}
 			continue
 		}
-		seenSed[sid] = struct{}{}
-		sedimentIDs = append(sedimentIDs, sid)
+		data, err := common.Marshal(raw)
+		if err == nil {
+			collect(data)
+		}
 	}
 	return fileIDs, sedimentIDs
+}
+
+func isUserAuthoredMessage(message map[string]any) bool {
+	if message == nil {
+		return false
+	}
+	author, _ := message["author"].(map[string]any)
+	if author == nil {
+		return false
+	}
+	role, _ := author["role"].(string)
+	return role == "user"
 }
 
 type PollOpts struct {

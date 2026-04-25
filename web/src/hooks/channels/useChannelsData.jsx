@@ -730,10 +730,9 @@ export const useChannelsData = () => {
     const { success, message, data } = res.data;
     if (success) {
       showInfo(
-        t('已开始批量测试 ${count} 个所选渠道，将按测试模型自动禁用或恢复启用。请稍后刷新页面查看结果。').replace(
-          '${count}',
-          data || ids.length,
-        ),
+        t(
+          '已开始批量测试 ${count} 个所选渠道，将按测试模型自动禁用或恢复启用。请稍后刷新页面查看结果。',
+        ).replace('${count}', data || ids.length),
       );
     } else {
       showError(message);
@@ -890,7 +889,8 @@ export const useChannelsData = () => {
     endpointType = '',
     stream = false,
   ) => {
-    const testKey = `${record.id}-${model}`;
+    const testKey = `${record?.id}-${model}`;
+    const modelName = String(model || '').trim();
 
     // 检查是否应该停止批量测试
     if (shouldStopBatchTestingRef.current && isBatchTesting) {
@@ -901,14 +901,14 @@ export const useChannelsData = () => {
     setTestingModels((prev) => new Set([...prev, model]));
 
     try {
-      let url = `/api/channel/test/${record.id}?model=${model}`;
+      let url = `/api/channel/test/${record.id}?model=${encodeURIComponent(modelName)}`;
       if (endpointType) {
         url += `&endpoint_type=${endpointType}`;
       }
       if (stream) {
         url += `&stream=true`;
       }
-      const res = await API.get(url);
+      const res = await API.get(url, { skipErrorHandler: true });
 
       // 检查是否在请求期间被停止
       if (shouldStopBatchTestingRef.current && isBatchTesting) {
@@ -948,27 +948,35 @@ export const useChannelsData = () => {
               '通道 ${name} 测试成功，模型 ${model} 耗时 ${time.toFixed(2)} 秒。',
             )
               .replace('${name}', record.name)
-              .replace('${model}', model)
+              .replace('${model}', modelName)
               .replace('${time.toFixed(2)}', time.toFixed(2)),
           );
         }
       } else {
-        showError(message);
+        showError(message || t('测试失败'));
       }
     } catch (error) {
       // 处理网络错误
-      const testKey = `${record.id}-${model}`;
+      const testKey = `${record?.id}-${model}`;
+      const message =
+        error?.response?.data?.message ||
+        error?.response?.data?.error?.message ||
+        error?.message ||
+        t('网络错误');
       setModelTestResults((prev) => ({
         ...prev,
         [testKey]: {
           success: false,
-          message: error.message || t('网络错误'),
+          message,
           time: 0,
           timestamp: Date.now(),
-          errorCode: null,
+          errorCode:
+            error?.response?.data?.error_code ||
+            error?.response?.data?.error?.code ||
+            null,
         },
       }));
-      showError(error.message || t('测试失败'));
+      showError(message || t('测试失败'));
     } finally {
       // 从正在测试的模型集合中移除
       setTestingModels((prev) => {

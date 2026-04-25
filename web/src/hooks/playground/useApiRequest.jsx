@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SSE } from 'sse.js';
 import {
@@ -205,6 +205,8 @@ export const useApiRequest = (
   onConversationId,
 ) => {
   const { t } = useTranslation();
+  const imageSubmitKeysRef = useRef(new Set());
+  const imageTaskPollsRef = useRef(new Set());
 
   // 处理消息自动关闭逻辑的公共函数
   const applyAutoCollapseLogic = useCallback(
@@ -523,12 +525,20 @@ export const useApiRequest = (
 
   const finishImageGenerationTask = useCallback(
     async ({ taskId, submitData, messageId, startedAt }) => {
-      const taskResult = await pollImageGenerationTask(taskId, submitData, {
-        messageId,
-        startedAt,
-      });
-      const content = imageTaskResultToMessageContent(taskId, taskResult);
-      completeImageGenerationMessage(content, { messageId });
+      if (imageTaskPollsRef.current.has(taskId)) {
+        return;
+      }
+      imageTaskPollsRef.current.add(taskId);
+      try {
+        const taskResult = await pollImageGenerationTask(taskId, submitData, {
+          messageId,
+          startedAt,
+        });
+        const content = imageTaskResultToMessageContent(taskId, taskResult);
+        completeImageGenerationMessage(content, { messageId });
+      } finally {
+        imageTaskPollsRef.current.delete(taskId);
+      }
     },
     [pollImageGenerationTask, completeImageGenerationMessage],
   );
@@ -571,6 +581,16 @@ export const useApiRequest = (
   // 非流式请求
   const handleNonStreamRequest = useCallback(
     async (payload) => {
+      const isImagePayload = isImageGenerationPayload(payload);
+      const imageSubmitKey = isImagePayload ? JSON.stringify(payload) : '';
+      if (imageSubmitKey && imageSubmitKeysRef.current.has(imageSubmitKey)) {
+        console.warn('Duplicate image generation submit blocked');
+        return;
+      }
+      if (imageSubmitKey) {
+        imageSubmitKeysRef.current.add(imageSubmitKey);
+      }
+
       setDebugData((prev) => ({
         ...prev,
         request: payload,
@@ -637,7 +657,7 @@ export const useApiRequest = (
         const imageTaskId =
           submitData?.task_id || submitData?.taskId || submitData?.id;
 
-        if (isImageGenerationPayload(payload) && imageTaskId) {
+        if (isImagePayload && imageTaskId) {
           updatePendingImageGenerationMessage(imageTaskId, submitData, -1);
           await finishImageGenerationTask({
             taskId: imageTaskId,
@@ -708,6 +728,10 @@ export const useApiRequest = (
           }
           return newMessages;
         });
+      } finally {
+        if (imageSubmitKey) {
+          imageSubmitKeysRef.current.delete(imageSubmitKey);
+        }
       }
     },
     [

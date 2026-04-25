@@ -129,6 +129,16 @@ export const usePlaygroundState = () => {
   const sseSourceRef = useRef(null);
   const chatRef = useRef(null);
   const saveConfigTimeoutRef = useRef(null);
+  const latestMessagesRef = useRef(message);
+  const latestActiveSessionIdRef = useRef(activeSessionId);
+
+  useEffect(() => {
+    latestMessagesRef.current = message;
+  }, [message]);
+
+  useEffect(() => {
+    latestActiveSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
 
   // 配置更新函数
   const handleInputChange = useCallback((name, value) => {
@@ -288,6 +298,19 @@ export const usePlaygroundState = () => {
       if (saveConfigTimeoutRef.current) {
         clearTimeout(saveConfigTimeoutRef.current);
       }
+    };
+  }, []);
+
+  // 离开操练场页面或刷新页面时同步一次最新消息，避免路由切换时丢失会话。
+  useEffect(() => {
+    const persistLatestMessages = () => {
+      saveMessages(latestMessagesRef.current, latestActiveSessionIdRef.current);
+    };
+
+    window.addEventListener('pagehide', persistLatestMessages);
+    return () => {
+      window.removeEventListener('pagehide', persistLatestMessages);
+      persistLatestMessages();
     };
   }, []);
 

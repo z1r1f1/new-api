@@ -24,6 +24,7 @@ import {
 import { getTextContent } from '../../helpers/utils';
 
 const MAX_SESSION_COUNT = 30;
+const MAX_PERSISTED_DATA_URL_BYTES = 256 * 1024;
 
 const generateSessionId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -56,6 +57,53 @@ const buildSessionTitle = (messages = []) => {
 
 const normalizeMessages = (messages) =>
   Array.isArray(messages) ? messages : [];
+
+const estimateStringBytes = (value) => {
+  const text = String(value || '');
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(text).length;
+  }
+  return text.length;
+};
+
+const isLargeDataUrl = (value) =>
+  typeof value === 'string' &&
+  value.startsWith('data:') &&
+  estimateStringBytes(value) > MAX_PERSISTED_DATA_URL_BYTES;
+
+const sanitizeContentForStorage = (content) => {
+  if (!Array.isArray(content)) {
+    return content;
+  }
+
+  let omittedImageCount = 0;
+  const sanitized = content.filter((item) => {
+    if (item?.type !== 'image_url') {
+      return true;
+    }
+    const imageUrl = item?.image_url?.url || item?.image_url;
+    if (isLargeDataUrl(imageUrl)) {
+      omittedImageCount += 1;
+      return false;
+    }
+    return true;
+  });
+
+  if (omittedImageCount > 0) {
+    sanitized.push({
+      type: 'text',
+      text: `[${omittedImageCount} 张本地图片因浏览器存储空间限制未保存，如需继续编辑请重新上传]`,
+    });
+  }
+
+  return sanitized;
+};
+
+const sanitizeMessagesForStorage = (messages) =>
+  normalizeMessages(messages).map((message) => ({
+    ...message,
+    content: sanitizeContentForStorage(message?.content),
+  }));
 
 const normalizeSession = (session) => {
   const now = new Date().toISOString();
@@ -205,8 +253,8 @@ export const saveConfig = (config) => {
  * @param {string|null} sessionId - 要更新的会话 ID；为空时更新当前会话
  */
 export const saveMessages = (messages, sessionId = null) => {
-  try {
-    const normalizedMessages = normalizeMessages(messages);
+  const persistMessages = (messagesToPersist) => {
+    const normalizedMessages = normalizeMessages(messagesToPersist);
     const messagesToSave = {
       messages: normalizedMessages,
       timestamp: new Date().toISOString(),
@@ -247,8 +295,17 @@ export const saveMessages = (messages, sessionId = null) => {
     }
 
     persistSessions(updatedSessions);
+  };
+
+  try {
+    persistMessages(messages);
   } catch (error) {
-    console.error('保存消息失败:', error);
+    try {
+      persistMessages(sanitizeMessagesForStorage(messages));
+      console.warn('消息包含过大的本地图片，已省略图片后保存会话:', error);
+    } catch (retryError) {
+      console.error('保存消息失败:', retryError);
+    }
   }
 };
 

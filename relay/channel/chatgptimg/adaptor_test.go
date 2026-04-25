@@ -1,6 +1,9 @@
 package chatgptimg
 
 import (
+	"context"
+	"io"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
@@ -42,6 +45,28 @@ func TestConvertOpenAIRequestAllowsChat(t *testing.T) {
 	}
 	if req.Model != "gpt-5" || len(req.Messages) != 1 || req.Stream == nil || *req.Stream {
 		t.Fatalf("unexpected converted request: %#v", req)
+	}
+}
+
+func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["hello"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	pr, pw := io.Pipe()
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read stream output failed: %v", err)
+	}
+	firstChunk := strings.SplitN(string(out), "\n\n", 2)[0]
+	if strings.Contains(firstChunk, "chatcmpl-chatgptimg-") {
+		t.Fatalf("initial stream chunk must not expose a synthetic ChatGPT Web conversation id: %s", firstChunk)
+	}
+	if !strings.Contains(string(out), `"id":"chatcmpl-chatgptimg-conv-1"`) {
+		t.Fatalf("stream output did not expose the real conversation id for reuse:\n%s", string(out))
 	}
 }
 

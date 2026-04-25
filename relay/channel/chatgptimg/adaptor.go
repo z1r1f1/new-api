@@ -210,7 +210,7 @@ func extractFallbackPromptFromRawBody(c *gin.Context) string {
 }
 
 func extractStringFromRawBody(c *gin.Context, field string) string {
-	if c == nil {
+	if c == nil || c.Request == nil || c.Request.Body == nil {
 		return ""
 	}
 	storage, err := common.GetBodyStorage(c)
@@ -653,7 +653,7 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 
 func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, pw *io.PipeWriter) {
 	defer pw.Close()
-	id := buildChatCompletionID("")
+	id := buildTransientChatCompletionID()
 	created := time.Now().Unix()
 	model := strings.TrimSpace(req.Model)
 	if model == "" {
@@ -663,7 +663,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	state := &ChatSSEState{}
 	for ev := range stream {
 		delta, done, collectErr := CollectChatSSEEvent(ev, state)
-		if state.ConversationID != "" && strings.HasPrefix(id, "chatcmpl-chatgptimg-") {
+		if state.ConversationID != "" {
 			id = buildChatCompletionID(state.ConversationID)
 		}
 		if collectErr != nil {
@@ -733,6 +733,10 @@ func buildChatUsage(prompt, content, model string) dto.Usage {
 		CompletionTokens: completionTokens,
 		TotalTokens:      promptTokens + completionTokens,
 	}
+}
+
+func buildTransientChatCompletionID() string {
+	return "chatcmpl-" + uuid.NewString()
 }
 
 func buildChatCompletionID(conversationID string) string {

@@ -58,6 +58,7 @@ import {
   OptimizedMessageContent,
   OptimizedMessageActions,
 } from '../../components/playground/OptimizedComponents';
+import { loadSessions } from '../../components/playground/configStorage';
 import ChatArea from '../../components/playground/ChatArea';
 import FloatingButtons from '../../components/playground/FloatingButtons';
 import { PlaygroundProvider } from '../../contexts/PlaygroundContext';
@@ -143,6 +144,30 @@ const Playground = () => {
     );
 
   const resumedImageTaskOnMountRef = useRef(false);
+  const activeSendRef = useRef(false);
+
+  const hasGeneratingMessage = useCallback(
+    () =>
+      message.some(
+        (msg) => msg.status === 'loading' || msg.status === 'incomplete',
+      ),
+    [message],
+  );
+
+  useEffect(() => {
+    if (!hasGeneratingMessage()) {
+      activeSendRef.current = false;
+    }
+  }, [hasGeneratingMessage]);
+
+  const getLatestWebConversationId = useCallback(() => {
+    const latestSession = loadSessions().find(
+      (session) => session.id === activeSessionId,
+    );
+    return (
+      latestSession?.webConversationId || activeSession?.webConversationId || ''
+    );
+  }, [activeSession?.webConversationId, activeSessionId]);
 
   useEffect(() => {
     if (resumedImageTaskOnMountRef.current) return;
@@ -184,7 +209,7 @@ const Playground = () => {
     parameterEnabled,
     sendRequest,
     saveMessagesImmediately,
-    { webConversationId: activeSession?.webConversationId },
+    { webConversationId: getLatestWebConversationId() },
   );
 
   // 消息和自定义请求体同步
@@ -268,7 +293,7 @@ const Playground = () => {
       }
 
       return buildApiPayload(messages, null, inputs, parameterEnabled, {
-        webConversationId: activeSession?.webConversationId,
+        webConversationId: getLatestWebConversationId(),
       });
     } catch (error) {
       console.error('构造预览请求体失败:', error);
@@ -280,11 +305,17 @@ const Playground = () => {
     message,
     customRequestMode,
     customRequestBody,
-    activeSession?.webConversationId,
+    getLatestWebConversationId,
   ]);
 
   // 发送消息
   function onMessageSend(content, attachment) {
+    if (activeSendRef.current || hasGeneratingMessage()) {
+      Toast.warning(t('当前仍有请求在生成中，请稍后再发送'));
+      return;
+    }
+    activeSendRef.current = true;
+
     // 创建用户消息和加载消息
     const userMessage = createMessage(MESSAGE_ROLES.USER, content);
     const loadingMessage = createLoadingAssistantMessage();
@@ -293,20 +324,18 @@ const Playground = () => {
     if (customRequestMode && customRequestBody) {
       try {
         const customPayload = JSON.parse(customRequestBody);
+        const newMessages = [...message, userMessage, loadingMessage];
 
-        setMessage((prevMessage) => {
-          const newMessages = [...prevMessage, userMessage, loadingMessage];
+        setMessage(newMessages);
 
-          // 发送自定义请求体
-          sendRequest(customPayload, customPayload.stream !== false);
+        // 发送自定义请求体
+        sendRequest(customPayload, customPayload.stream !== false);
 
-          // 发送消息后保存，传入新消息列表
-          setTimeout(() => saveMessagesImmediately(newMessages), 0);
-
-          return newMessages;
-        });
+        // 发送消息后保存，传入新消息列表
+        setTimeout(() => saveMessagesImmediately(newMessages), 0);
         return;
       } catch (error) {
+        activeSendRef.current = false;
         console.error('自定义请求体JSON解析失败:', error);
         Toast.error(ERROR_MESSAGES.JSON_PARSE_ERROR);
         return;
@@ -325,34 +354,31 @@ const Playground = () => {
       messageContent,
     );
 
-    setMessage((prevMessage) => {
-      const newMessages = [...prevMessage, userMessageWithImages];
+    const newMessages = [...message, userMessageWithImages];
+    const payload = buildApiPayload(
+      newMessages,
+      null,
+      inputs,
+      parameterEnabled,
+      {
+        webConversationId: getLatestWebConversationId(),
+      },
+    );
+    const messagesWithLoading = [...newMessages, loadingMessage];
 
-      const payload = buildApiPayload(
-        newMessages,
-        null,
-        inputs,
-        parameterEnabled,
-        {
-          webConversationId: activeSession?.webConversationId,
-        },
-      );
-      sendRequest(payload, inputs.stream);
+    setMessage(messagesWithLoading);
+    sendRequest(payload, inputs.stream);
 
-      // 禁用图片模式
-      if (inputs.imageEnabled) {
-        setTimeout(() => {
-          handleInputChange('imageEnabled', false);
-          handleInputChange('imageUrls', []);
-        }, 100);
-      }
+    // 禁用图片模式
+    if (inputs.imageEnabled) {
+      setTimeout(() => {
+        handleInputChange('imageEnabled', false);
+        handleInputChange('imageUrls', []);
+      }, 100);
+    }
 
-      // 发送消息后保存，传入新消息列表（包含用户消息和加载消息）
-      const messagesWithLoading = [...newMessages, loadingMessage];
-      setTimeout(() => saveMessagesImmediately(messagesWithLoading), 0);
-
-      return messagesWithLoading;
-    });
+    // 发送消息后保存，传入新消息列表（包含用户消息和加载消息）
+    setTimeout(() => saveMessagesImmediately(messagesWithLoading), 0);
   }
 
   // 切换推理展开状态
