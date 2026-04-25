@@ -1241,6 +1241,8 @@ attemptLoop:
 			if testMode && convID != "" {
 				return result, nil
 			}
+			excludedFileIDs := uploadedFileIDSet(activeRefs)
+			sseResult.FileIDs = filterExcludedFileIDs(sseResult.FileIDs, excludedFileIDs)
 			if len(sseResult.FileIDs) > 0 || len(sseResult.SedimentIDs) > 0 {
 				fileRefs = append(fileRefs, sseResult.FileIDs...)
 				for _, sid := range sseResult.SedimentIDs {
@@ -1260,6 +1262,7 @@ attemptLoop:
 				StableRounds:    2,
 				PreviewWait:     8 * time.Second,
 				BaselineToolIDs: baselineTools,
+				ExcludedFileIDs: excludedFileIDs,
 			})
 			switch pollStatus {
 			case PollStatusIMG2:
@@ -1352,6 +1355,23 @@ func buildToolBaseline(mapping map[string]any) map[string]struct{} {
 	out := make(map[string]struct{}, len(tools))
 	for _, tool := range tools {
 		out[tool.MessageID] = struct{}{}
+	}
+	return out
+}
+
+func uploadedFileIDSet(files []*UploadedFile) map[string]struct{} {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(files))
+	for _, file := range files {
+		if file == nil || strings.TrimSpace(file.FileID) == "" {
+			continue
+		}
+		out[strings.TrimSpace(file.FileID)] = struct{}{}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

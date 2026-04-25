@@ -1453,6 +1453,7 @@ func ExtractImageRefsFromMapping(mapping map[string]any) ([]string, []string) {
 
 type PollOpts struct {
 	BaselineToolIDs map[string]struct{}
+	ExcludedFileIDs map[string]struct{}
 	MaxWait         time.Duration
 	Interval        time.Duration
 	StableRounds    int
@@ -1484,6 +1485,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		opt.PreviewWait = 8 * time.Second
 	}
 	baseline := opt.BaselineToolIDs
+	excludedFiles := opt.ExcludedFileIDs
 	deadline := time.Now().Add(opt.MaxWait)
 	var stableCount int
 	var lastSedSig string
@@ -1515,6 +1517,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		}
 		if len(baseline) == 0 {
 			mappingFileIDs, mappingSedimentIDs := ExtractImageRefsFromMapping(mapping)
+			mappingFileIDs = filterExcludedFileIDs(mappingFileIDs, excludedFiles)
 			if len(mappingFileIDs) > 0 {
 				return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
 			}
@@ -1539,6 +1542,9 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		seenSed := map[string]struct{}{}
 		for _, msg := range newMsgs {
 			for _, fid := range msg.FileIDs {
+				if _, excluded := excludedFiles[fid]; excluded {
+					continue
+				}
 				if _, ok := seenFile[fid]; !ok {
 					seenFile[fid] = struct{}{}
 					allFile = append(allFile, fid)
@@ -1580,6 +1586,20 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		sleepContext(ctx, opt.Interval)
 	}
 	return PollStatusTimeout, nil, nil
+}
+
+func filterExcludedFileIDs(fileIDs []string, excluded map[string]struct{}) []string {
+	if len(fileIDs) == 0 || len(excluded) == 0 {
+		return fileIDs
+	}
+	filtered := make([]string, 0, len(fileIDs))
+	for _, fid := range fileIDs {
+		if _, skip := excluded[fid]; skip {
+			continue
+		}
+		filtered = append(filtered, fid)
+	}
+	return filtered
 }
 
 func mappingContainsImageGenerationError(mapping map[string]any) bool {

@@ -285,8 +285,6 @@ const Playground = () => {
 
   // 发送消息
   function onMessageSend(content, attachment) {
-    console.log('attachment: ', attachment);
-
     // 创建用户消息和加载消息
     const userMessage = createMessage(MESSAGE_ROLES.USER, content);
     const loadingMessage = createLoadingAssistantMessage();
@@ -345,6 +343,7 @@ const Playground = () => {
       if (inputs.imageEnabled) {
         setTimeout(() => {
           handleInputChange('imageEnabled', false);
+          handleInputChange('imageUrls', []);
         }, 100);
       }
 
@@ -543,19 +542,38 @@ const Playground = () => {
   // 处理粘贴图片
   const handlePasteImage = useCallback(
     (base64Data) => {
-      if (!inputs.imageEnabled) {
+      if (!base64Data) {
         return;
       }
       // 添加图片到 imageUrls 数组
-      const newUrls = [...(inputs.imageUrls || []), base64Data];
+      const currentUrls = (inputs.imageUrls || []).filter(
+        (url) => String(url || '').trim() !== '',
+      );
+      const newUrls = [...currentUrls, base64Data];
+      handleInputChange('imageEnabled', true);
       handleInputChange('imageUrls', newUrls);
     },
-    [inputs.imageEnabled, inputs.imageUrls, handleInputChange],
+    [inputs.imageUrls, handleInputChange],
+  );
+
+  const handleRemovePendingImage = useCallback(
+    (index) => {
+      const nextUrls = (inputs.imageUrls || [])
+        .filter((url) => String(url || '').trim() !== '')
+        .filter((_, i) => i !== index);
+      handleInputChange('imageUrls', nextUrls);
+      if (nextUrls.length === 0) {
+        handleInputChange('imageEnabled', false);
+      }
+    },
+    [inputs.imageUrls, handleInputChange],
   );
 
   // Playground Context 值
   const playgroundContextValue = {
     onPasteImage: handlePasteImage,
+    onUploadImage: handlePasteImage,
+    onRemoveImage: handleRemovePendingImage,
     imageUrls: inputs.imageUrls || [],
     imageEnabled: inputs.imageEnabled || false,
   };
