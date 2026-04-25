@@ -330,6 +330,22 @@ func TestParseChatSSEUntilReadyReturnsAfterConversationIDQuietPeriod(t *testing.
 	}
 }
 
+func TestParseChatSSEDetectsImageGenerationMarker(t *testing.T) {
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if !result.HasImageGeneration {
+		t.Fatal("expected image generation marker to be detected")
+	}
+}
+
 func TestParseChatSSEExtractsBareDeltaAfterAppendStarts(t *testing.T) {
 	stream := make(chan SSEEvent, 5)
 	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}

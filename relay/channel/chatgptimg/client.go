@@ -935,17 +935,19 @@ type ImageSSEResult struct {
 }
 
 type ChatSSEResult struct {
-	ConversationID string
-	Content        string
-	FinishType     string
-	Err            error
+	ConversationID     string
+	Content            string
+	FinishType         string
+	HasImageGeneration bool
+	Err                error
 }
 
 type ChatSSEState struct {
-	ConversationID  string
-	Content         string
-	FinishType      string
-	IsAppendingText bool
+	ConversationID     string
+	Content            string
+	FinishType         string
+	IsAppendingText    bool
+	HasImageGeneration bool
 }
 
 var (
@@ -1015,9 +1017,10 @@ func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 		}
 	}
 	return ChatSSEResult{
-		ConversationID: state.ConversationID,
-		Content:        state.Content,
-		FinishType:     state.FinishType,
+		ConversationID:     state.ConversationID,
+		Content:            state.Content,
+		FinishType:         state.FinishType,
+		HasImageGeneration: state.HasImageGeneration,
 	}
 }
 
@@ -1029,32 +1032,36 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 		case ev, ok := <-stream:
 			if !ok {
 				return ChatSSEResult{
-					ConversationID: state.ConversationID,
-					Content:        state.Content,
-					FinishType:     state.FinishType,
+					ConversationID:     state.ConversationID,
+					Content:            state.Content,
+					FinishType:         state.FinishType,
+					HasImageGeneration: state.HasImageGeneration,
 				}
 			}
 			_, done, err := CollectChatSSEEvent(ev, state)
 			if err != nil {
 				return ChatSSEResult{
-					ConversationID: state.ConversationID,
-					Content:        state.Content,
-					FinishType:     state.FinishType,
-					Err:            err,
+					ConversationID:     state.ConversationID,
+					Content:            state.Content,
+					FinishType:         state.FinishType,
+					HasImageGeneration: state.HasImageGeneration,
+					Err:                err,
 				}
 			}
 			if done {
 				return ChatSSEResult{
-					ConversationID: state.ConversationID,
-					Content:        state.Content,
-					FinishType:     state.FinishType,
+					ConversationID:     state.ConversationID,
+					Content:            state.Content,
+					FinishType:         state.FinishType,
+					HasImageGeneration: state.HasImageGeneration,
 				}
 			}
 			if strings.TrimSpace(state.Content) != "" {
 				return ChatSSEResult{
-					ConversationID: state.ConversationID,
-					Content:        state.Content,
-					FinishType:     state.FinishType,
+					ConversationID:     state.ConversationID,
+					Content:            state.Content,
+					FinishType:         state.FinishType,
+					HasImageGeneration: state.HasImageGeneration,
 				}
 			}
 			if state.ConversationID != "" && quietAfterReady > 0 {
@@ -1062,9 +1069,10 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 			}
 		case <-quietTimer:
 			return ChatSSEResult{
-				ConversationID: state.ConversationID,
-				Content:        state.Content,
-				FinishType:     state.FinishType,
+				ConversationID:     state.ConversationID,
+				Content:            state.Content,
+				FinishType:         state.FinishType,
+				HasImageGeneration: state.HasImageGeneration,
 			}
 		}
 	}
@@ -1086,6 +1094,9 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 	var obj map[string]any
 	if err := common.Unmarshal(ev.Data, &obj); err != nil {
 		return "", false, nil
+	}
+	if chatSSEEventHasImageGeneration(obj, ev.Data) {
+		state.HasImageGeneration = true
 	}
 	if cid, ok := obj["conversation_id"].(string); ok && cid != "" && state.ConversationID == "" {
 		state.ConversationID = cid
@@ -1120,6 +1131,42 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 	}
 	state.Content = latest
 	return delta, false, nil
+}
+
+func chatSSEEventHasImageGeneration(obj map[string]any, raw []byte) bool {
+	if bytes.Contains(raw, []byte("image_gen")) || bytes.Contains(raw, []byte("image-generation")) {
+		return true
+	}
+	return valueHasImageGenerationMarker(obj)
+}
+
+func valueHasImageGenerationMarker(value any) bool {
+	switch v := value.(type) {
+	case map[string]any:
+		for key, child := range v {
+			lowerKey := strings.ToLower(key)
+			if lowerKey == "image_gen_task_id" {
+				return true
+			}
+			if lowerKey == "async_task_type" || lowerKey == "recipient" {
+				if text, ok := child.(string); ok && strings.Contains(strings.ToLower(text), "image_gen") {
+					return true
+				}
+			}
+			if valueHasImageGenerationMarker(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if valueHasImageGenerationMarker(child) {
+				return true
+			}
+		}
+	case string:
+		return strings.Contains(strings.ToLower(v), "image_gen")
+	}
+	return false
 }
 
 func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta string, done bool) {

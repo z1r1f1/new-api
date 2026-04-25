@@ -373,12 +373,13 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		}
 		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline), nil
 	}
-	content, conversationID, usedPrompt, baseline, err := runChatCompletion(c.Request.Context(), client, req, prompt)
+	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
 	textContent := content
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline); err != nil {
+	allowImagePoll := shouldPollChatGeneratedImages(req, usedPrompt, textContent, hasImageGeneration)
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll); err != nil {
 		return nil, err
 	} else if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
@@ -506,24 +507,24 @@ type chatStreamStart struct {
 	Prompt   string
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, imageBaseline, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, imageBaseline, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	started, err := startChatStream(ctx, client, req, prompt)
 	if err != nil {
-		return "", "", "", imageBaseline{}, err
+		return "", "", "", imageBaseline{}, false, err
 	}
 	result := ParseChatSSE(started.Stream)
 	if result.Err != nil {
-		return "", result.ConversationID, started.Prompt, started.Baseline, result.Err
+		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, result.Err
 	}
 	if containsImageGenerationUpstreamErrorText(result.Content) {
-		return "", result.ConversationID, started.Prompt, started.Baseline, imageGenerationUpstreamError()
+		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, imageGenerationUpstreamError()
 	}
 	if strings.TrimSpace(result.Content) == "" {
-		return "", result.ConversationID, started.Prompt, started.Baseline, errors.New("chatgpt web channel: empty chat response")
+		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, errors.New("chatgpt web channel: empty chat response")
 	}
-	return result.Content, result.ConversationID, started.Prompt, started.Baseline, nil
+	return result.Content, result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, nil
 }
 
 func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, error) {
@@ -546,7 +547,7 @@ func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest
 	return result.Content, result.ConversationID, started.Prompt, nil
 }
 
-func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline) (string, error) {
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool) (string, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
 		return "", nil
@@ -576,6 +577,9 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	}
 	fileRefs, hasFileRefs := imageRefsFromToolMsgs(toolMsgs)
 	if !hasFileRefs {
+		if !allowPoll && len(toolMsgs) == 0 {
+			return "", nil
+		}
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
 			MaxWait:             60 * time.Second,
 			Interval:            2 * time.Second,
@@ -599,6 +603,47 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		return "", nil
 	}
 	return imageRefsToMarkdown(ctx, client, conversationID, fileRefs), nil
+}
+
+func shouldPollChatGeneratedImages(req chatRequest, prompt, content string, hasImageGeneration bool) bool {
+	if hasImageGeneration {
+		return true
+	}
+	if common.IsImageGenerationModel(req.Model) {
+		return true
+	}
+	return chatTextRequestsImageGeneration(prompt) || chatTextRequestsImageGeneration(content)
+}
+
+func chatTextRequestsImageGeneration(text string) bool {
+	text = strings.ToLower(strings.TrimSpace(text))
+	if text == "" {
+		return false
+	}
+	chineseImageTerms := []string{"生图", "画图", "绘图", "生成图片", "生成图像", "生成照片", "图片生成", "图像生成"}
+	for _, term := range chineseImageTerms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	imageTerms := []string{"image", "picture", "photo", "illustration", "drawing"}
+	actionTerms := []string{"generate", "create", "draw", "make", "render"}
+	hasImageTerm := false
+	for _, term := range imageTerms {
+		if strings.Contains(text, term) {
+			hasImageTerm = true
+			break
+		}
+	}
+	if !hasImageTerm {
+		return false
+	}
+	for _, term := range actionTerms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
 }
 
 func imageRefsFromToolMsgs(toolMsgs []ImageToolMsg) ([]string, bool) {
@@ -736,7 +781,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		_ = pw.CloseWithError(imageGenerationUpstreamError())
 		return
 	}
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {

@@ -3,8 +3,11 @@ package chatgptimg
 import (
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/dto"
 )
@@ -67,6 +70,47 @@ func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"id":"chatcmpl-chatgptimg-conv-1"`) {
 		t.Fatalf("stream output did not expose the real conversation id for reuse:\n%s", string(out))
+	}
+}
+
+func TestCollectChatGeneratedImageMarkdownSkipsLongPollForTextOnlyChat(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if r.URL.Path != "/backend-api/conversation/conv-text" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"mapping":{},"current_node":"node-1"}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+
+	start := time.Now()
+	markdown, err := collectChatGeneratedImageMarkdown(context.Background(), client, "conv-text", imageBaseline{}, false)
+	if err != nil {
+		t.Fatalf("collectChatGeneratedImageMarkdown returned error: %v", err)
+	}
+	if markdown != "" {
+		t.Fatalf("expected no image markdown, got %q", markdown)
+	}
+	if requestCount != 1 {
+		t.Fatalf("expected only initial mapping request, got %d", requestCount)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("expected text-only image check to return without long polling, took %s", elapsed)
+	}
+}
+
+func TestShouldPollChatGeneratedImagesDetectsIntent(t *testing.T) {
+	if !shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: 帮我生成图片：一只小猫", "", false) {
+		t.Fatal("expected Chinese image generation intent to enable polling")
+	}
+	if shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: hello", "hello", false) {
+		t.Fatal("expected plain text chat to skip image polling")
 	}
 }
 
