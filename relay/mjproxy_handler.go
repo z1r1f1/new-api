@@ -84,6 +84,7 @@ func RelayMidjourneyImage(c *gin.Context) {
 	}
 	// 设置响应的内容类型
 	c.Writer.Header().Set("Content-Type", contentType)
+	setImageDownloadHeader(c, taskId, contentType)
 	// 将图片流式传输到响应体
 	_, err = io.Copy(c.Writer, resp.Body)
 	if err != nil {
@@ -124,7 +125,36 @@ func serveDataURLImage(c *gin.Context, dataURL string) {
 		contentType = http.DetectContentType(imageBytes)
 	}
 	c.Header("Cache-Control", "private, max-age=3600")
+	setImageDownloadHeader(c, c.Param("id"), contentType)
 	c.Data(http.StatusOK, contentType, imageBytes)
+}
+
+func setImageDownloadHeader(c *gin.Context, taskID, contentType string) {
+	if c.Query("download") != "1" {
+		return
+	}
+	filename := strings.TrimSpace(taskID)
+	if filename == "" {
+		filename = "drawing-image"
+	}
+	if !strings.Contains(filename, ".") {
+		filename += imageExtensionFromContentType(contentType)
+	}
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, strings.ReplaceAll(filename, `"`, "")))
+}
+
+func imageExtensionFromContentType(contentType string) string {
+	contentType = strings.ToLower(contentType)
+	switch {
+	case strings.Contains(contentType, "jpeg") || strings.Contains(contentType, "jpg"):
+		return ".jpg"
+	case strings.Contains(contentType, "webp"):
+		return ".webp"
+	case strings.Contains(contentType, "gif"):
+		return ".gif"
+	default:
+		return ".png"
+	}
 }
 
 func RelayMidjourneyNotify(c *gin.Context) *dto.MidjourneyResponse {

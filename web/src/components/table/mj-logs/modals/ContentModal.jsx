@@ -17,8 +17,25 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import { Modal, ImagePreview } from '@douyinfe/semi-ui';
+
+const getImageDownloadName = (src = '') => {
+  const cleanSrc = String(src).split('?')[0];
+  const tail = cleanSrc.slice(cleanSrc.lastIndexOf('/') + 1);
+  if (/\.(png|jpe?g|webp|gif)$/i.test(tail)) {
+    return tail;
+  }
+  return `${tail || 'drawing-image'}.png`;
+};
+
+const withDownloadParam = (src = '') => {
+  if (!src || src.startsWith('data:')) {
+    return src;
+  }
+  const separator = src.includes('?') ? '&' : '?';
+  return `${src}${separator}download=1`;
+};
 
 const ContentModal = ({
   isModalOpen,
@@ -28,6 +45,16 @@ const ContentModal = ({
   setIsModalOpenurl,
   modalImageUrl,
 }) => {
+  const handleDownloadError = useCallback((src) => {
+    if (!src) return;
+    const link = document.createElement('a');
+    link.href = withDownloadParam(src);
+    link.download = getImageDownloadName(src);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }, []);
+
   return (
     <>
       {/* Text Content Modal */}
@@ -46,6 +73,8 @@ const ContentModal = ({
       <ImagePreview
         src={modalImageUrl}
         visible={isModalOpenurl}
+        setDownloadName={getImageDownloadName}
+        onDownloadError={handleDownloadError}
         onVisibleChange={(visible) => setIsModalOpenurl(visible)}
       />
     </>
