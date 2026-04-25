@@ -27,11 +27,8 @@ import (
 
 var ModelList = []string{
 	"gpt-image-2",
-	"gpt-image-1",
-	"chatgpt-image-latest",
-	"auto",
-	"gpt-5",
-	"gpt-4o",
+	"gpt-5.5-pro",
+	"gpt-5.5-thinking",
 }
 
 const ChannelName = "chatgpt-web"
