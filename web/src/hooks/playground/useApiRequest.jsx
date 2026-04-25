@@ -69,9 +69,8 @@ const imageTaskResultToMessageContent = (taskId, taskResult) => {
   const textParts = [];
 
   items.forEach((item, index) => {
-    const url =
-      item?.url ||
-      (item?.b64_json ? buildImageTaskContentUrl(taskId, index) : '');
+    const hasImage = Boolean(item?.url || item?.b64_json);
+    const url = hasImage ? buildImageTaskContentUrl(taskId, index) : '';
     if (url) {
       content.push({
         type: 'image_url',
