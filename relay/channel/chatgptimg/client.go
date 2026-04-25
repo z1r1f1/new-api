@@ -941,9 +941,10 @@ type ChatSSEResult struct {
 }
 
 type ChatSSEState struct {
-	ConversationID string
-	Content        string
-	FinishType     string
+	ConversationID  string
+	Content         string
+	FinishType      string
+	IsAppendingText bool
 }
 
 var (
@@ -1029,16 +1030,25 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta string, done bool) {
 	path, _ := obj["p"].(string)
 	op, _ := obj["o"].(string)
-	if path == "/message/content/parts/0" {
+	if state.IsAppendingText && path == "" && op == "" {
+		value, _ := obj["v"].(string)
+		if value != "" {
+			state.Content += value
+			return value, false
+		}
+	}
+	if strings.Contains(path, "/message/content/parts") {
 		value, _ := obj["v"].(string)
 		if value == "" {
 			return "", false
 		}
 		switch op {
 		case "append":
+			state.IsAppendingText = true
 			state.Content += value
 			return value, false
 		case "replace":
+			state.IsAppendingText = false
 			return replaceChatContent(value, state), false
 		}
 	}
@@ -1053,19 +1063,23 @@ func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta strin
 		}
 		patchPath, _ := patch["p"].(string)
 		patchOp, _ := patch["o"].(string)
-		switch patchPath {
-		case "/message/content/parts/0":
+		if strings.Contains(patchPath, "/message/content/parts") {
 			value, _ := patch["v"].(string)
 			if value == "" {
 				continue
 			}
 			if patchOp == "append" {
+				state.IsAppendingText = true
 				state.Content += value
 				delta += value
 			} else if patchOp == "replace" {
+				state.IsAppendingText = false
 				replaced := replaceChatContent(value, state)
 				delta += replaced
 			}
+			continue
+		}
+		switch patchPath {
 		case "/message/metadata":
 			meta, _ := patch["v"].(map[string]any)
 			if finish, ok := meta["finish_details"].(map[string]any); ok {

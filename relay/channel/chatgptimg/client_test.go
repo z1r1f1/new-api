@@ -73,3 +73,21 @@ func TestParseChatSSEExtractsPatchAppendEvents(t *testing.T) {
 		t.Fatalf("expected patch content, got %q", result.Content)
 	}
 }
+
+func TestParseChatSSEExtractsBareDeltaAfterAppendStarts(t *testing.T) {
+	stream := make(chan SSEEvent, 5)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"Hel"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"v":"lo"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"v":" world"}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if result.Content != "Hello world" {
+		t.Fatalf("expected full bare-delta content, got %q", result.Content)
+	}
+}
