@@ -336,14 +336,14 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.BaselineTools), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline), nil
 	}
-	content, conversationID, usedPrompt, baselineTools, err := runChatCompletion(c.Request.Context(), client, req, prompt)
+	content, conversationID, usedPrompt, baseline, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
 	textContent := content
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baselineTools); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline); err != nil {
 		return nil, err
 	} else if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
@@ -466,32 +466,32 @@ func messageTextContent(msg dto.Message) string {
 }
 
 type chatStreamStart struct {
-	Stream        <-chan SSEEvent
-	BaselineTools map[string]struct{}
-	Prompt        string
+	Stream   <-chan SSEEvent
+	Baseline imageBaseline
+	Prompt   string
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, map[string]struct{}, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, imageBaseline, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	started, err := startChatStream(ctx, client, req, prompt)
 	if err != nil {
-		return "", "", "", nil, err
+		return "", "", "", imageBaseline{}, err
 	}
 	result := ParseChatSSE(started.Stream)
 	if result.Err != nil {
-		return "", result.ConversationID, started.Prompt, started.BaselineTools, result.Err
+		return "", result.ConversationID, started.Prompt, started.Baseline, result.Err
 	}
 	if containsImageGenerationUpstreamErrorText(result.Content) {
-		return "", result.ConversationID, started.Prompt, started.BaselineTools, imageGenerationUpstreamError()
+		return "", result.ConversationID, started.Prompt, started.Baseline, imageGenerationUpstreamError()
 	}
 	if strings.TrimSpace(result.Content) == "" {
-		return "", result.ConversationID, started.Prompt, started.BaselineTools, errors.New("chatgpt web channel: empty chat response")
+		return "", result.ConversationID, started.Prompt, started.Baseline, errors.New("chatgpt web channel: empty chat response")
 	}
-	return result.Content, result.ConversationID, started.Prompt, started.BaselineTools, nil
+	return result.Content, result.ConversationID, started.Prompt, started.Baseline, nil
 }
 
-func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baselineTools map[string]struct{}) (string, error) {
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline) (string, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
 		return "", nil
@@ -510,27 +510,25 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		return "", imageGenerationUpstreamError()
 	}
 	toolMsgs := ExtractImageToolMsgs(mapping)
-	if len(baselineTools) > 0 {
+	if len(baseline.ToolIDs) > 0 {
 		filtered := make([]ImageToolMsg, 0, len(toolMsgs))
 		for _, msg := range toolMsgs {
-			if _, ok := baselineTools[msg.MessageID]; !ok {
+			if _, ok := baseline.ToolIDs[msg.MessageID]; !ok {
 				filtered = append(filtered, msg)
 			}
 		}
 		toolMsgs = filtered
 	}
-	if len(toolMsgs) == 0 {
-		return "", nil
-	}
-
 	fileRefs, hasFileRefs := imageRefsFromToolMsgs(toolMsgs)
 	if !hasFileRefs {
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
-			MaxWait:         60 * time.Second,
-			Interval:        2 * time.Second,
-			StableRounds:    2,
-			PreviewWait:     8 * time.Second,
-			BaselineToolIDs: baselineTools,
+			MaxWait:             60 * time.Second,
+			Interval:            2 * time.Second,
+			StableRounds:        2,
+			PreviewWait:         8 * time.Second,
+			BaselineToolIDs:     baseline.ToolIDs,
+			BaselineFileIDs:     baseline.FileIDs,
+			BaselineSedimentIDs: baseline.SedimentIDs,
 		})
 		switch pollStatus {
 		case PollStatusIMG2, PollStatusPreviewOnly:
@@ -632,7 +630,7 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 	if err != nil {
 		return nil, err
 	}
-	return &chatStreamStart{Stream: stream, BaselineTools: continuation.BaselineTools, Prompt: actualPrompt}, nil
+	return &chatStreamStart{Stream: stream, Baseline: continuation.Baseline, Prompt: actualPrompt}, nil
 }
 
 func chatModelForWeb(model string) string {
@@ -643,9 +641,9 @@ func chatModelForWeb(model string) string {
 	return model
 }
 
-func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baselineTools map[string]struct{}) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline) *http.Response {
 	pr, pw := io.Pipe()
-	go streamChatCompletion(ctx, client, stream, req, prompt, baselineTools, pw)
+	go streamChatCompletion(ctx, client, stream, req, prompt, baseline, pw)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -653,7 +651,7 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 	}
 }
 
-func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baselineTools map[string]struct{}, pw *io.PipeWriter) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, pw *io.PipeWriter) {
 	defer pw.Close()
 	id := buildChatCompletionID("")
 	created := time.Now().Unix()
@@ -683,7 +681,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		_ = pw.CloseWithError(imageGenerationUpstreamError())
 		return
 	}
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baselineTools); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {
@@ -746,10 +744,16 @@ func buildChatCompletionID(conversationID string) string {
 }
 
 type conversationContinuation struct {
-	ConvID        string
-	ParentID      string
-	BaselineTools map[string]struct{}
-	Available     bool
+	ConvID    string
+	ParentID  string
+	Baseline  imageBaseline
+	Available bool
+}
+
+type imageBaseline struct {
+	ToolIDs     map[string]struct{}
+	FileIDs     map[string]struct{}
+	SedimentIDs map[string]struct{}
 }
 
 func prepareConversationContinuation(ctx context.Context, client *Client, conversationID string) conversationContinuation {
@@ -767,10 +771,10 @@ func prepareConversationContinuation(ctx context.Context, client *Client, conver
 	}
 	rawMapping, _ := mapping["mapping"].(map[string]any)
 	return conversationContinuation{
-		ConvID:        conversationID,
-		ParentID:      parentID,
-		BaselineTools: buildToolBaseline(rawMapping),
-		Available:     true,
+		ConvID:    conversationID,
+		ParentID:  parentID,
+		Baseline:  buildImageBaseline(rawMapping),
+		Available: true,
 	}
 }
 
@@ -1136,7 +1140,7 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	var convID string
 	parentID := uuid.NewString()
 	messageID := uuid.NewString()
-	var baselineTools = map[string]struct{}{}
+	var baseline imageBaseline
 	var lastPreviewFids []string
 	var lastPreviewSids []string
 	var fileRefs []string
@@ -1161,7 +1165,7 @@ attemptLoop:
 			convID = continuation.ConvID
 		}
 		parentID = continuation.ParentID
-		baselineTools = continuation.BaselineTools
+		baseline = continuation.Baseline
 		messageID = uuid.NewString()
 		lastPreviewFids = nil
 		lastPreviewSids = nil
@@ -1257,12 +1261,14 @@ attemptLoop:
 				return nil, errors.New("chatgpt web channel: missing conversation id from SSE")
 			}
 			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{
-				MaxWait:         pollMaxWait,
-				Interval:        2 * time.Second,
-				StableRounds:    2,
-				PreviewWait:     8 * time.Second,
-				BaselineToolIDs: baselineTools,
-				ExcludedFileIDs: excludedFileIDs,
+				MaxWait:             pollMaxWait,
+				Interval:            2 * time.Second,
+				StableRounds:        2,
+				PreviewWait:         8 * time.Second,
+				BaselineToolIDs:     baseline.ToolIDs,
+				BaselineFileIDs:     baseline.FileIDs,
+				BaselineSedimentIDs: baseline.SedimentIDs,
+				ExcludedFileIDs:     excludedFileIDs,
 			})
 			switch pollStatus {
 			case PollStatusIMG2:
@@ -1283,7 +1289,7 @@ attemptLoop:
 				if len(fileRefs) == 0 && turn < sameConvMax {
 					if mapping, mappingErr := client.GetConversationMapping(ctx, convID); mappingErr == nil {
 						if rawMapping, ok := mapping["mapping"].(map[string]any); ok {
-							baselineTools = buildToolBaseline(rawMapping)
+							baseline = buildImageBaseline(rawMapping)
 						}
 						if head, ok := mapping["current_node"].(string); ok && head != "" {
 							parentID = head
@@ -1355,6 +1361,31 @@ func buildToolBaseline(mapping map[string]any) map[string]struct{} {
 	out := make(map[string]struct{}, len(tools))
 	for _, tool := range tools {
 		out[tool.MessageID] = struct{}{}
+	}
+	return out
+}
+
+func buildImageBaseline(mapping map[string]any) imageBaseline {
+	fileIDs, sedimentIDs := ExtractImageRefsFromMapping(mapping)
+	return imageBaseline{
+		ToolIDs:     buildToolBaseline(mapping),
+		FileIDs:     stringSliceSet(fileIDs),
+		SedimentIDs: stringSliceSet(sedimentIDs),
+	}
+}
+
+func stringSliceSet(items []string) map[string]struct{} {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		if item = strings.TrimSpace(item); item != "" {
+			out[item] = struct{}{}
+		}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

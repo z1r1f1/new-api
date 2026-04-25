@@ -289,10 +289,11 @@ func TestPollConversationForImagesIgnoresBaselineToolMessages(t *testing.T) {
 	}
 
 	status, fids, sids := client.PollConversationForImages(context.Background(), "conv-1", PollOpts{
-		MaxWait:         50 * time.Millisecond,
-		Interval:        time.Millisecond,
-		PreviewWait:     time.Millisecond,
-		BaselineToolIDs: map[string]struct{}{"old-tool": {}},
+		MaxWait:             50 * time.Millisecond,
+		Interval:            time.Millisecond,
+		PreviewWait:         time.Millisecond,
+		BaselineToolIDs:     map[string]struct{}{"old-tool": {}},
+		BaselineSedimentIDs: map[string]struct{}{"old_sed": {}},
 	})
 	if status != PollStatusPreviewOnly {
 		t.Fatalf("expected preview status, got %s", status)

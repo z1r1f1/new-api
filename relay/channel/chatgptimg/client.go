@@ -1452,12 +1452,14 @@ func ExtractImageRefsFromMapping(mapping map[string]any) ([]string, []string) {
 }
 
 type PollOpts struct {
-	BaselineToolIDs map[string]struct{}
-	ExcludedFileIDs map[string]struct{}
-	MaxWait         time.Duration
-	Interval        time.Duration
-	StableRounds    int
-	PreviewWait     time.Duration
+	BaselineToolIDs     map[string]struct{}
+	BaselineFileIDs     map[string]struct{}
+	BaselineSedimentIDs map[string]struct{}
+	ExcludedFileIDs     map[string]struct{}
+	MaxWait             time.Duration
+	Interval            time.Duration
+	StableRounds        int
+	PreviewWait         time.Duration
 }
 
 type PollStatus string
@@ -1485,11 +1487,14 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		opt.PreviewWait = 8 * time.Second
 	}
 	baseline := opt.BaselineToolIDs
-	excludedFiles := opt.ExcludedFileIDs
+	excludedFiles := mergeStringSets(opt.BaselineFileIDs, opt.ExcludedFileIDs)
+	excludedSediments := opt.BaselineSedimentIDs
 	deadline := time.Now().Add(opt.MaxWait)
 	var stableCount int
 	var lastSedSig string
 	var firstToolTs time.Time
+	var firstAnyRefTs time.Time
+	var lastBroadSed []string
 	var consecutive429 int
 
 	for time.Now().Before(deadline) {
@@ -1515,13 +1520,18 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		if mappingContainsImageGenerationError(mapping) {
 			return PollStatusImageError, nil, nil
 		}
-		if len(baseline) == 0 {
-			mappingFileIDs, mappingSedimentIDs := ExtractImageRefsFromMapping(mapping)
-			mappingFileIDs = filterExcludedFileIDs(mappingFileIDs, excludedFiles)
-			if len(mappingFileIDs) > 0 {
-				return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
+		mappingFileIDs, mappingSedimentIDs := ExtractImageRefsFromMapping(mapping)
+		mappingFileIDs = filterExcludedFileIDs(mappingFileIDs, excludedFiles)
+		mappingSedimentIDs = filterExcludedFileIDs(mappingSedimentIDs, excludedSediments)
+		if len(mappingFileIDs) > 0 {
+			return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
+		}
+		if len(mappingSedimentIDs) > 0 {
+			lastBroadSed = mappingSedimentIDs
+			if firstAnyRefTs.IsZero() {
+				firstAnyRefTs = time.Now()
 			}
-			if len(mappingSedimentIDs) > 0 {
+			if time.Since(firstAnyRefTs) >= opt.PreviewWait {
 				return PollStatusPreviewOnly, nil, mappingSedimentIDs
 			}
 		}
@@ -1551,6 +1561,9 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 				}
 			}
 			for _, sid := range msg.SedimentIDs {
+				if _, excluded := excludedSediments[sid]; excluded {
+					continue
+				}
 				if _, ok := seenSed[sid]; !ok {
 					seenSed[sid] = struct{}{}
 					allSed = append(allSed, sid)
@@ -1585,7 +1598,23 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		}
 		sleepContext(ctx, opt.Interval)
 	}
+	if len(lastBroadSed) > 0 {
+		return PollStatusPreviewOnly, nil, lastBroadSed
+	}
 	return PollStatusTimeout, nil, nil
+}
+
+func mergeStringSets(sets ...map[string]struct{}) map[string]struct{} {
+	var merged map[string]struct{}
+	for _, set := range sets {
+		for key := range set {
+			if merged == nil {
+				merged = map[string]struct{}{}
+			}
+			merged[key] = struct{}{}
+		}
+	}
+	return merged
 }
 
 func filterExcludedFileIDs(fileIDs []string, excluded map[string]struct{}) []string {
