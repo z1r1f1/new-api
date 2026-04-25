@@ -526,6 +526,19 @@ type ImageConvOpts struct {
 	References     []*UploadedFile
 }
 
+type ChatConvOpts struct {
+	Prompt         string
+	UpstreamModel  string
+	ConvID         string
+	ParentMsgID    string
+	MessageID      string
+	ChatToken      string
+	ProofToken     string
+	ConduitToken   string
+	TimezoneOffset int
+	SSETimeout     time.Duration
+}
+
 func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (string, error) {
 	if opt.UpstreamModel == "" {
 		opt.UpstreamModel = "auto"
@@ -580,6 +593,67 @@ func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (s
 	buf, _ := io.ReadAll(res.Body)
 	if res.StatusCode >= 400 {
 		return "", &UpstreamError{Status: res.StatusCode, Message: "f/conversation/prepare failed", Body: string(buf)}
+	}
+	var out struct {
+		ConduitToken string `json:"conduit_token"`
+	}
+	_ = common.Unmarshal(buf, &out)
+	return out.ConduitToken, nil
+}
+
+func (c *Client) PrepareChatConversation(ctx context.Context, opt ChatConvOpts) (string, error) {
+	if opt.UpstreamModel == "" {
+		opt.UpstreamModel = "auto"
+	}
+	if opt.MessageID == "" {
+		opt.MessageID = uuid.NewString()
+	}
+	payload := map[string]any{
+		"action":                "next",
+		"fork_from_shared_post": false,
+		"parent_message_id":     opt.ParentMsgID,
+		"model":                 opt.UpstreamModel,
+		"client_prepare_state":  "success",
+		"timezone_offset_min":   -480,
+		"timezone":              "Asia/Shanghai",
+		"conversation_mode":     map[string]string{"kind": "primary_assistant"},
+		"partial_query": map[string]any{
+			"id":     uuid.NewString(),
+			"author": map[string]string{"role": "user"},
+			"content": map[string]any{
+				"content_type": "text",
+				"parts":        []string{opt.Prompt},
+			},
+		},
+		"supports_buffering":  true,
+		"supported_encodings": []string{"v1"},
+		"client_contextual_info": map[string]any{
+			"app_name": "chatgpt.com",
+		},
+	}
+	if opt.ConvID != "" {
+		payload["conversation_id"] = opt.ConvID
+	}
+	body, _ := common.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/f/conversation/prepare", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	c.commonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Openai-Sentinel-Chat-Requirements-Token", opt.ChatToken)
+	if opt.ProofToken != "" {
+		req.Header.Set("Openai-Sentinel-Proof-Token", opt.ProofToken)
+	}
+	res, err := c.hc.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	buf, _ := io.ReadAll(res.Body)
+	if res.StatusCode >= 400 {
+		return "", &UpstreamError{Status: res.StatusCode, Message: "f/conversation/prepare chat failed", Body: string(buf)}
 	}
 	var out struct {
 		ConduitToken string `json:"conduit_token"`
@@ -700,6 +774,99 @@ func (c *Client) StreamFConversation(ctx context.Context, opt ImageConvOpts) (<-
 	return out, nil
 }
 
+func (c *Client) StreamChatConversation(ctx context.Context, opt ChatConvOpts) (<-chan SSEEvent, error) {
+	if opt.UpstreamModel == "" {
+		opt.UpstreamModel = "auto"
+	}
+	if opt.MessageID == "" {
+		opt.MessageID = uuid.NewString()
+	}
+	if opt.ParentMsgID == "" {
+		opt.ParentMsgID = uuid.NewString()
+	}
+	if opt.TimezoneOffset == 0 {
+		opt.TimezoneOffset = -480
+	}
+	if opt.SSETimeout == 0 {
+		opt.SSETimeout = 300 * time.Second
+	}
+
+	payload := map[string]any{
+		"action": "next",
+		"messages": []map[string]any{{
+			"id":          opt.MessageID,
+			"author":      map[string]string{"role": "user"},
+			"create_time": float64(time.Now().UnixMilli()) / 1000.0,
+			"content": map[string]any{
+				"content_type": "text",
+				"parts":        []string{opt.Prompt},
+			},
+			"metadata": map[string]any{
+				"developer_mode_connector_ids": []any{},
+				"selected_github_repos":        []any{},
+				"selected_all_github_repos":    false,
+				"serialization_metadata": map[string]any{
+					"custom_symbol_offsets": []any{},
+				},
+			},
+		}},
+		"parent_message_id":        opt.ParentMsgID,
+		"model":                    opt.UpstreamModel,
+		"client_prepare_state":     "sent",
+		"timezone_offset_min":      opt.TimezoneOffset,
+		"timezone":                 "Asia/Shanghai",
+		"conversation_mode":        map[string]string{"kind": "primary_assistant"},
+		"enable_message_followups": true,
+		"supports_buffering":       true,
+		"supported_encodings":      []string{"v1"},
+		"client_contextual_info": map[string]any{
+			"is_dark_mode":      false,
+			"time_since_loaded": 1200,
+			"page_height":       1072,
+			"page_width":        1724,
+			"pixel_ratio":       1.2,
+			"screen_height":     1440,
+			"screen_width":      2560,
+			"app_name":          "chatgpt.com",
+		},
+		"paragen_cot_summary_display_override": "allow",
+		"force_parallel_switch":                "auto",
+	}
+	if opt.ConvID != "" {
+		payload["conversation_id"] = opt.ConvID
+	}
+	body, _ := common.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/f/conversation", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	c.commonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("X-Oai-Turn-Trace-Id", uuid.NewString())
+	req.Header.Set("Openai-Sentinel-Chat-Requirements-Token", opt.ChatToken)
+	if opt.ProofToken != "" {
+		req.Header.Set("Openai-Sentinel-Proof-Token", opt.ProofToken)
+	}
+	if opt.ConduitToken != "" {
+		req.Header.Set("X-Conduit-Token", opt.ConduitToken)
+	}
+	local := *c.hc
+	local.Timeout = 0
+	res, err := local.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode >= 400 {
+		buf, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		return nil, &UpstreamError{Status: res.StatusCode, Message: "f/conversation chat failed", Body: string(buf)}
+	}
+	out := make(chan SSEEvent, 64)
+	go parseSSE(res.Body, out)
+	return out, nil
+}
+
 type SSEEvent struct {
 	Event string
 	Data  []byte
@@ -766,10 +933,232 @@ type ImageSSEResult struct {
 	ImageGenTaskID string
 }
 
+type ChatSSEResult struct {
+	ConversationID string
+	Content        string
+	FinishType     string
+	Err            error
+}
+
+type ChatSSEState struct {
+	ConversationID string
+	Content        string
+	FinishType     string
+}
+
 var (
 	reFileRef = regexp.MustCompile(`file-service://([A-Za-z0-9_-]+)`)
 	reSedRef  = regexp.MustCompile(`sediment://([A-Za-z0-9_-]+)`)
 )
+
+func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
+	state := &ChatSSEState{}
+	for ev := range stream {
+		_, done, err := CollectChatSSEEvent(ev, state)
+		if err != nil {
+			return ChatSSEResult{
+				ConversationID: state.ConversationID,
+				Content:        state.Content,
+				FinishType:     state.FinishType,
+				Err:            err,
+			}
+		}
+		if done {
+			break
+		}
+	}
+	return ChatSSEResult{
+		ConversationID: state.ConversationID,
+		Content:        state.Content,
+		FinishType:     state.FinishType,
+	}
+}
+
+func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done bool, err error) {
+	if state == nil {
+		state = &ChatSSEState{}
+	}
+	if ev.Err != nil {
+		return "", true, ev.Err
+	}
+	if len(ev.Data) == 0 {
+		return "", false, nil
+	}
+	if string(ev.Data) == "[DONE]" {
+		return "", true, nil
+	}
+	var obj map[string]any
+	if err := common.Unmarshal(ev.Data, &obj); err != nil {
+		return "", false, nil
+	}
+	if cid, ok := obj["conversation_id"].(string); ok && cid != "" && state.ConversationID == "" {
+		state.ConversationID = cid
+	}
+	if typ, _ := obj["type"].(string); typ == "message_stream_complete" {
+		return "", true, nil
+	}
+	if patchDelta, patchDone := collectChatPatchEvent(obj, state); patchDelta != "" || patchDone {
+		return patchDelta, patchDone, nil
+	}
+	message, conversationID, finishType := extractChatMessage(obj)
+	if conversationID != "" && state.ConversationID == "" {
+		state.ConversationID = conversationID
+	}
+	if finishType != "" {
+		state.FinishType = finishType
+	}
+	if message == nil {
+		return "", false, nil
+	}
+	if !isAssistantMessage(message) {
+		return "", false, nil
+	}
+	latest := extractMessageText(message)
+	if latest == "" {
+		return "", false, nil
+	}
+	if strings.HasPrefix(latest, state.Content) {
+		delta = latest[len(state.Content):]
+	} else if latest != state.Content {
+		delta = latest
+	}
+	state.Content = latest
+	return delta, false, nil
+}
+
+func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta string, done bool) {
+	path, _ := obj["p"].(string)
+	op, _ := obj["o"].(string)
+	if path == "/message/content/parts/0" {
+		value, _ := obj["v"].(string)
+		if value == "" {
+			return "", false
+		}
+		switch op {
+		case "append":
+			state.Content += value
+			return value, false
+		case "replace":
+			return replaceChatContent(value, state), false
+		}
+	}
+	if op != "patch" {
+		return "", false
+	}
+	patches, _ := obj["v"].([]any)
+	for _, raw := range patches {
+		patch, _ := raw.(map[string]any)
+		if patch == nil {
+			continue
+		}
+		patchPath, _ := patch["p"].(string)
+		patchOp, _ := patch["o"].(string)
+		switch patchPath {
+		case "/message/content/parts/0":
+			value, _ := patch["v"].(string)
+			if value == "" {
+				continue
+			}
+			if patchOp == "append" {
+				state.Content += value
+				delta += value
+			} else if patchOp == "replace" {
+				replaced := replaceChatContent(value, state)
+				delta += replaced
+			}
+		case "/message/metadata":
+			meta, _ := patch["v"].(map[string]any)
+			if finish, ok := meta["finish_details"].(map[string]any); ok {
+				if typ, ok := finish["type"].(string); ok {
+					state.FinishType = typ
+				}
+			}
+			if complete, _ := meta["is_complete"].(bool); complete {
+				done = true
+			}
+		}
+	}
+	return delta, done
+}
+
+func replaceChatContent(latest string, state *ChatSSEState) string {
+	if strings.HasPrefix(latest, state.Content) {
+		delta := latest[len(state.Content):]
+		state.Content = latest
+		return delta
+	}
+	if latest != state.Content {
+		state.Content = latest
+		return latest
+	}
+	return ""
+}
+
+func extractChatMessage(obj map[string]any) (message map[string]any, conversationID string, finishType string) {
+	if v, ok := obj["v"].(map[string]any); ok {
+		if cid, ok := v["conversation_id"].(string); ok {
+			conversationID = cid
+		}
+		if msg, ok := v["message"].(map[string]any); ok {
+			message = msg
+		}
+	}
+	if message == nil {
+		if msg, ok := obj["message"].(map[string]any); ok {
+			message = msg
+		}
+	}
+	if conversationID == "" {
+		if cid, ok := obj["conversation_id"].(string); ok {
+			conversationID = cid
+		}
+	}
+	if message != nil {
+		if meta, ok := message["metadata"].(map[string]any); ok {
+			if finish, ok := meta["finish_details"].(map[string]any); ok {
+				if typ, ok := finish["type"].(string); ok {
+					finishType = typ
+				}
+			}
+		}
+	}
+	return message, conversationID, finishType
+}
+
+func isAssistantMessage(message map[string]any) bool {
+	author, _ := message["author"].(map[string]any)
+	if author == nil {
+		return false
+	}
+	role, _ := author["role"].(string)
+	return role == "assistant"
+}
+
+func extractMessageText(message map[string]any) string {
+	content, _ := message["content"].(map[string]any)
+	if content == nil {
+		return ""
+	}
+	parts, _ := content["parts"].([]any)
+	if len(parts) == 0 {
+		if text, ok := content["text"].(string); ok {
+			return text
+		}
+		return ""
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		switch v := part.(type) {
+		case string:
+			b.WriteString(v)
+		case map[string]any:
+			if text, ok := v["text"].(string); ok {
+				b.WriteString(text)
+			}
+		}
+	}
+	return b.String()
+}
 
 func ParseImageSSE(stream <-chan SSEEvent) ImageSSEResult {
 	var result ImageSSEResult

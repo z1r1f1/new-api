@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -28,6 +29,9 @@ var ModelList = []string{
 	"gpt-image-2",
 	"gpt-image-1",
 	"chatgpt-image-latest",
+	"auto",
+	"gpt-5",
+	"gpt-4o",
 }
 
 const ChannelName = "chatgpt-image"
@@ -59,6 +63,22 @@ type imageRunResult struct {
 	TurnsInConv    int
 }
 
+type chatRequest struct {
+	Model          string              `json:"model,omitempty"`
+	Messages       []dto.Message       `json:"messages,omitempty"`
+	Stream         *bool               `json:"stream,omitempty"`
+	ResponseFormat *dto.ResponseFormat `json:"response_format,omitempty"`
+}
+
+type chatResponse struct {
+	Id      string                         `json:"id"`
+	Object  string                         `json:"object"`
+	Created int64                          `json:"created"`
+	Model   string                         `json:"model"`
+	Choices []dto.OpenAITextResponseChoice `json:"choices"`
+	Usage   dto.Usage                      `json:"usage"`
+}
+
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {}
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -73,8 +93,23 @@ func (a *Adaptor) ConvertAudioRequest(*gin.Context, *relaycommon.RelayInfo, dto.
 	return nil, errors.New("chatgpt image channel: audio endpoint not supported")
 }
 
-func (a *Adaptor) ConvertOpenAIRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeneralOpenAIRequest) (any, error) {
-	return nil, errors.New("chatgpt image channel: /v1/chat/completions endpoint not supported")
+func (a *Adaptor) ConvertOpenAIRequest(_ *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
+	if request == nil || len(request.Messages) == 0 {
+		return nil, errors.New("chatgpt image channel: messages are required")
+	}
+	model := strings.TrimSpace(request.Model)
+	if model == "" && info != nil {
+		model = strings.TrimSpace(info.UpstreamModelName)
+	}
+	if model == "" {
+		model = "auto"
+	}
+	return chatRequest{
+		Model:          model,
+		Messages:       request.Messages,
+		Stream:         request.Stream,
+		ResponseFormat: request.ResponseFormat,
+	}, nil
 }
 
 func (a *Adaptor) ConvertRerankRequest(*gin.Context, int, dto.RerankRequest) (any, error) {
@@ -135,6 +170,16 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 	if err != nil {
 		return nil, fmt.Errorf("chatgpt image channel: read request body failed: %w", err)
 	}
+	var probe struct {
+		Messages []dto.Message `json:"messages"`
+	}
+	if err := common.Unmarshal(body, &probe); err == nil && len(probe.Messages) > 0 {
+		return a.doChatRequest(c, info, body)
+	}
+	return a.doImageRequest(c, info, body)
+}
+
+func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (any, error) {
 	var req generationRequest
 	if err := common.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("chatgpt image channel: invalid image request json: %w", err)
@@ -143,27 +188,10 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		return nil, errors.New("chatgpt image channel: prompt is required")
 	}
 
-	oauthKey, err := ParseOAuthKey(info.ApiKey)
+	client, err := newClientFromRelayInfo(c.Request.Context(), info)
 	if err != nil {
 		return nil, err
 	}
-	accessToken, err := ResolveAccessToken(c.Request.Context(), oauthKey, info.ChannelSetting.Proxy)
-	if err != nil {
-		return nil, err
-	}
-	client, err := NewClient(ClientOptions{
-		BaseURL:    chooseBaseURL(info),
-		AuthToken:  accessToken,
-		DeviceID:   strings.TrimSpace(oauthKey.DeviceID),
-		SessionID:  strings.TrimSpace(oauthKey.SessionID),
-		ProxyURL:   strings.TrimSpace(info.ChannelSetting.Proxy),
-		Timeout:    150 * time.Second,
-		SSETimeout: 120 * time.Second,
-	})
-	if err != nil {
-		return nil, err
-	}
-
 	refs, err := uploadReferenceImages(c.Request.Context(), client, req.ReferenceImages)
 	if err != nil {
 		return nil, err
@@ -200,6 +228,293 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
 	}, nil
+}
+
+func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (any, error) {
+	var req chatRequest
+	if err := common.Unmarshal(body, &req); err != nil {
+		return nil, fmt.Errorf("chatgpt image channel: invalid chat request json: %w", err)
+	}
+	if len(req.Messages) == 0 {
+		return nil, errors.New("chatgpt image channel: messages are required")
+	}
+	if strings.TrimSpace(req.Model) == "" && info != nil {
+		req.Model = strings.TrimSpace(info.UpstreamModelName)
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = "auto"
+	}
+	prompt := buildChatPrompt(req)
+	if strings.TrimSpace(prompt) == "" {
+		return nil, errors.New("chatgpt image channel: chat prompt is empty")
+	}
+	client, err := newClientFromRelayInfo(c.Request.Context(), info)
+	if err != nil {
+		return nil, err
+	}
+	if req.Stream != nil && *req.Stream {
+		stream, err := startChatStream(c.Request.Context(), client, req, prompt)
+		if err != nil {
+			return nil, err
+		}
+		return buildStreamingChatResponse(stream, req, prompt), nil
+	}
+	content, conversationID, err := runChatCompletion(c.Request.Context(), client, req, prompt)
+	if err != nil {
+		return nil, err
+	}
+	usage := buildChatUsage(prompt, content, req.Model)
+	respPayload := chatResponse{
+		Id:      buildChatCompletionID(conversationID),
+		Object:  "chat.completion",
+		Created: time.Now().Unix(),
+		Model:   strings.TrimSpace(req.Model),
+		Choices: []dto.OpenAITextResponseChoice{{
+			Index: 0,
+			Message: dto.Message{
+				Role:    "assistant",
+				Content: content,
+			},
+			FinishReason: "stop",
+		}},
+		Usage: usage,
+	}
+	payloadBytes, err := common.Marshal(respPayload)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt image channel: marshal chat response failed: %w", err)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
+	}, nil
+}
+
+func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo) (*Client, error) {
+	if info == nil {
+		return nil, errors.New("chatgpt image channel: relay info is required")
+	}
+	oauthKey, err := ParseOAuthKey(info.ApiKey)
+	if err != nil {
+		return nil, err
+	}
+	accessToken, err := ResolveAccessToken(ctx, oauthKey, info.ChannelSetting.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	return NewClient(ClientOptions{
+		BaseURL:    chooseBaseURL(info),
+		AuthToken:  accessToken,
+		DeviceID:   strings.TrimSpace(oauthKey.DeviceID),
+		SessionID:  strings.TrimSpace(oauthKey.SessionID),
+		ProxyURL:   strings.TrimSpace(info.ChannelSetting.Proxy),
+		Timeout:    150 * time.Second,
+		SSETimeout: 300 * time.Second,
+	})
+}
+
+func buildChatPrompt(req chatRequest) string {
+	var b strings.Builder
+	for _, msg := range req.Messages {
+		role := strings.TrimSpace(msg.Role)
+		if role == "" {
+			role = "user"
+		}
+		content := strings.TrimSpace(messageTextContent(msg))
+		if content == "" {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		switch role {
+		case "system", "developer":
+			b.WriteString("System: ")
+		case "assistant":
+			b.WriteString("Assistant: ")
+		case "tool":
+			b.WriteString("Tool: ")
+		default:
+			b.WriteString("User: ")
+		}
+		b.WriteString(content)
+	}
+	if req.ResponseFormat != nil {
+		switch req.ResponseFormat.Type {
+		case "json_object":
+			b.WriteString("\n\nSystem: Please respond with a valid JSON object only.")
+		case "json_schema":
+			schemaBytes, _ := common.Marshal(req.ResponseFormat.JsonSchema)
+			b.WriteString("\n\nSystem: Please respond with valid JSON matching this JSON Schema: ")
+			b.Write(schemaBytes)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+func messageTextContent(msg dto.Message) string {
+	if msg.IsStringContent() {
+		return msg.StringContent()
+	}
+	parts := msg.ParseContent()
+	if len(parts) == 0 {
+		return msg.StringContent()
+	}
+	var b strings.Builder
+	for _, part := range parts {
+		switch part.Type {
+		case dto.ContentTypeText:
+			b.WriteString(part.Text)
+		case dto.ContentTypeImageURL:
+			if image := part.GetImageMedia(); image != nil && image.Url != "" {
+				if b.Len() > 0 {
+					b.WriteByte('\n')
+				}
+				b.WriteString("[image_url: ")
+				b.WriteString(image.Url)
+				b.WriteString("]")
+			}
+		}
+	}
+	return b.String()
+}
+
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	stream, err := startChatStream(ctx, client, req, prompt)
+	if err != nil {
+		return "", "", err
+	}
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		return "", result.ConversationID, result.Err
+	}
+	if strings.TrimSpace(result.Content) == "" {
+		return "", result.ConversationID, errors.New("chatgpt image channel: empty chat response")
+	}
+	return result.Content, result.ConversationID, nil
+}
+
+func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string) (<-chan SSEEvent, error) {
+	cr, err := client.ChatRequirementsV2(ctx)
+	if err != nil {
+		return nil, err
+	}
+	proofToken := ""
+	if cr.Proofofwork.Required {
+		proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+	}
+	convOpt := ChatConvOpts{
+		Prompt:        prompt,
+		UpstreamModel: chatModelForWeb(req.Model),
+		ParentMsgID:   uuid.NewString(),
+		MessageID:     uuid.NewString(),
+		ChatToken:     cr.Token,
+		ProofToken:    proofToken,
+		SSETimeout:    300 * time.Second,
+	}
+	if conduitToken, conduitErr := client.PrepareChatConversation(ctx, convOpt); conduitErr == nil {
+		convOpt.ConduitToken = conduitToken
+	}
+	return client.StreamChatConversation(ctx, convOpt)
+}
+
+func chatModelForWeb(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" || common.IsImageGenerationModel(model) {
+		return "auto"
+	}
+	return model
+}
+
+func buildStreamingChatResponse(stream <-chan SSEEvent, req chatRequest, prompt string) *http.Response {
+	pr, pw := io.Pipe()
+	go streamChatCompletion(stream, req, prompt, pw)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       pr,
+	}
+}
+
+func streamChatCompletion(stream <-chan SSEEvent, req chatRequest, prompt string, pw *io.PipeWriter) {
+	defer pw.Close()
+	id := buildChatCompletionID("")
+	created := time.Now().Unix()
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = "auto"
+	}
+	writeChatStreamChunk(pw, id, created, model, "assistant", "", nil, nil)
+	state := &ChatSSEState{}
+	for ev := range stream {
+		delta, done, collectErr := CollectChatSSEEvent(ev, state)
+		if state.ConversationID != "" && strings.HasPrefix(id, "chatcmpl-chatgptimg-") {
+			id = buildChatCompletionID(state.ConversationID)
+		}
+		if collectErr != nil {
+			_ = pw.CloseWithError(collectErr)
+			return
+		}
+		if delta != "" {
+			writeChatStreamChunk(pw, id, created, model, "", delta, nil, nil)
+		}
+		if done {
+			break
+		}
+	}
+	finish := "stop"
+	usage := buildChatUsage(prompt, state.Content, model)
+	writeChatStreamChunk(pw, id, created, model, "", "", &finish, &usage)
+	writeChatDone(pw)
+}
+
+func writeChatStreamChunk(w io.Writer, id string, created int64, model, role, content string, finishReason *string, usage *dto.Usage) {
+	chunk := dto.ChatCompletionsStreamResponse{
+		Id:      id,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   model,
+		Choices: []dto.ChatCompletionsStreamResponseChoice{{
+			Index:        0,
+			FinishReason: finishReason,
+			Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+				Role: role,
+			},
+		}},
+		Usage: usage,
+	}
+	if content != "" {
+		chunk.Choices[0].Delta.SetContentString(content)
+	}
+	data, _ := common.Marshal(chunk)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+func writeChatDone(w io.Writer) {
+	_, _ = io.WriteString(w, "data: [DONE]\n\n")
+}
+
+func buildChatUsage(prompt, content, model string) dto.Usage {
+	promptTokens := service.CountTextToken(prompt, model)
+	completionTokens := service.CountTextToken(content, model)
+	if promptTokens == 0 && strings.TrimSpace(prompt) != "" {
+		promptTokens = 1
+	}
+	return dto.Usage{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		TotalTokens:      promptTokens + completionTokens,
+	}
+}
+
+func buildChatCompletionID(conversationID string) string {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		conversationID = uuid.NewString()
+	}
+	return "chatcmpl-chatgptimg-" + conversationID
 }
 
 func recordGenerationDrawingLog(info *relaycommon.RelayInfo, req generationRequest, run *imageRunResult, resp *generationResponse) {
@@ -274,7 +589,13 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if resp == nil {
 		return nil, types.NewError(errors.New("chatgpt image channel: nil response"), types.ErrorCodeBadResponse)
 	}
-	return openai.OpenaiHandlerWithUsage(c, info, resp)
+	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
+		return openai.OpenaiHandlerWithUsage(c, info, resp)
+	}
+	if info != nil && info.IsStream {
+		return openai.OaiStreamHandler(c, info, resp)
+	}
+	return openai.OpenaiHandler(c, info, resp)
 }
 
 func (a *Adaptor) GetModelList() []string { return ModelList }
