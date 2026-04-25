@@ -1043,13 +1043,13 @@ attemptLoop:
 				if attempt < maxAttempts {
 					continue attemptLoop
 				}
-				return nil, errors.New("chatgpt web channel: poll timeout")
+				return nil, noRelayRetry(errors.New("chatgpt web channel: poll timeout"), http.StatusGatewayTimeout)
 			default:
 				if attempt < maxAttempts {
 					continue attemptLoop
 				}
 				if pollStatus == PollStatusImageError {
-					return nil, imageGenerationUpstreamError()
+					return nil, noRelayRetry(imageGenerationUpstreamError(), http.StatusBadGateway)
 				}
 				if pollStatus == PollStatusRateLimited {
 					if len(lastPreviewFids) > 0 || len(lastPreviewSids) > 0 {
@@ -1060,9 +1060,9 @@ attemptLoop:
 						}
 						break
 					}
-					return nil, errors.New("chatgpt web channel: upstream rate limited while polling image result")
+					return nil, noRelayRetry(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
 				}
-				return nil, errors.New("chatgpt web channel: poll failed")
+				return nil, noRelayRetry(errors.New("chatgpt web channel: poll failed"), http.StatusBadGateway)
 			}
 			if len(fileRefs) > 0 {
 				break

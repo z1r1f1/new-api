@@ -963,6 +963,41 @@ func imageGenerationUpstreamError() error {
 	return fmt.Errorf("chatgpt web channel: upstream image generation failed: %s", imageGenerationUpstreamErrorText)
 }
 
+type noRelayRetryError struct {
+	err        error
+	statusCode int
+}
+
+func (e *noRelayRetryError) Error() string {
+	if e == nil || e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e *noRelayRetryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func (e *noRelayRetryError) SkipRelayRetry() bool { return true }
+
+func (e *noRelayRetryError) RelayStatusCode() int {
+	if e == nil || e.statusCode <= 0 {
+		return http.StatusInternalServerError
+	}
+	return e.statusCode
+}
+
+func noRelayRetry(err error, statusCode int) error {
+	if err == nil {
+		return nil
+	}
+	return &noRelayRetryError{err: err, statusCode: statusCode}
+}
+
 func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 	state := &ChatSSEState{}
 	for ev := range stream {
