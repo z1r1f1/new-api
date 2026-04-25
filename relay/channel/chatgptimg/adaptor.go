@@ -1002,10 +1002,13 @@ attemptLoop:
 			if testMode && convID != "" {
 				return result, nil
 			}
-			if len(sseResult.FileIDs) > 0 {
+			if len(sseResult.FileIDs) > 0 || len(sseResult.SedimentIDs) > 0 {
 				fileRefs = append(fileRefs, sseResult.FileIDs...)
 				for _, sid := range sseResult.SedimentIDs {
 					fileRefs = append(fileRefs, "sed:"+sid)
+				}
+				if len(sseResult.FileIDs) == 0 {
+					result.IsPreview = true
 				}
 				break
 			}

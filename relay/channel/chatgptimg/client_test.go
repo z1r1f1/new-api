@@ -35,6 +35,24 @@ func TestParseImageSSEUntilConversationReadyReturnsOnImageRef(t *testing.T) {
 	}
 }
 
+func TestParseImageSSECapturesSedimentOnlyRef(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"content":{"parts":[{"asset_pointer":"sediment://sed_only"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	result := ParseImageSSE(stream)
+	if result.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id, got %q", result.ConversationID)
+	}
+	if len(result.FileIDs) != 0 {
+		t.Fatalf("expected no file ids, got %#v", result.FileIDs)
+	}
+	if len(result.SedimentIDs) != 1 || result.SedimentIDs[0] != "sed_only" {
+		t.Fatalf("expected sediment id, got %#v", result.SedimentIDs)
+	}
+}
+
 func TestParseImageSSEDetectsUpstreamGenerationError(t *testing.T) {
 	stream := make(chan SSEEvent, 1)
 	stream <- SSEEvent{Data: []byte(`{"v":{"message":{"author":{"role":"assistant"},"content":{"parts":["We experienced an error when generating images."]}}}}`)}
