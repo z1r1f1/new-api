@@ -431,10 +431,10 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	fileRefs, hasFileRefs := imageRefsFromToolMsgs(toolMsgs)
 	if !hasFileRefs {
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
-			MaxWait:      90 * time.Second,
-			Interval:     3 * time.Second,
+			MaxWait:      60 * time.Second,
+			Interval:     10 * time.Second,
 			StableRounds: 2,
-			PreviewWait:  15 * time.Second,
+			PreviewWait:  20 * time.Second,
 		})
 		switch pollStatus {
 		case PollStatusIMG2, PollStatusPreviewOnly:
@@ -442,7 +442,7 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 			for _, sid := range sids {
 				fileRefs = append(fileRefs, "sed:"+sid)
 			}
-		case PollStatusError:
+		case PollStatusImageError:
 			return "", imageGenerationUpstreamError()
 		}
 	}
@@ -1052,8 +1052,11 @@ attemptLoop:
 				if attempt < maxAttempts {
 					continue attemptLoop
 				}
-				if pollStatus == PollStatusError {
+				if pollStatus == PollStatusImageError {
 					return nil, imageGenerationUpstreamError()
+				}
+				if pollStatus == PollStatusRateLimited {
+					return nil, errors.New("chatgpt web channel: upstream rate limited while polling image result")
 				}
 				return nil, errors.New("chatgpt web channel: poll failed")
 			}

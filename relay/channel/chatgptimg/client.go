@@ -1400,6 +1400,8 @@ const (
 	PollStatusPreviewOnly PollStatus = "preview_only"
 	PollStatusTimeout     PollStatus = "timeout"
 	PollStatusError       PollStatus = "error"
+	PollStatusRateLimited PollStatus = "rate_limited"
+	PollStatusImageError  PollStatus = "image_error"
 )
 
 func (c *Client) PollConversationForImages(ctx context.Context, convID string, opt PollOpts) (PollStatus, []string, []string) {
@@ -1433,7 +1435,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 			if ue, ok := err.(*UpstreamError); ok && ue.Status == http.StatusTooManyRequests {
 				consecutive429++
 				if consecutive429 >= 3 {
-					return PollStatusError, nil, nil
+					return PollStatusRateLimited, nil, nil
 				}
 				sleepContext(ctx, 10*time.Second)
 				continue
@@ -1443,7 +1445,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		}
 		consecutive429 = 0
 		if mappingContainsImageGenerationError(mapping) {
-			return PollStatusError, nil, nil
+			return PollStatusImageError, nil, nil
 		}
 		msgs := ExtractImageToolMsgs(mapping)
 		var newMsgs []ImageToolMsg
