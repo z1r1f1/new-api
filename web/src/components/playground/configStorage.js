@@ -66,6 +66,7 @@ const normalizeSession = (session) => {
     messages,
     createdAt: session?.createdAt || session?.timestamp || now,
     updatedAt: session?.updatedAt || session?.timestamp || now,
+    webConversationId: session?.webConversationId || '',
   };
 };
 
@@ -150,6 +151,26 @@ export const createPlaygroundSession = (messages = []) =>
     title: buildSessionTitle(messages),
     messages: normalizeMessages(messages),
   });
+
+export const updateSessionMetadata = (sessionId, metadata = {}) => {
+  try {
+    if (!sessionId || !metadata || Object.keys(metadata).length === 0) return;
+    const sessions = ensureSessions();
+    const now = new Date().toISOString();
+    const updatedSessions = sessions.map((session) =>
+      session.id === sessionId
+        ? normalizeSession({
+            ...session,
+            ...metadata,
+            updatedAt: metadata.updatedAt || now,
+          })
+        : session,
+    );
+    persistSessions(updatedSessions);
+  } catch (error) {
+    console.error('更新会话失败:', error);
+  }
+};
 
 export const loadSessionState = () => {
   const sessions = loadSessions();

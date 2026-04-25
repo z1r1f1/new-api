@@ -62,6 +62,19 @@ const imageResponseToMarkdown = (data) => {
 const buildImageTaskContentUrl = (taskId, index) =>
   `${API_ENDPOINTS.IMAGE_GENERATIONS}/${encodeURIComponent(taskId)}/image/${index}`;
 
+const extractChatGPTWebConversationId = (data) => {
+  const direct = data?.conversation_id || data?.conversationId;
+  if (typeof direct === 'string' && direct.trim()) {
+    return direct.trim();
+  }
+  const id = data?.id;
+  const prefix = 'chatcmpl-chatgptimg-';
+  if (typeof id === 'string' && id.startsWith(prefix)) {
+    return id.slice(prefix.length).trim();
+  }
+  return '';
+};
+
 const imageTaskResultToMessageContent = (taskId, taskResult) => {
   const resultData = taskResult?.data ?? taskResult;
   const items = Array.isArray(resultData?.data) ? resultData.data : [];
@@ -189,6 +202,7 @@ export const useApiRequest = (
   setActiveDebugTab,
   sseSourceRef,
   saveMessages,
+  onConversationId,
 ) => {
   const { t } = useTranslation();
 
@@ -392,6 +406,10 @@ export const useApiRequest = (
         }
 
         const taskData = await response.json();
+        const conversationId = extractChatGPTWebConversationId(taskData?.data);
+        if (conversationId && onConversationId) {
+          onConversationId(conversationId);
+        }
         setDebugData((prev) => ({
           ...prev,
           response: JSON.stringify(
@@ -422,7 +440,12 @@ export const useApiRequest = (
 
       throw new Error('图片生成任务轮询超时');
     },
-    [setActiveDebugTab, setDebugData, updatePendingImageGenerationMessage],
+    [
+      setActiveDebugTab,
+      setDebugData,
+      updatePendingImageGenerationMessage,
+      onConversationId,
+    ],
   );
 
   const completeImageGenerationMessage = useCallback(
@@ -600,6 +623,10 @@ export const useApiRequest = (
         }
 
         const submitData = await response.json();
+        const conversationId = extractChatGPTWebConversationId(submitData);
+        if (conversationId && onConversationId) {
+          onConversationId(conversationId);
+        }
 
         setDebugData((prev) => ({
           ...prev,
@@ -692,6 +719,7 @@ export const useApiRequest = (
       updatePendingImageGenerationMessage,
       finishImageGenerationTask,
       saveMessages,
+      onConversationId,
     ],
   );
 
@@ -740,6 +768,10 @@ export const useApiRequest = (
 
         try {
           const payload = JSON.parse(e.data);
+          const conversationId = extractChatGPTWebConversationId(payload);
+          if (conversationId && onConversationId) {
+            onConversationId(conversationId);
+          }
           responseData += e.data + '\n';
 
           if (!hasReceivedFirstResponse) {
@@ -886,6 +918,7 @@ export const useApiRequest = (
       completeMessage,
       t,
       applyAutoCollapseLogic,
+      onConversationId,
     ],
   );
 

@@ -49,12 +49,14 @@ type generationRequest struct {
 	Style           string   `json:"style,omitempty"`
 	ResponseFormat  string   `json:"response_format,omitempty"`
 	ReferenceImages []string `json:"reference_images,omitempty"`
+	ConversationID  string   `json:"conversation_id,omitempty"`
 }
 
 type generationResponse struct {
-	Created int64           `json:"created"`
-	Data    []dto.ImageData `json:"data"`
-	Usage   dto.Usage       `json:"usage"`
+	Created        int64           `json:"created"`
+	Data           []dto.ImageData `json:"data"`
+	Usage          dto.Usage       `json:"usage"`
+	ConversationID string          `json:"conversation_id,omitempty"`
 }
 
 type imageRunResult struct {
@@ -70,15 +72,17 @@ type chatRequest struct {
 	Messages       []dto.Message       `json:"messages,omitempty"`
 	Stream         *bool               `json:"stream,omitempty"`
 	ResponseFormat *dto.ResponseFormat `json:"response_format,omitempty"`
+	ConversationID string              `json:"conversation_id,omitempty"`
 }
 
 type chatResponse struct {
-	Id      string                         `json:"id"`
-	Object  string                         `json:"object"`
-	Created int64                          `json:"created"`
-	Model   string                         `json:"model"`
-	Choices []dto.OpenAITextResponseChoice `json:"choices"`
-	Usage   dto.Usage                      `json:"usage"`
+	Id             string                         `json:"id"`
+	Object         string                         `json:"object"`
+	Created        int64                          `json:"created"`
+	Model          string                         `json:"model"`
+	Choices        []dto.OpenAITextResponseChoice `json:"choices"`
+	Usage          dto.Usage                      `json:"usage"`
+	ConversationID string                         `json:"conversation_id,omitempty"`
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {}
@@ -95,7 +99,7 @@ func (a *Adaptor) ConvertAudioRequest(*gin.Context, *relaycommon.RelayInfo, dto.
 	return nil, errors.New("chatgpt web channel: audio endpoint not supported")
 }
 
-func (a *Adaptor) ConvertOpenAIRequest(_ *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
+func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) (any, error) {
 	if request == nil || len(request.Messages) == 0 {
 		return nil, errors.New("chatgpt web channel: messages are required")
 	}
@@ -111,6 +115,7 @@ func (a *Adaptor) ConvertOpenAIRequest(_ *gin.Context, info *relaycommon.RelayIn
 		Messages:       request.Messages,
 		Stream:         request.Stream,
 		ResponseFormat: request.ResponseFormat,
+		ConversationID: extractConversationIDFromRawBody(c),
 	}, nil
 }
 
@@ -146,6 +151,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	if converted.Model == "" {
 		converted.Model = ModelList[0]
 	}
+	converted.ConversationID = extractConversationIDFromImageRequest(request)
 
 	refs, err := extractReferenceImagesFromRequest(c, info, request)
 	if err != nil {
@@ -153,6 +159,37 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}
 	converted.ReferenceImages = refs
 	return converted, nil
+}
+
+func extractConversationIDFromImageRequest(request dto.ImageRequest) string {
+	if raw, ok := request.Extra["conversation_id"]; ok && len(raw) > 0 {
+		var conversationID string
+		if err := common.Unmarshal(raw, &conversationID); err == nil {
+			return strings.TrimSpace(conversationID)
+		}
+	}
+	return ""
+}
+
+func extractConversationIDFromRawBody(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return ""
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(body) == 0 {
+		return ""
+	}
+	var probe struct {
+		ConversationID string `json:"conversation_id"`
+	}
+	if err := common.Unmarshal(body, &probe); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(probe.ConversationID)
 }
 
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -255,18 +292,18 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		return nil, err
 	}
 	if req.Stream != nil && *req.Stream {
-		stream, err := startChatStream(c.Request.Context(), client, req, prompt)
+		started, err := startChatStream(c.Request.Context(), client, req, prompt)
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, stream, req, prompt), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, prompt, started.BaselineTools), nil
 	}
-	content, conversationID, err := runChatCompletion(c.Request.Context(), client, req, prompt)
+	content, conversationID, baselineTools, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
 	textContent := content
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baselineTools); err != nil {
 		return nil, err
 	} else if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
@@ -285,7 +322,8 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 			},
 			FinishReason: "stop",
 		}},
-		Usage: usage,
+		Usage:          usage,
+		ConversationID: conversationID,
 	}
 	payloadBytes, err := common.Marshal(respPayload)
 	if err != nil {
@@ -387,27 +425,32 @@ func messageTextContent(msg dto.Message) string {
 	return b.String()
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
-	stream, err := startChatStream(ctx, client, req, prompt)
-	if err != nil {
-		return "", "", err
-	}
-	result := ParseChatSSE(stream)
-	if result.Err != nil {
-		return "", result.ConversationID, result.Err
-	}
-	if containsImageGenerationUpstreamErrorText(result.Content) {
-		return "", result.ConversationID, imageGenerationUpstreamError()
-	}
-	if strings.TrimSpace(result.Content) == "" {
-		return "", result.ConversationID, errors.New("chatgpt web channel: empty chat response")
-	}
-	return result.Content, result.ConversationID, nil
+type chatStreamStart struct {
+	Stream        <-chan SSEEvent
+	BaselineTools map[string]struct{}
 }
 
-func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string) (string, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, map[string]struct{}, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	started, err := startChatStream(ctx, client, req, prompt)
+	if err != nil {
+		return "", "", nil, err
+	}
+	result := ParseChatSSE(started.Stream)
+	if result.Err != nil {
+		return "", result.ConversationID, started.BaselineTools, result.Err
+	}
+	if containsImageGenerationUpstreamErrorText(result.Content) {
+		return "", result.ConversationID, started.BaselineTools, imageGenerationUpstreamError()
+	}
+	if strings.TrimSpace(result.Content) == "" {
+		return "", result.ConversationID, started.BaselineTools, errors.New("chatgpt web channel: empty chat response")
+	}
+	return result.Content, result.ConversationID, started.BaselineTools, nil
+}
+
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baselineTools map[string]struct{}) (string, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
 		return "", nil
@@ -426,6 +469,15 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		return "", imageGenerationUpstreamError()
 	}
 	toolMsgs := ExtractImageToolMsgs(mapping)
+	if len(baselineTools) > 0 {
+		filtered := make([]ImageToolMsg, 0, len(toolMsgs))
+		for _, msg := range toolMsgs {
+			if _, ok := baselineTools[msg.MessageID]; !ok {
+				filtered = append(filtered, msg)
+			}
+		}
+		toolMsgs = filtered
+	}
 	if len(toolMsgs) == 0 {
 		return "", nil
 	}
@@ -433,10 +485,11 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	fileRefs, hasFileRefs := imageRefsFromToolMsgs(toolMsgs)
 	if !hasFileRefs {
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
-			MaxWait:      60 * time.Second,
-			Interval:     10 * time.Second,
-			StableRounds: 2,
-			PreviewWait:  20 * time.Second,
+			MaxWait:         60 * time.Second,
+			Interval:        10 * time.Second,
+			StableRounds:    2,
+			PreviewWait:     20 * time.Second,
+			BaselineToolIDs: baselineTools,
 		})
 		switch pollStatus {
 		case PollStatusIMG2, PollStatusPreviewOnly:
@@ -503,7 +556,7 @@ func appendMarkdownBlock(content, markdown string) string {
 	return content + "\n\n" + markdown
 }
 
-func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string) (<-chan SSEEvent, error) {
+func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string) (*chatStreamStart, error) {
 	cr, err := client.ChatRequirementsV2(ctx)
 	if err != nil {
 		return nil, err
@@ -512,10 +565,13 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 	if cr.Proofofwork.Required {
 		proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
 	}
+	convID := strings.TrimSpace(req.ConversationID)
+	parentID, baselineTools := prepareConversationContinuation(ctx, client, convID)
 	convOpt := ChatConvOpts{
 		Prompt:        prompt,
 		UpstreamModel: chatModelForWeb(req.Model),
-		ParentMsgID:   uuid.NewString(),
+		ConvID:        convID,
+		ParentMsgID:   parentID,
 		MessageID:     uuid.NewString(),
 		ChatToken:     cr.Token,
 		ProofToken:    proofToken,
@@ -524,7 +580,11 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 	if conduitToken, conduitErr := client.PrepareChatConversation(ctx, convOpt); conduitErr == nil {
 		convOpt.ConduitToken = conduitToken
 	}
-	return client.StreamChatConversation(ctx, convOpt)
+	stream, err := client.StreamChatConversation(ctx, convOpt)
+	if err != nil {
+		return nil, err
+	}
+	return &chatStreamStart{Stream: stream, BaselineTools: baselineTools}, nil
 }
 
 func chatModelForWeb(model string) string {
@@ -535,9 +595,9 @@ func chatModelForWeb(model string) string {
 	return model
 }
 
-func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baselineTools map[string]struct{}) *http.Response {
 	pr, pw := io.Pipe()
-	go streamChatCompletion(ctx, client, stream, req, prompt, pw)
+	go streamChatCompletion(ctx, client, stream, req, prompt, baselineTools, pw)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -545,7 +605,7 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 	}
 }
 
-func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, pw *io.PipeWriter) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baselineTools map[string]struct{}, pw *io.PipeWriter) {
 	defer pw.Close()
 	id := buildChatCompletionID("")
 	created := time.Now().Unix()
@@ -575,7 +635,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		_ = pw.CloseWithError(imageGenerationUpstreamError())
 		return
 	}
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baselineTools); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {
@@ -635,6 +695,23 @@ func buildChatCompletionID(conversationID string) string {
 		conversationID = uuid.NewString()
 	}
 	return "chatcmpl-chatgptimg-" + conversationID
+}
+
+func prepareConversationContinuation(ctx context.Context, client *Client, conversationID string) (string, map[string]struct{}) {
+	conversationID = strings.TrimSpace(conversationID)
+	if client == nil || conversationID == "" {
+		return uuid.NewString(), nil
+	}
+	mapping, err := client.GetConversationMapping(ctx, conversationID)
+	if err != nil {
+		return uuid.NewString(), nil
+	}
+	parentID, _ := mapping["current_node"].(string)
+	if strings.TrimSpace(parentID) == "" {
+		parentID = uuid.NewString()
+	}
+	rawMapping, _ := mapping["mapping"].(map[string]any)
+	return parentID, buildToolBaseline(rawMapping)
 }
 
 func recordGenerationDrawingLog(info *relaycommon.RelayInfo, req generationRequest, run *imageRunResult, resp *generationResponse) {
@@ -1016,10 +1093,9 @@ attemptLoop:
 				proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
 			}
 		}
-		convID = ""
-		parentID = uuid.NewString()
+		convID = strings.TrimSpace(req.ConversationID)
+		parentID, baselineTools = prepareConversationContinuation(ctx, client, convID)
 		messageID = uuid.NewString()
-		baselineTools = map[string]struct{}{}
 		lastPreviewFids = nil
 		lastPreviewSids = nil
 		fileRefs = nil
@@ -1210,8 +1286,9 @@ func buildGenerationResponse(ctx context.Context, client *Client, req generation
 		data = append(data, item)
 	}
 	return &generationResponse{
-		Created: time.Now().Unix(),
-		Data:    data,
+		Created:        time.Now().Unix(),
+		Data:           data,
+		ConversationID: strings.TrimSpace(run.ConversationID),
 		Usage: dto.Usage{
 			PromptTokens:     1,
 			CompletionTokens: len(data),

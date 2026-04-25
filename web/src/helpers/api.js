@@ -193,7 +193,12 @@ const buildImageConversationContext = (messages, lastUserIndex) => {
   return context.length > 4000 ? context.slice(-4000) : context;
 };
 
-const buildImageGenerationPayload = (messages, systemPrompt, inputs) => {
+const buildImageGenerationPayload = (
+  messages,
+  systemPrompt,
+  inputs,
+  sessionContext = {},
+) => {
   const lastUserIndex = (() => {
     for (let i = messages.length - 1; i >= 0; i -= 1) {
       if (messages[i].role === MESSAGE_ROLES.USER) return i;
@@ -201,10 +206,15 @@ const buildImageGenerationPayload = (messages, systemPrompt, inputs) => {
     return -1;
   })();
   const lastUserMessage = lastUserIndex >= 0 ? messages[lastUserIndex] : null;
-  const conversationContext = buildImageConversationContext(
-    messages,
-    lastUserIndex >= 0 ? lastUserIndex : messages.length,
-  );
+  const webConversationId = String(
+    sessionContext.webConversationId || '',
+  ).trim();
+  const conversationContext = webConversationId
+    ? ''
+    : buildImageConversationContext(
+        messages,
+        lastUserIndex >= 0 ? lastUserIndex : messages.length,
+      );
   const promptParts = [];
   if (systemPrompt && systemPrompt.trim()) {
     promptParts.push(systemPrompt.trim());
@@ -223,17 +233,22 @@ const buildImageGenerationPayload = (messages, systemPrompt, inputs) => {
       normalizeImageReferenceUrl,
     ),
   );
-  const priorImageUrls = dedupeStrings(
-    messages
-      .slice(0, lastUserIndex >= 0 ? lastUserIndex : messages.length)
-      .flatMap((msg) => extractImageUrlsFromContent(msg.content))
-      .map(normalizeImageReferenceUrl),
-  );
+  const priorImageUrls = webConversationId
+    ? []
+    : dedupeStrings(
+        messages
+          .slice(0, lastUserIndex >= 0 ? lastUserIndex : messages.length)
+          .flatMap((msg) => extractImageUrlsFromContent(msg.content))
+          .map(normalizeImageReferenceUrl),
+      );
   const payload = {
     model: inputs.model,
     group: inputs.group,
     prompt: promptParts.filter(Boolean).join('\n\n'),
   };
+  if (webConversationId) {
+    payload.conversation_id = webConversationId;
+  }
   if (imageUrls.length === 1) {
     payload.image = imageUrls[0];
   } else if (imageUrls.length > 1) {
@@ -251,14 +266,30 @@ export const buildApiPayload = (
   systemPrompt,
   inputs,
   parameterEnabled,
+  sessionContext = {},
 ) => {
-  const processedMessages = messages
+  let processedMessages = messages
     .filter(isValidMessage)
     .map(formatMessageForAPI)
     .filter(Boolean);
 
   if (isImageGenerationModel(inputs.model)) {
-    return buildImageGenerationPayload(processedMessages, systemPrompt, inputs);
+    return buildImageGenerationPayload(
+      processedMessages,
+      systemPrompt,
+      inputs,
+      sessionContext,
+    );
+  }
+
+  const webConversationId = String(
+    sessionContext.webConversationId || '',
+  ).trim();
+  if (webConversationId) {
+    const lastUserMessage = [...processedMessages]
+      .reverse()
+      .find((msg) => msg.role === MESSAGE_ROLES.USER);
+    processedMessages = lastUserMessage ? [lastUserMessage] : [];
   }
 
   // 如果有系统提示，插入到消息开头
@@ -275,6 +306,9 @@ export const buildApiPayload = (
     messages: processedMessages,
     stream: inputs.stream,
   };
+  if (webConversationId) {
+    payload.conversation_id = webConversationId;
+  }
 
   // 添加启用的参数
   const parameterMappings = {

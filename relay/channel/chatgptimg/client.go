@@ -1513,12 +1513,14 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		if mappingContainsImageGenerationError(mapping) {
 			return PollStatusImageError, nil, nil
 		}
-		mappingFileIDs, mappingSedimentIDs := ExtractImageRefsFromMapping(mapping)
-		if len(mappingFileIDs) > 0 {
-			return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
-		}
-		if len(mappingSedimentIDs) > 0 && len(baseline) == 0 {
-			return PollStatusPreviewOnly, nil, mappingSedimentIDs
+		if len(baseline) == 0 {
+			mappingFileIDs, mappingSedimentIDs := ExtractImageRefsFromMapping(mapping)
+			if len(mappingFileIDs) > 0 {
+				return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
+			}
+			if len(mappingSedimentIDs) > 0 {
+				return PollStatusPreviewOnly, nil, mappingSedimentIDs
+			}
 		}
 		msgs := ExtractImageToolMsgs(mapping)
 		var newMsgs []ImageToolMsg

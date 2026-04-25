@@ -33,6 +33,7 @@ export const useMessageEdit = (
   parameterEnabled,
   sendRequest,
   saveMessages,
+  sessionContext = {},
 ) => {
   const { t } = useTranslation();
   const [editingMessageId, setEditingMessageId] = useState(null);
@@ -102,6 +103,7 @@ export const useMessageEdit = (
                   null,
                   inputs,
                   parameterEnabled,
+                  sessionContext,
                 );
                 setMessage((prevMsg) => [
                   ...prevMsg,
@@ -138,6 +140,7 @@ export const useMessageEdit = (
     sendRequest,
     setMessage,
     saveMessages,
+    sessionContext,
   ]);
 
   const handleEditCancel = useCallback(() => {

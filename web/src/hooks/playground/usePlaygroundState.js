@@ -35,6 +35,7 @@ import {
   loadSessionState,
   saveActiveSessionId,
   createPlaygroundSession,
+  updateSessionMetadata,
 } from '../../components/playground/configStorage';
 import { processIncompleteThinkTags } from '../../helpers';
 
@@ -183,6 +184,20 @@ export const usePlaygroundState = () => {
     return newSession;
   }, [activeSessionId, message]);
 
+  const activeSession =
+    sessions.find((session) => session.id === activeSessionId) || null;
+
+  const updateActiveSessionMetadata = useCallback(
+    (metadata = {}) => {
+      if (!activeSessionId || !metadata || Object.keys(metadata).length === 0) {
+        return;
+      }
+      updateSessionMetadata(activeSessionId, metadata);
+      setSessions(loadSessions());
+    },
+    [activeSessionId],
+  );
+
   // 配置保存
   const debouncedSaveConfig = useCallback(() => {
     if (saveConfigTimeoutRef.current) {
@@ -325,6 +340,7 @@ export const usePlaygroundState = () => {
     status,
     sessions,
     activeSessionId,
+    activeSession,
 
     // 消息状态
     message,
@@ -367,6 +383,7 @@ export const usePlaygroundState = () => {
     saveMessagesImmediately,
     switchPlaygroundSession,
     createNewPlaygroundSession,
+    updateActiveSessionMetadata,
     handleConfigImport,
     handleConfigReset,
   };

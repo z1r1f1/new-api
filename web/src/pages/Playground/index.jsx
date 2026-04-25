@@ -98,6 +98,7 @@ const Playground = () => {
     status,
     sessions,
     activeSessionId,
+    activeSession,
     message,
     debugData,
     activeDebugTab,
@@ -110,6 +111,7 @@ const Playground = () => {
     saveMessagesImmediately,
     switchPlaygroundSession,
     createNewPlaygroundSession,
+    updateActiveSessionMetadata,
     handleConfigImport,
     handleConfigReset,
     setShowSettings,
@@ -133,6 +135,11 @@ const Playground = () => {
       setActiveDebugTab,
       sseSourceRef,
       saveMessagesImmediately,
+      (conversationId) => {
+        if (conversationId) {
+          updateActiveSessionMetadata({ webConversationId: conversationId });
+        }
+      },
     );
 
   const resumedImageTaskOnMountRef = useRef(false);
@@ -177,6 +184,7 @@ const Playground = () => {
     parameterEnabled,
     sendRequest,
     saveMessagesImmediately,
+    { webConversationId: activeSession?.webConversationId },
   );
 
   // 消息和自定义请求体同步
@@ -259,12 +267,21 @@ const Playground = () => {
         }
       }
 
-      return buildApiPayload(messages, null, inputs, parameterEnabled);
+      return buildApiPayload(messages, null, inputs, parameterEnabled, {
+        webConversationId: activeSession?.webConversationId,
+      });
     } catch (error) {
       console.error('构造预览请求体失败:', error);
       return null;
     }
-  }, [inputs, parameterEnabled, message, customRequestMode, customRequestBody]);
+  }, [
+    inputs,
+    parameterEnabled,
+    message,
+    customRequestMode,
+    customRequestBody,
+    activeSession?.webConversationId,
+  ]);
 
   // 发送消息
   function onMessageSend(content, attachment) {
@@ -318,6 +335,9 @@ const Playground = () => {
         null,
         inputs,
         parameterEnabled,
+        {
+          webConversationId: activeSession?.webConversationId,
+        },
       );
       sendRequest(payload, inputs.stream);
 

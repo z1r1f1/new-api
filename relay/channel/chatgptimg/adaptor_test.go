@@ -67,3 +67,22 @@ func TestParsePlaygroundImageReference(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertImageRequestCarriesConversationID(t *testing.T) {
+	raw := []byte(`{"model":"gpt-image-2","prompt":"draw","conversation_id":"conv-123"}`)
+	var req dto.ImageRequest
+	if err := req.UnmarshalJSON(raw); err != nil {
+		t.Fatalf("UnmarshalJSON returned error: %v", err)
+	}
+	converted, err := (&Adaptor{}).ConvertImageRequest(nil, nil, req)
+	if err != nil {
+		t.Fatalf("ConvertImageRequest returned error: %v", err)
+	}
+	got, ok := converted.(generationRequest)
+	if !ok {
+		t.Fatalf("expected generationRequest, got %T", converted)
+	}
+	if got.ConversationID != "conv-123" {
+		t.Fatalf("expected conversation id conv-123, got %q", got.ConversationID)
+	}
+}
