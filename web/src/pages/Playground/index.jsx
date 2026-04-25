@@ -96,6 +96,8 @@ const Playground = () => {
     models,
     groups,
     status,
+    sessions,
+    activeSessionId,
     message,
     debugData,
     activeDebugTab,
@@ -106,6 +108,8 @@ const Playground = () => {
     handleParameterToggle,
     debouncedSaveConfig,
     saveMessagesImmediately,
+    switchPlaygroundSession,
+    createNewPlaygroundSession,
     handleConfigImport,
     handleConfigReset,
     setShowSettings,
@@ -481,18 +485,40 @@ const Playground = () => {
       sseSourceRef.current.close();
       sseSourceRef.current = null;
     }
-    setMessage([]);
+    createNewPlaygroundSession();
     resetDebugState();
     handleInputChange('imageEnabled', false);
     handleInputChange('imageUrls', []);
-    setTimeout(() => saveMessagesImmediately([]), 0);
   }, [
+    createNewPlaygroundSession,
     handleInputChange,
     resetDebugState,
-    saveMessagesImmediately,
-    setMessage,
     sseSourceRef,
   ]);
+
+  const handleSessionChange = useCallback(
+    (sessionId) => {
+      if (sessionId === activeSessionId) return;
+      if (sseSourceRef.current) {
+        sseSourceRef.current.close();
+        sseSourceRef.current = null;
+      }
+      saveMessagesImmediately(message);
+      switchPlaygroundSession(sessionId);
+      resetDebugState();
+      handleInputChange('imageEnabled', false);
+      handleInputChange('imageUrls', []);
+    },
+    [
+      activeSessionId,
+      handleInputChange,
+      message,
+      resetDebugState,
+      saveMessagesImmediately,
+      switchPlaygroundSession,
+      sseSourceRef,
+    ],
+  );
 
   // 处理粘贴图片
   const handlePasteImage = useCallback(
@@ -560,6 +586,8 @@ const Playground = () => {
                   chatRef={chatRef}
                   message={message}
                   inputs={inputs}
+                  sessions={sessions}
+                  activeSessionId={activeSessionId}
                   styleState={styleState}
                   showDebugPanel={showDebugPanel}
                   roleInfo={roleInfo}
@@ -570,6 +598,7 @@ const Playground = () => {
                   onStopGenerator={onStopGenerator}
                   onClearMessages={handleClearMessages}
                   onNewSession={handleNewSession}
+                  onSessionChange={handleSessionChange}
                   onToggleDebugPanel={() => setShowDebugPanel(!showDebugPanel)}
                   renderCustomChatContent={renderCustomChatContent}
                   renderChatBoxAction={renderChatBoxAction}

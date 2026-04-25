@@ -21,8 +21,146 @@ import {
   STORAGE_KEYS,
   DEFAULT_CONFIG,
 } from '../../constants/playground.constants';
+import { getTextContent } from '../../helpers/utils';
 
-const MESSAGES_STORAGE_KEY = 'playground_messages';
+const MAX_SESSION_COUNT = 30;
+
+const generateSessionId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return `pg_${crypto.randomUUID()}`;
+  }
+  return `pg_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const parseJSON = (value, fallback = null) => {
+  if (!value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (_) {
+    return fallback;
+  }
+};
+
+const getFirstUserText = (messages = []) => {
+  const userMessage = messages.find((item) => item?.role === 'user');
+  return getTextContent(userMessage).trim();
+};
+
+const buildSessionTitle = (messages = []) => {
+  const firstUserText = getFirstUserText(messages);
+  if (!firstUserText) return '新会话';
+  return firstUserText.length > 24
+    ? `${firstUserText.slice(0, 24)}...`
+    : firstUserText;
+};
+
+const normalizeMessages = (messages) =>
+  Array.isArray(messages) ? messages : [];
+
+const normalizeSession = (session) => {
+  const now = new Date().toISOString();
+  const messages = normalizeMessages(session?.messages);
+  return {
+    id: session?.id || generateSessionId(),
+    title: session?.title || buildSessionTitle(messages),
+    messages,
+    createdAt: session?.createdAt || session?.timestamp || now,
+    updatedAt: session?.updatedAt || session?.timestamp || now,
+  };
+};
+
+const trimSessions = (sessions) =>
+  [...sessions]
+    .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0))
+    .slice(0, MAX_SESSION_COUNT);
+
+const getStoredSessions = () => {
+  const parsed = parseJSON(localStorage.getItem(STORAGE_KEYS.SESSIONS), []);
+  return Array.isArray(parsed) ? parsed.map(normalizeSession) : [];
+};
+
+const persistSessions = (sessions) => {
+  localStorage.setItem(
+    STORAGE_KEYS.SESSIONS,
+    JSON.stringify(trimSessions(sessions.map(normalizeSession))),
+  );
+};
+
+const getLegacyMessages = () => {
+  const parsed = parseJSON(localStorage.getItem(STORAGE_KEYS.MESSAGES), null);
+  return normalizeMessages(parsed?.messages);
+};
+
+const ensureSessions = () => {
+  const existingSessions = getStoredSessions();
+  if (existingSessions.length > 0) return trimSessions(existingSessions);
+
+  const legacyMessages = getLegacyMessages();
+  const initialSession = normalizeSession({
+    id: generateSessionId(),
+    title: buildSessionTitle(legacyMessages),
+    messages: legacyMessages,
+  });
+  persistSessions([initialSession]);
+  localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, initialSession.id);
+  return [initialSession];
+};
+
+export const loadSessions = () => ensureSessions();
+
+export const saveSessions = (sessions) => {
+  try {
+    persistSessions(Array.isArray(sessions) ? sessions : []);
+  } catch (error) {
+    console.error('保存会话失败:', error);
+  }
+};
+
+export const loadActiveSessionId = () => {
+  try {
+    const sessions = ensureSessions();
+    const storedActiveId = localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
+    const activeSession = sessions.find((item) => item.id === storedActiveId);
+    if (activeSession) return activeSession.id;
+
+    const fallbackId = sessions[0]?.id || null;
+    if (fallbackId) {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, fallbackId);
+    }
+    return fallbackId;
+  } catch (error) {
+    console.error('加载当前会话失败:', error);
+    return null;
+  }
+};
+
+export const saveActiveSessionId = (sessionId) => {
+  try {
+    if (sessionId) {
+      localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, sessionId);
+    }
+  } catch (error) {
+    console.error('保存当前会话失败:', error);
+  }
+};
+
+export const createPlaygroundSession = (messages = []) =>
+  normalizeSession({
+    id: generateSessionId(),
+    title: buildSessionTitle(messages),
+    messages: normalizeMessages(messages),
+  });
+
+export const loadSessionState = () => {
+  const sessions = loadSessions();
+  const activeSessionId = loadActiveSessionId();
+  const activeSession = sessions.find((item) => item.id === activeSessionId);
+  return {
+    sessions,
+    activeSessionId,
+    messages: activeSession?.messages || null,
+  };
+};
 
 /**
  * 保存配置到 localStorage
@@ -43,14 +181,51 @@ export const saveConfig = (config) => {
 /**
  * 保存消息到 localStorage
  * @param {Array} messages - 要保存的消息数组
+ * @param {string|null} sessionId - 要更新的会话 ID；为空时更新当前会话
  */
-export const saveMessages = (messages) => {
+export const saveMessages = (messages, sessionId = null) => {
   try {
+    const normalizedMessages = normalizeMessages(messages);
     const messagesToSave = {
-      messages,
+      messages: normalizedMessages,
       timestamp: new Date().toISOString(),
     };
     localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messagesToSave));
+
+    const sessions = ensureSessions();
+    const activeId = sessionId || loadActiveSessionId() || sessions[0]?.id;
+    if (!activeId) return;
+
+    const now = new Date().toISOString();
+    let found = false;
+    const updatedSessions = sessions.map((session) => {
+      if (session.id !== activeId) return session;
+      found = true;
+      const title =
+        session.title && session.title !== '新会话'
+          ? session.title
+          : buildSessionTitle(normalizedMessages);
+      return normalizeSession({
+        ...session,
+        title,
+        messages: normalizedMessages,
+        updatedAt: now,
+      });
+    });
+
+    if (!found) {
+      updatedSessions.unshift(
+        normalizeSession({
+          id: activeId,
+          title: buildSessionTitle(normalizedMessages),
+          messages: normalizedMessages,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+    }
+
+    persistSessions(updatedSessions);
   } catch (error) {
     console.error('保存消息失败:', error);
   }
@@ -102,11 +277,8 @@ export const loadConfig = () => {
  */
 export const loadMessages = () => {
   try {
-    const savedMessages = localStorage.getItem(STORAGE_KEYS.MESSAGES);
-    if (savedMessages) {
-      const parsedMessages = JSON.parse(savedMessages);
-      return parsedMessages.messages || null;
-    }
+    const { messages } = loadSessionState();
+    return messages || null;
   } catch (error) {
     console.error('加载消息失败:', error);
   }
@@ -121,6 +293,8 @@ export const clearConfig = () => {
   try {
     localStorage.removeItem(STORAGE_KEYS.CONFIG);
     localStorage.removeItem(STORAGE_KEYS.MESSAGES); // 同时清除消息
+    localStorage.removeItem(STORAGE_KEYS.SESSIONS);
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID);
   } catch (error) {
     console.error('清除配置失败:', error);
   }
@@ -132,6 +306,10 @@ export const clearConfig = () => {
 export const clearMessages = () => {
   try {
     localStorage.removeItem(STORAGE_KEYS.MESSAGES);
+    const activeId = loadActiveSessionId();
+    if (activeId) {
+      saveMessages([], activeId);
+    }
   } catch (error) {
     console.error('清除消息失败:', error);
   }
@@ -177,8 +355,10 @@ export const exportConfig = (config, messages = null) => {
     const configToExport = {
       ...config,
       messages: messages || loadMessages(), // 包含消息数据
+      sessions: loadSessions(),
+      activeSessionId: loadActiveSessionId(),
       exportTime: new Date().toISOString(),
-      version: '1.0',
+      version: '1.1',
     };
 
     const dataStr = JSON.stringify(configToExport, null, 2);
@@ -209,8 +389,18 @@ export const importConfig = (file) => {
           const importedConfig = JSON.parse(e.target.result);
 
           if (importedConfig.inputs && importedConfig.parameterEnabled) {
-            // 如果导入的配置包含消息，也一起导入
             if (
+              importedConfig.sessions &&
+              Array.isArray(importedConfig.sessions) &&
+              importedConfig.sessions.length > 0
+            ) {
+              const normalizedSessions =
+                importedConfig.sessions.map(normalizeSession);
+              saveSessions(normalizedSessions);
+              saveActiveSessionId(
+                importedConfig.activeSessionId || normalizedSessions[0]?.id,
+              );
+            } else if (
               importedConfig.messages &&
               Array.isArray(importedConfig.messages)
             ) {

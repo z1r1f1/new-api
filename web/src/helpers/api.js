@@ -121,7 +121,18 @@ export const isImageGenerationModel = (model) => {
 
 const extractImageUrlsFromContent = (content) => {
   if (!Array.isArray(content)) {
-    return [];
+    if (typeof content !== 'string') {
+      return [];
+    }
+    const markdownImageUrls = [];
+    const imageRegex = /!\[[^\]]*]\(([^)]+)\)/g;
+    let match;
+    while ((match = imageRegex.exec(content)) !== null) {
+      if (match[1]) {
+        markdownImageUrls.push(match[1]);
+      }
+    }
+    return markdownImageUrls;
   }
   return content
     .filter((item) => item?.type === 'image_url')
@@ -130,17 +141,94 @@ const extractImageUrlsFromContent = (content) => {
     .map((url) => url.trim());
 };
 
+const normalizeImageReferenceUrl = (url) => {
+  const trimmed = String(url || '').trim();
+  if (!trimmed) return '';
+  if (
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://')
+  ) {
+    return trimmed;
+  }
+  if (trimmed.startsWith('/') && typeof window !== 'undefined') {
+    return `${window.location.origin}${trimmed}`;
+  }
+  return trimmed;
+};
+
+const dedupeStrings = (items) => {
+  const seen = new Set();
+  return items.filter((item) => {
+    const value = String(item || '').trim();
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
+};
+
+const buildImageConversationContext = (messages, lastUserIndex) => {
+  const contextMessages = messages.slice(
+    Math.max(0, lastUserIndex - 8),
+    lastUserIndex,
+  );
+  const parts = contextMessages
+    .map((msg) => {
+      const text = getTextContent(msg).trim();
+      const images = extractImageUrlsFromContent(msg.content);
+      const roleLabel =
+        msg.role === MESSAGE_ROLES.USER
+          ? '用户'
+          : msg.role === MESSAGE_ROLES.ASSISTANT
+            ? '助手'
+            : '系统';
+      const imageNote =
+        images.length > 0 ? `\n[该消息包含 ${images.length} 张图片]` : '';
+      const content = [text, imageNote].filter(Boolean).join('');
+      return content ? `${roleLabel}: ${content}` : '';
+    })
+    .filter(Boolean);
+
+  const context = parts.join('\n');
+  return context.length > 4000 ? context.slice(-4000) : context;
+};
+
 const buildImageGenerationPayload = (messages, systemPrompt, inputs) => {
-  const lastUserMessage = [...messages]
-    .reverse()
-    .find((msg) => msg.role === MESSAGE_ROLES.USER);
+  const lastUserIndex = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === MESSAGE_ROLES.USER) return i;
+    }
+    return -1;
+  })();
+  const lastUserMessage = lastUserIndex >= 0 ? messages[lastUserIndex] : null;
+  const conversationContext = buildImageConversationContext(
+    messages,
+    lastUserIndex >= 0 ? lastUserIndex : messages.length,
+  );
   const promptParts = [];
   if (systemPrompt && systemPrompt.trim()) {
     promptParts.push(systemPrompt.trim());
   }
+  if (conversationContext) {
+    promptParts.push(
+      '以下是当前操练场会话上文，请在生成图片时保持这些上下文：',
+    );
+    promptParts.push(conversationContext);
+    promptParts.push('用户最新要求：');
+  }
   promptParts.push(getTextContent(lastUserMessage) || '生成一张图片');
 
-  const imageUrls = extractImageUrlsFromContent(lastUserMessage?.content);
+  const imageUrls = dedupeStrings(
+    extractImageUrlsFromContent(lastUserMessage?.content).map(
+      normalizeImageReferenceUrl,
+    ),
+  );
+  const priorImageUrls = dedupeStrings(
+    messages
+      .slice(0, lastUserIndex >= 0 ? lastUserIndex : messages.length)
+      .flatMap((msg) => extractImageUrlsFromContent(msg.content))
+      .map(normalizeImageReferenceUrl),
+  );
   const payload = {
     model: inputs.model,
     group: inputs.group,
@@ -150,6 +238,9 @@ const buildImageGenerationPayload = (messages, systemPrompt, inputs) => {
     payload.image = imageUrls[0];
   } else if (imageUrls.length > 1) {
     payload.image = imageUrls;
+  }
+  if (priorImageUrls.length > 0) {
+    payload.reference_images = priorImageUrls;
   }
   return payload;
 };

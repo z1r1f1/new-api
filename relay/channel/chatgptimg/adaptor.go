@@ -9,7 +9,9 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -841,6 +843,9 @@ func decodeReferenceInput(ref string, index int) ([]byte, string, error) {
 	if ref == "" {
 		return nil, "", errors.New("empty reference image")
 	}
+	if data, fileName, ok, err := decodePlaygroundImageReference(ref, index); ok {
+		return data, fileName, err
+	}
 	if strings.HasPrefix(ref, "data:") {
 		comma := strings.Index(ref, ",")
 		if comma < 0 {
@@ -882,6 +887,78 @@ func decodeReferenceInput(ref string, index int) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("decode reference image base64 failed: %w", err)
 	}
 	return decoded, fmt.Sprintf("reference-%d.png", index+1), nil
+}
+
+func decodePlaygroundImageReference(ref string, index int) ([]byte, string, bool, error) {
+	taskID, imageIndex, ok := parsePlaygroundImageReference(ref)
+	if !ok {
+		return nil, "", false, nil
+	}
+
+	task, exist, err := model.GetByOnlyTaskId(taskID)
+	if err != nil {
+		return nil, "", true, fmt.Errorf("load playground image reference failed: %w", err)
+	}
+	if !exist || task == nil || len(task.Data) == 0 {
+		return nil, "", true, fmt.Errorf("playground image reference not found: %s", taskID)
+	}
+
+	var payload struct {
+		Data []struct {
+			URL     string `json:"url"`
+			B64JSON string `json:"b64_json"`
+		} `json:"data"`
+	}
+	if err := common.Unmarshal(task.Data, &payload); err != nil {
+		return nil, "", true, fmt.Errorf("parse playground image reference failed: %w", err)
+	}
+	if imageIndex < 0 || imageIndex >= len(payload.Data) {
+		return nil, "", true, fmt.Errorf("playground image reference index out of range: %d", imageIndex)
+	}
+
+	item := payload.Data[imageIndex]
+	if strings.TrimSpace(item.B64JSON) != "" {
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(item.B64JSON))
+		if err != nil {
+			return nil, "", true, fmt.Errorf("decode playground image b64_json failed: %w", err)
+		}
+		return decoded, fmt.Sprintf("reference-%d.png", index+1), true, nil
+	}
+	if imageURL := strings.TrimSpace(item.URL); imageURL != "" {
+		data, fileName, err := decodeReferenceInput(imageURL, index)
+		return data, fileName, true, err
+	}
+
+	return nil, "", true, errors.New("playground image reference has no image data")
+}
+
+func parsePlaygroundImageReference(ref string) (string, int, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", 0, false
+	}
+	path := ref
+	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
+		parsed, err := url.Parse(ref)
+		if err != nil {
+			return "", 0, false
+		}
+		path = parsed.Path
+	}
+
+	const prefix = "/pg/images/generations/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	if len(parts) != 3 || parts[0] == "" || parts[1] != "image" {
+		return "", 0, false
+	}
+	imageIndex, err := strconv.Atoi(parts[2])
+	if err != nil || imageIndex < 0 {
+		return "", 0, false
+	}
+	return parts[0], imageIndex, true
 }
 
 func guessExtensionFromDataURLMeta(meta string) string {

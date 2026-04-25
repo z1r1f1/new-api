@@ -44,3 +44,26 @@ func TestConvertOpenAIRequestAllowsChat(t *testing.T) {
 		t.Fatalf("unexpected converted request: %#v", req)
 	}
 }
+
+func TestParsePlaygroundImageReference(t *testing.T) {
+	cases := []struct {
+		name      string
+		ref       string
+		wantTask  string
+		wantIndex int
+		wantOK    bool
+	}{
+		{name: "relative", ref: "/pg/images/generations/task_abc/image/2", wantTask: "task_abc", wantIndex: 2, wantOK: true},
+		{name: "absolute", ref: "https://example.com/pg/images/generations/task_xyz/image/0", wantTask: "task_xyz", wantIndex: 0, wantOK: true},
+		{name: "invalid", ref: "https://example.com/not-an-image", wantOK: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotTask, gotIndex, gotOK := parsePlaygroundImageReference(tc.ref)
+			if gotOK != tc.wantOK || gotTask != tc.wantTask || gotIndex != tc.wantIndex {
+				t.Fatalf("parsePlaygroundImageReference(%q) = (%q, %d, %v), want (%q, %d, %v)", tc.ref, gotTask, gotIndex, gotOK, tc.wantTask, tc.wantIndex, tc.wantOK)
+			}
+		})
+	}
+}

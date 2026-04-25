@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 import React from 'react';
-import { Card, Chat, Typography, Button } from '@douyinfe/semi-ui';
+import { Card, Chat, Typography, Button, Select } from '@douyinfe/semi-ui';
 import { MessageSquare, Eye, EyeOff, PlusCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import CustomInputRender from './CustomInputRender';
@@ -27,6 +27,8 @@ const ChatArea = ({
   chatRef,
   message,
   inputs,
+  sessions = [],
+  activeSessionId,
   styleState,
   showDebugPanel,
   roleInfo,
@@ -37,6 +39,7 @@ const ChatArea = ({
   onStopGenerator,
   onClearMessages,
   onNewSession,
+  onSessionChange,
   onToggleDebugPanel,
   renderCustomChatContent,
   renderChatBoxAction,
@@ -46,6 +49,15 @@ const ChatArea = ({
   const renderInputArea = React.useCallback((props) => {
     return <CustomInputRender {...props} />;
   }, []);
+
+  const sessionOptions = React.useMemo(
+    () =>
+      sessions.map((session) => ({
+        label: session.title || t('新会话'),
+        value: session.id,
+      })),
+    [sessions, t],
+  );
 
   return (
     <Card
@@ -61,7 +73,20 @@ const ChatArea = ({
     >
       {/* 聊天头部 */}
       {styleState.isMobile ? (
-        <div className='pt-4'></div>
+        <div className='pt-4 px-4 pb-2'>
+          {sessionOptions.length > 0 && (
+            <Select
+              value={activeSessionId}
+              optionList={sessionOptions}
+              onChange={onSessionChange}
+              size='small'
+              className='w-full'
+              placeholder={t('选择会话')}
+              showClear={false}
+              filter
+            />
+          )}
+        </div>
       ) : (
         <div className='px-6 py-4 bg-gradient-to-r from-purple-500 to-blue-500 rounded-t-2xl'>
           <div className='flex items-center justify-between'>
@@ -79,6 +104,18 @@ const ChatArea = ({
               </div>
             </div>
             <div className='flex items-center gap-2'>
+              {sessionOptions.length > 0 && (
+                <Select
+                  value={activeSessionId}
+                  optionList={sessionOptions}
+                  onChange={onSessionChange}
+                  size='small'
+                  className='min-w-[160px] max-w-[240px]'
+                  placeholder={t('选择会话')}
+                  showClear={false}
+                  filter
+                />
+              )}
               <Button
                 icon={<PlusCircle size={14} />}
                 onClick={onNewSession}

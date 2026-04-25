@@ -20,7 +20,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
-  DEFAULT_MESSAGES,
   getDefaultMessages,
   DEFAULT_CONFIG,
   DEBUG_TABS,
@@ -31,6 +30,11 @@ import {
   saveConfig,
   loadMessages,
   saveMessages,
+  loadSessions,
+  saveSessions,
+  loadSessionState,
+  saveActiveSessionId,
+  createPlaygroundSession,
 } from '../../components/playground/configStorage';
 import { processIncompleteThinkTags } from '../../helpers';
 
@@ -39,8 +43,9 @@ export const usePlaygroundState = () => {
 
   // 使用惰性初始化，确保只在组件首次挂载时加载配置和消息
   const [savedConfig] = useState(() => loadConfig());
+  const [initialSessionState] = useState(() => loadSessionState());
   const [initialMessages] = useState(() => {
-    const loaded = loadMessages();
+    const loaded = initialSessionState.messages || loadMessages();
     // 检查是否是旧的中文默认消息，如果是则清除
     if (
       loaded &&
@@ -84,6 +89,12 @@ export const usePlaygroundState = () => {
   const [models, setModels] = useState([]);
   const [groups, setGroups] = useState([]);
   const [status, setStatus] = useState({});
+  const [sessions, setSessions] = useState(
+    () => initialSessionState.sessions || [],
+  );
+  const [activeSessionId, setActiveSessionId] = useState(
+    () => initialSessionState.activeSessionId || null,
+  );
 
   // 消息相关状态 - 使用加载的消息或默认消息初始化
   const [message, setMessage] = useState(
@@ -117,7 +128,6 @@ export const usePlaygroundState = () => {
   const sseSourceRef = useRef(null);
   const chatRef = useRef(null);
   const saveConfigTimeoutRef = useRef(null);
-  const saveMessagesTimeoutRef = useRef(null);
 
   // 配置更新函数
   const handleInputChange = useCallback((name, value) => {
@@ -135,10 +145,43 @@ export const usePlaygroundState = () => {
   const saveMessagesImmediately = useCallback(
     (messagesToSave) => {
       // 如果提供了参数，使用参数；否则使用当前状态
-      saveMessages(messagesToSave || message);
+      saveMessages(messagesToSave || message, activeSessionId);
+      setSessions(loadSessions());
     },
-    [message],
+    [message, activeSessionId],
   );
+
+  const switchPlaygroundSession = useCallback((sessionId) => {
+    const latestSessions = loadSessions();
+    const targetSession = latestSessions.find(
+      (session) => session.id === sessionId,
+    );
+    if (!targetSession) return;
+
+    saveActiveSessionId(targetSession.id);
+    setActiveSessionId(targetSession.id);
+    setSessions(latestSessions);
+    setMessage(targetSession.messages || []);
+  }, []);
+
+  const createNewPlaygroundSession = useCallback(() => {
+    if (activeSessionId) {
+      saveMessages(message, activeSessionId);
+    }
+
+    const newSession = createPlaygroundSession([]);
+    const nextSessions = [
+      newSession,
+      ...loadSessions().filter((session) => session.id !== newSession.id),
+    ];
+    saveSessions(nextSessions);
+    saveActiveSessionId(newSession.id);
+
+    setSessions(loadSessions());
+    setActiveSessionId(newSession.id);
+    setMessage([]);
+    return newSession;
+  }, [activeSessionId, message]);
 
   // 配置保存
   const debouncedSaveConfig = useCallback(() => {
@@ -195,25 +238,34 @@ export const usePlaygroundState = () => {
     if (importedConfig.messages && Array.isArray(importedConfig.messages)) {
       setMessage(importedConfig.messages);
     }
+    const latestSessionState = loadSessionState();
+    setSessions(latestSessionState.sessions || []);
+    setActiveSessionId(latestSessionState.activeSessionId || null);
   }, []);
 
-  const handleConfigReset = useCallback((options = {}) => {
-    const { resetMessages = false } = options;
+  const handleConfigReset = useCallback(
+    (options = {}) => {
+      const { resetMessages = false } = options;
 
-    setInputs(DEFAULT_CONFIG.inputs);
-    setParameterEnabled(DEFAULT_CONFIG.parameterEnabled);
-    setShowDebugPanel(DEFAULT_CONFIG.showDebugPanel);
-    setCustomRequestMode(DEFAULT_CONFIG.customRequestMode);
-    setCustomRequestBody(DEFAULT_CONFIG.customRequestBody);
+      setInputs(DEFAULT_CONFIG.inputs);
+      setParameterEnabled(DEFAULT_CONFIG.parameterEnabled);
+      setShowDebugPanel(DEFAULT_CONFIG.showDebugPanel);
+      setCustomRequestMode(DEFAULT_CONFIG.customRequestMode);
+      setCustomRequestBody(DEFAULT_CONFIG.customRequestBody);
 
-    // 只有在明确指定时才重置消息
-    if (resetMessages) {
-      setMessage([]);
-      setTimeout(() => {
-        setMessage(getDefaultMessages(t));
-      }, 0);
-    }
-  }, []);
+      // 只有在明确指定时才重置消息
+      if (resetMessages) {
+        setMessage([]);
+        saveMessagesImmediately([]);
+        setTimeout(() => {
+          const defaultMessages = getDefaultMessages(t);
+          setMessage(defaultMessages);
+          saveMessagesImmediately(defaultMessages);
+        }, 0);
+      }
+    },
+    [saveMessagesImmediately, t],
+  );
 
   // 清理定时器
   useEffect(() => {
@@ -271,6 +323,8 @@ export const usePlaygroundState = () => {
     models,
     groups,
     status,
+    sessions,
+    activeSessionId,
 
     // 消息状态
     message,
@@ -311,6 +365,8 @@ export const usePlaygroundState = () => {
     handleParameterToggle,
     debouncedSaveConfig,
     saveMessagesImmediately,
+    switchPlaygroundSession,
+    createNewPlaygroundSession,
     handleConfigImport,
     handleConfigReset,
   };
