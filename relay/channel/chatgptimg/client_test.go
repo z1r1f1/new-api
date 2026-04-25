@@ -64,6 +64,28 @@ func TestMappingContainsImageGenerationError(t *testing.T) {
 	}
 }
 
+func TestExtractImageRefsFromMappingFindsNestedAssets(t *testing.T) {
+	mapping := map[string]any{
+		"node-1": map[string]any{
+			"message": map[string]any{
+				"content": map[string]any{
+					"parts": []any{
+						map[string]any{"asset_pointer": "sediment://sed_nested"},
+						"file-service://file_nested",
+					},
+				},
+			},
+		},
+	}
+	fileIDs, sedimentIDs := ExtractImageRefsFromMapping(mapping)
+	if len(fileIDs) != 1 || fileIDs[0] != "file_nested" {
+		t.Fatalf("expected nested file id, got %#v", fileIDs)
+	}
+	if len(sedimentIDs) != 1 || sedimentIDs[0] != "sed_nested" {
+		t.Fatalf("expected nested sediment id, got %#v", sedimentIDs)
+	}
+}
+
 func TestPollConversationForImagesReturnsPreviewWhenSedimentIsReady(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/backend-api/conversation/conv-1" {

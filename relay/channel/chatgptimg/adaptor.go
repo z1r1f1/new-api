@@ -904,15 +904,11 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	defer cancel()
 
 	result := &imageRunResult{}
-	maxAttempts := 2
-	if len(refs) > 0 || testMode {
-		maxAttempts = 1
-	}
+	maxAttempts := 1
 	pollMaxWait := 300 * time.Second
-	sameConvMax := 3
+	sameConvMax := 1
 	if testMode {
 		pollMaxWait = 45 * time.Second
-		sameConvMax = 1
 	}
 
 	cr, err := client.ChatRequirementsV2(ctx)

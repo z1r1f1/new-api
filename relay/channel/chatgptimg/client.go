@@ -1385,6 +1385,37 @@ func ExtractImageToolMsgs(mapping map[string]any) []ImageToolMsg {
 	return out
 }
 
+func ExtractImageRefsFromMapping(mapping map[string]any) ([]string, []string) {
+	if len(mapping) == 0 {
+		return nil, nil
+	}
+	data, err := common.Marshal(mapping)
+	if err != nil {
+		return nil, nil
+	}
+	seenFile := map[string]struct{}{}
+	seenSed := map[string]struct{}{}
+	fileIDs := make([]string, 0)
+	sedimentIDs := make([]string, 0)
+	for _, m := range reFileRef.FindAllSubmatch(data, -1) {
+		fid := string(m[1])
+		if _, ok := seenFile[fid]; ok {
+			continue
+		}
+		seenFile[fid] = struct{}{}
+		fileIDs = append(fileIDs, fid)
+	}
+	for _, m := range reSedRef.FindAllSubmatch(data, -1) {
+		sid := string(m[1])
+		if _, ok := seenSed[sid]; ok {
+			continue
+		}
+		seenSed[sid] = struct{}{}
+		sedimentIDs = append(sedimentIDs, sid)
+	}
+	return fileIDs, sedimentIDs
+}
+
 type PollOpts struct {
 	BaselineToolIDs map[string]struct{}
 	MaxWait         time.Duration
@@ -1446,6 +1477,13 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		consecutive429 = 0
 		if mappingContainsImageGenerationError(mapping) {
 			return PollStatusImageError, nil, nil
+		}
+		mappingFileIDs, mappingSedimentIDs := ExtractImageRefsFromMapping(mapping)
+		if len(mappingFileIDs) > 0 {
+			return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
+		}
+		if len(mappingSedimentIDs) > 0 && len(baseline) == 0 {
+			return PollStatusPreviewOnly, nil, mappingSedimentIDs
 		}
 		msgs := ExtractImageToolMsgs(mapping)
 		var newMsgs []ImageToolMsg
