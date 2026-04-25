@@ -289,6 +289,47 @@ func TestParseChatSSEExtractsPatchAppendEvents(t *testing.T) {
 	}
 }
 
+func TestParseChatSSEUntilReadyReturnsAfterFirstContent(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"pong"}`)}
+
+	start := time.Now()
+	result := ParseChatSSEUntilReady(stream, time.Second)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("expected parser to return after first content, took %s", elapsed)
+	}
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSEUntilReady returned error: %v", result.Err)
+	}
+	if result.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id, got %q", result.ConversationID)
+	}
+	if result.Content != "pong" {
+		t.Fatalf("expected first content, got %q", result.Content)
+	}
+}
+
+func TestParseChatSSEUntilReadyReturnsAfterConversationIDQuietPeriod(t *testing.T) {
+	stream := make(chan SSEEvent, 1)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+
+	start := time.Now()
+	result := ParseChatSSEUntilReady(stream, 10*time.Millisecond)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("expected parser to return after quiet period, took %s", elapsed)
+	}
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSEUntilReady returned error: %v", result.Err)
+	}
+	if result.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id, got %q", result.ConversationID)
+	}
+	if result.Content != "" {
+		t.Fatalf("expected no content before full completion, got %q", result.Content)
+	}
+}
+
 func TestParseChatSSEExtractsBareDeltaAfterAppendStarts(t *testing.T) {
 	stream := make(chan SSEEvent, 5)
 	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}

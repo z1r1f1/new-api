@@ -1021,6 +1021,55 @@ func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 	}
 }
 
+func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duration) ChatSSEResult {
+	state := &ChatSSEState{}
+	var quietTimer <-chan time.Time
+	for {
+		select {
+		case ev, ok := <-stream:
+			if !ok {
+				return ChatSSEResult{
+					ConversationID: state.ConversationID,
+					Content:        state.Content,
+					FinishType:     state.FinishType,
+				}
+			}
+			_, done, err := CollectChatSSEEvent(ev, state)
+			if err != nil {
+				return ChatSSEResult{
+					ConversationID: state.ConversationID,
+					Content:        state.Content,
+					FinishType:     state.FinishType,
+					Err:            err,
+				}
+			}
+			if done {
+				return ChatSSEResult{
+					ConversationID: state.ConversationID,
+					Content:        state.Content,
+					FinishType:     state.FinishType,
+				}
+			}
+			if strings.TrimSpace(state.Content) != "" {
+				return ChatSSEResult{
+					ConversationID: state.ConversationID,
+					Content:        state.Content,
+					FinishType:     state.FinishType,
+				}
+			}
+			if state.ConversationID != "" && quietAfterReady > 0 {
+				quietTimer = time.After(quietAfterReady)
+			}
+		case <-quietTimer:
+			return ChatSSEResult{
+				ConversationID: state.ConversationID,
+				Content:        state.Content,
+				FinishType:     state.FinishType,
+			}
+		}
+	}
+}
+
 func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done bool, err error) {
 	if state == nil {
 		state = &ChatSSEState{}

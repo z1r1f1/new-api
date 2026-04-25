@@ -331,6 +331,41 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	if err != nil {
 		return nil, err
 	}
+	if info != nil && info.IsChannelTest {
+		content, conversationID, usedPrompt, err := runChatCompletionProbe(c.Request.Context(), client, req, prompt)
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(content) == "" {
+			content = "ok"
+		}
+		usage := buildChatUsage(usedPrompt, content, req.Model)
+		respPayload := chatResponse{
+			Id:      buildChatCompletionID(conversationID),
+			Object:  "chat.completion",
+			Created: time.Now().Unix(),
+			Model:   strings.TrimSpace(req.Model),
+			Choices: []dto.OpenAITextResponseChoice{{
+				Index: 0,
+				Message: dto.Message{
+					Role:    "assistant",
+					Content: content,
+				},
+				FinishReason: "stop",
+			}},
+			Usage:          usage,
+			ConversationID: conversationID,
+		}
+		payloadBytes, err := common.Marshal(respPayload)
+		if err != nil {
+			return nil, fmt.Errorf("chatgpt web channel: marshal chat test response failed: %w", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
+		}, nil
+	}
 	if req.Stream != nil && *req.Stream {
 		started, err := startChatStream(c.Request.Context(), client, req, prompt)
 		if err != nil {
@@ -489,6 +524,26 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 		return "", result.ConversationID, started.Prompt, started.Baseline, errors.New("chatgpt web channel: empty chat response")
 	}
 	return result.Content, result.ConversationID, started.Prompt, started.Baseline, nil
+}
+
+func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	started, err := startChatStream(ctx, client, req, prompt)
+	if err != nil {
+		return "", "", "", err
+	}
+	result := ParseChatSSEUntilReady(started.Stream, 3*time.Second)
+	if result.Err != nil {
+		return "", result.ConversationID, started.Prompt, result.Err
+	}
+	if containsImageGenerationUpstreamErrorText(result.Content) {
+		return "", result.ConversationID, started.Prompt, imageGenerationUpstreamError()
+	}
+	if strings.TrimSpace(result.ConversationID) == "" && strings.TrimSpace(result.Content) == "" {
+		return "", "", started.Prompt, errors.New("chatgpt web channel: chat test did not receive a conversation id or content")
+	}
+	return result.Content, result.ConversationID, started.Prompt, nil
 }
 
 func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline) (string, error) {

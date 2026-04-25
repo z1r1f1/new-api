@@ -132,6 +132,14 @@ const PARAM_OVERRIDE_OPERATIONS_TEMPLATE = {
 
 const DEPRECATED_DOUBAO_CODING_PLAN_BASE_URL = 'doubao-coding-plan';
 const CHATGPT_WEB_DEFAULT_TEST_MODEL = 'gpt-5.4-instant';
+const CHATGPT_WEB_DEFAULT_MODELS = [
+  'gpt-image-2',
+  'gpt-5.5-pro',
+  'gpt-5.5-thinking',
+  'gpt-5.4-thinking',
+  'gpt-5.4-pro',
+  'gpt-5.4-instant',
+];
 
 const DEFAULT_NEW_CHANNEL_INPUTS = {
   name: '',
@@ -180,6 +188,16 @@ const normalizeStringArray = (value, fallback = []) =>
   Array.isArray(value)
     ? value.map((item) => String(item || '').trim()).filter(Boolean)
     : fallback;
+
+const getRelatedModelsForChannelType = (type, fallback = []) => {
+  if (Number(type) === 58) {
+    return [...CHATGPT_WEB_DEFAULT_MODELS];
+  }
+  return normalizeStringArray(fallback, []);
+};
+
+const getDefaultModelsForChannelType = (type) =>
+  getRelatedModelsForChannelType(type, getChannelModels(type));
 
 const normalizeCodexCredential = (value) => {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value;
@@ -319,6 +337,7 @@ const EditChannelModal = (props) => {
   const [multiKeyMode, setMultiKeyMode] = useState('random');
   const [autoBan, setAutoBan] = useState(true);
   const [inputs, setInputs] = useState(originInputs);
+  const currentChannelTypeRef = useRef(originInputs.type);
   const [originModelOptions, setOriginModelOptions] = useState([]);
   const [modelOptions, setModelOptions] = useState([]);
   const [groupOptions, setGroupOptions] = useState([]);
@@ -568,6 +587,10 @@ const EditChannelModal = (props) => {
     },
   });
 
+  useEffect(() => {
+    currentChannelTypeRef.current = inputs.type;
+  }, [inputs.type]);
+
   // 重置密钥显示状态
   const resetKeyDisplayState = () => {
     setKeyDisplayState({
@@ -716,6 +739,7 @@ const EditChannelModal = (props) => {
     }
     setInputs((inputs) => ({ ...inputs, [name]: value }));
     if (name === 'type') {
+      currentChannelTypeRef.current = value;
       let localModels = [];
       switch (value) {
         case 2:
@@ -755,14 +779,14 @@ const EditChannelModal = (props) => {
           localModels = ['suno_music', 'suno_lyrics'];
           break;
         case 45:
-          localModels = getChannelModels(value);
+          localModels = getDefaultModelsForChannelType(value);
           setInputs((prevInputs) => ({
             ...prevInputs,
             base_url: 'https://ark.cn-beijing.volces.com',
           }));
           break;
         default:
-          localModels = getChannelModels(value);
+          localModels = getDefaultModelsForChannelType(value);
           break;
       }
       if (inputs.models.length === 0) {
@@ -774,7 +798,10 @@ const EditChannelModal = (props) => {
           test_model: CHATGPT_WEB_DEFAULT_TEST_MODEL,
         }));
         if (formApiRef.current) {
-          formApiRef.current.setValue('test_model', CHATGPT_WEB_DEFAULT_TEST_MODEL);
+          formApiRef.current.setValue(
+            'test_model',
+            CHATGPT_WEB_DEFAULT_TEST_MODEL,
+          );
         }
       }
       setBasicModels(localModels);
@@ -811,7 +838,11 @@ const EditChannelModal = (props) => {
     if (!rawValue) return;
 
     try {
-      if (fieldName === 'key' && (inputs.type === 57 || inputs.type === 58) && batch) {
+      if (
+        fieldName === 'key' &&
+        (inputs.type === 57 || inputs.type === 58) &&
+        batch
+      ) {
         if (inputs.type === 58) {
           const parsedKeys = parseChatGPTImageBatchCredentialArray(rawValue);
           handleInputChange('key', JSON.stringify(parsedKeys, null, 2));
@@ -1090,6 +1121,7 @@ const EditChannelModal = (props) => {
       }
 
       initialBaseUrlRef.current = data.base_url || '';
+      currentChannelTypeRef.current = data.type;
       setInputs(data);
       if (formApiRef.current) {
         formApiRef.current.setValues(data);
@@ -1101,7 +1133,7 @@ const EditChannelModal = (props) => {
       }
       // 同步企业账户状态
       setIsEnterpriseAccount(data.is_enterprise_account || false);
-      setBasicModels(getChannelModels(data.type));
+      setBasicModels(getDefaultModelsForChannelType(data.type));
       // 同步更新channelSettings状态显示
       setChannelSettings({
         force_format: data.force_format,
@@ -1275,12 +1307,16 @@ const EditChannelModal = (props) => {
       });
       setOriginModelOptions(localModelOptions);
       setFullModels(res.data.data.map((model) => model.id));
+      const fetchedBasicModels = res.data.data
+        .filter((model) => {
+          return model.id.startsWith('gpt-') || model.id.startsWith('text-');
+        })
+        .map((model) => model.id);
       setBasicModels(
-        res.data.data
-          .filter((model) => {
-            return model.id.startsWith('gpt-') || model.id.startsWith('text-');
-          })
-          .map((model) => model.id),
+        getRelatedModelsForChannelType(
+          currentChannelTypeRef.current,
+          fetchedBasicModels,
+        ),
       );
     } catch (error) {
       showError(error.message);
@@ -1433,16 +1469,17 @@ const EditChannelModal = (props) => {
       const initialTestModel =
         initValues.type === 58 && !String(initValues.test_model || '').trim()
           ? CHATGPT_WEB_DEFAULT_TEST_MODEL
-          : shouldDeferCodexBatchModels && !String(initValues.test_model || '').trim()
-          ? deferredBatchDefaultTestModel
-          : initValues.test_model;
-      const initialModels =
-        shouldDeferCodexBatchModels
-          ? []
-          : initValues.models.length > 0
+          : shouldDeferCodexBatchModels &&
+              !String(initValues.test_model || '').trim()
+            ? deferredBatchDefaultTestModel
+            : initValues.test_model;
+      const initialModels = shouldDeferCodexBatchModels
+        ? []
+        : initValues.models.length > 0
           ? initValues.models
-          : getChannelModels(initValues.type);
+          : getDefaultModelsForChannelType(initValues.type);
       initialBaseUrlRef.current = '';
+      currentChannelTypeRef.current = initValues.type;
       setInputs({
         ...initValues,
         test_model: initialTestModel,
@@ -1455,7 +1492,7 @@ const EditChannelModal = (props) => {
           models: initialModels,
         });
       }
-      setBasicModels(getChannelModels(initValues.type));
+      setBasicModels(getDefaultModelsForChannelType(initValues.type));
       setBatch(props.editingChannel?.create_mode === 'batch');
       setMultiToSingle(false);
       setMultiKeyMode(initValues.multi_key_mode || 'random');
@@ -1468,7 +1505,7 @@ const EditChannelModal = (props) => {
       isEdit ||
       codexBatchModelsInitializedRef.current ||
       props.editingChannel?.create_mode !== 'batch' ||
-      inputs.type !== 57 ||
+      (inputs.type !== 57 && inputs.type !== 58) ||
       basicModels.length === 0
     ) {
       return;
@@ -1476,13 +1513,7 @@ const EditChannelModal = (props) => {
 
     codexBatchModelsInitializedRef.current = true;
     handleInputChange('models', basicModels);
-  }, [
-    props.visible,
-    isEdit,
-    props.editingChannel,
-    inputs.type,
-    basicModels,
-  ]);
+  }, [props.visible, isEdit, props.editingChannel, inputs.type, basicModels]);
 
   useEffect(() => {
     if (formApiRef.current) {
@@ -1950,9 +1981,7 @@ const EditChannelModal = (props) => {
 
       if ((nameRequired && !hasName) || !hasKey) {
         showInfo(
-          t(
-            nameRequired ? '请填写渠道名称和渠道密钥！' : '请填写渠道密钥！',
-          ),
+          t(nameRequired ? '请填写渠道名称和渠道密钥！' : '请填写渠道密钥！'),
         );
         return;
       }
@@ -3165,12 +3194,12 @@ const EditChannelModal = (props) => {
                         disabled={isIonetLocked}
                       />
 
-                        {(inputs.type === 57 || inputs.type === 58) && (
-                          <Banner
-                            type='warning'
-                            closeIcon={null}
-                            className='mb-4 rounded-xl'
-                            description={t(
+                      {(inputs.type === 57 || inputs.type === 58) && (
+                        <Banner
+                          type='warning'
+                          closeIcon={null}
+                          className='mb-4 rounded-xl'
+                          description={t(
                             inputs.type === 57
                               ? '免责声明：仅限个人使用，请勿分发或共享任何凭证。该渠道存在前置条件与使用门槛，请在充分了解流程与风险后使用，并遵守 OpenAI 的相关条款与政策。相关凭证与配置仅限接入 Codex CLI 使用，不适用于其他客户端、平台或渠道。'
                               : 'ChatGPT Web 渠道会直接调用 chatgpt.com 网页端对话与图像链路，请妥善保管凭证并确认具备合法使用权限。',
@@ -3214,9 +3243,13 @@ const EditChannelModal = (props) => {
                         autoComplete='new-password'
                         extraText={
                           inputs.type === 57
-                            ? t('Codex 渠道名称可留空，保存时会自动使用凭据中的 email')
+                            ? t(
+                                'Codex 渠道名称可留空，保存时会自动使用凭据中的 email',
+                              )
                             : inputs.type === 58
-                              ? t('ChatGPT Web 渠道名称可留空，保存时会自动使用凭据中的 email')
+                              ? t(
+                                  'ChatGPT Web 渠道名称可留空，保存时会自动使用凭据中的 email',
+                                )
                               : undefined
                         }
                       />
@@ -3317,8 +3350,8 @@ const EditChannelModal = (props) => {
                           />
                         ) : (
                           <>
-                          {(inputs.type === 57 || inputs.type === 58) && (
-                            <Form.Upload
+                            {(inputs.type === 57 || inputs.type === 58) && (
+                              <Form.Upload
                                 field={
                                   inputs.type === 57
                                     ? 'codex_files'
@@ -3381,7 +3414,7 @@ const EditChannelModal = (props) => {
                                       ? t(
                                           '请输入 ChatGPT Web 密钥 JSON 数组，或通过上方上传多个 JSON 文件导入',
                                         )
-                                    : t('请输入密钥，一行一个')
+                                      : t('请输入密钥，一行一个')
                               }
                               rules={
                                 isEdit
@@ -3420,7 +3453,8 @@ const EditChannelModal = (props) => {
                                       {t('查看密钥')}
                                     </Button>
                                   )}
-                                  {(inputs.type === 57 || inputs.type === 58) && (
+                                  {(inputs.type === 57 ||
+                                    inputs.type === 58) && (
                                     <>
                                       <Text type='tertiary' size='small'>
                                         {t(
@@ -4192,7 +4226,13 @@ const EditChannelModal = (props) => {
                               size='small'
                               type='primary'
                               onClick={() =>
-                                handleInputChange('models', basicModels)
+                                handleInputChange(
+                                  'models',
+                                  getRelatedModelsForChannelType(
+                                    inputs.type,
+                                    basicModels,
+                                  ),
+                                )
                               }
                             >
                               {t('填入相关模型')}
