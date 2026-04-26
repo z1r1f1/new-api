@@ -104,6 +104,7 @@ const Playground = () => {
     groups,
     status,
     sessions,
+    setSessions,
     activeSessionId,
     activeSession,
     message,

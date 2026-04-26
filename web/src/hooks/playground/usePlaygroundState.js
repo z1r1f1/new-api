@@ -362,6 +362,7 @@ export const usePlaygroundState = () => {
     groups,
     status,
     sessions,
+    setSessions,
     activeSessionId,
     activeSession,
 
