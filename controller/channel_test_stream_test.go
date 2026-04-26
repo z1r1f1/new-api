@@ -74,6 +74,15 @@ func TestShouldDeleteChannelAfterTest(t *testing.T) {
 		}
 	})
 
+	t.Run("chat requirements failure deletes channel", func(t *testing.T) {
+		result := testResult{
+			localErr: errors.New("chatgpt upstream 401: chat-requirements failed"),
+		}
+		if got := channelDeletionReasonAfterTest(result, false); got != "chat_requirements_failed" {
+			t.Fatalf("expected chat requirements failure to trigger deletion, got %q", got)
+		}
+	})
+
 	t.Run("bad response 402 deletes channel", func(t *testing.T) {
 		result := testResult{
 			newAPIError: types.NewOpenAIError(

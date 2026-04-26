@@ -659,6 +659,13 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 	return channel != nil && channel.Type == constant.ChannelTypeCodex
 }
 
+func shouldDeleteChannelForChatRequirementsFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "chat-requirements failed")
+}
+
 func channelDeletionReasonAfterTest(result testResult, deleteUnauthorized bool) string {
 	candidates := []error{result.localErr}
 	if result.newAPIError != nil {
@@ -667,6 +674,9 @@ func channelDeletionReasonAfterTest(result testResult, deleteUnauthorized bool) 
 	for _, err := range candidates {
 		if err == nil {
 			continue
+		}
+		if shouldDeleteChannelForChatRequirementsFailure(err) {
+			return "chat_requirements_failed"
 		}
 		if strings.Contains(strings.ToLower(err.Error()), "deactivated_workspace") {
 			return "deactivated_workspace"

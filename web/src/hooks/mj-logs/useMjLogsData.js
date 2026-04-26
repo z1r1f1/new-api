@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Modal } from '@douyinfe/semi-ui';
 import {
@@ -30,6 +30,97 @@ import {
 } from '../../helpers';
 import { ITEMS_PER_PAGE } from '../../constants';
 import { useTableCompactMode } from '../common/useTableCompactMode';
+
+const preloadedMjLogImageUrls = new Map();
+
+const warmImageForPreview = async (imageUrl, signal, onProgress) => {
+  if (!imageUrl) {
+    throw new Error('missing image url');
+  }
+
+  if (preloadedMjLogImageUrls.has(imageUrl)) {
+    onProgress?.(100);
+    return preloadedMjLogImageUrls.get(imageUrl);
+  }
+
+  const response = await fetch(imageUrl, {
+    credentials: 'include',
+    cache: 'force-cache',
+    signal,
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+
+  const contentLength = Number(response.headers.get('content-length') || 0);
+
+  if (!response.body || !contentLength) {
+    onProgress?.(90);
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    await decodePreviewImage(objectUrl, signal);
+    preloadedMjLogImageUrls.set(imageUrl, objectUrl);
+    onProgress?.(100);
+    return objectUrl;
+  }
+
+  const reader = response.body.getReader();
+  let received = 0;
+  const chunks = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    const percent = Math.min(
+      99,
+      Math.max(1, Math.round((received / contentLength) * 100)),
+    );
+    onProgress?.(percent);
+  }
+
+  const blob = new Blob(chunks, {
+    type: response.headers.get('content-type') || 'image/png',
+  });
+  const objectUrl = URL.createObjectURL(blob);
+  await decodePreviewImage(objectUrl, signal);
+  preloadedMjLogImageUrls.set(imageUrl, objectUrl);
+  onProgress?.(100);
+  return objectUrl;
+};
+
+const decodePreviewImage = (objectUrl, signal) =>
+  new Promise((resolve, reject) => {
+    const previewImage = new Image();
+    const cleanup = () => {
+      previewImage.onload = null;
+      previewImage.onerror = null;
+    };
+
+    const abortHandler = () => {
+      cleanup();
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+
+    previewImage.onload = () => {
+      cleanup();
+      resolve();
+    };
+    previewImage.onerror = () => {
+      cleanup();
+      reject(new Error('preview image decode failed'));
+    };
+
+    if (signal?.aborted) {
+      abortHandler();
+      return;
+    }
+
+    signal?.addEventListener('abort', abortHandler, { once: true });
+    previewImage.src = objectUrl;
+  });
 
 export const useMjLogsData = () => {
   const { t } = useTranslation();
@@ -70,6 +161,10 @@ export const useMjLogsData = () => {
   const [modalContent, setModalContent] = useState('');
   const [isModalOpenurl, setIsModalOpenurl] = useState(false);
   const [modalImageUrl, setModalImageUrl] = useState('');
+  const [isModalImageLoading, setIsModalImageLoading] = useState(false);
+  const [modalImageLoadProgress, setModalImageLoadProgress] = useState(0);
+  const [modalPreviewSrc, setModalPreviewSrc] = useState('');
+  const imageLoadAbortRef = useRef(null);
 
   // Form state
   const [formApi, setFormApi] = useState(null);
@@ -273,8 +368,108 @@ export const useMjLogsData = () => {
 
   const openImageModal = (imageUrl) => {
     setModalImageUrl(imageUrl);
+    const isCached = preloadedMjLogImageUrls.has(imageUrl);
+    setIsModalImageLoading(!isCached);
+    setModalImageLoadProgress(isCached ? 100 : 0);
+    setModalPreviewSrc(isCached ? preloadedMjLogImageUrls.get(imageUrl) : '');
     setIsModalOpenurl(true);
   };
+
+  useEffect(() => {
+    if (!isModalOpenurl || !modalImageUrl) {
+      return undefined;
+    }
+
+    if (preloadedMjLogImageUrls.has(modalImageUrl)) {
+      setIsModalImageLoading(false);
+      setModalImageLoadProgress(100);
+      setModalPreviewSrc(preloadedMjLogImageUrls.get(modalImageUrl));
+      return undefined;
+    }
+
+    if (imageLoadAbortRef.current) {
+      imageLoadAbortRef.current.abort();
+    }
+    const controller = new AbortController();
+    imageLoadAbortRef.current = controller;
+
+    let timer = null;
+    let mounted = true;
+    let objectUrlToCleanup = '';
+    const bumpProgress = (nextProgress) => {
+      if (!mounted) return;
+      setModalImageLoadProgress(nextProgress);
+    };
+
+    timer = window.setInterval(() => {
+      setModalImageLoadProgress((prev) => {
+        if (prev >= 95) {
+          return prev;
+        }
+        return Math.min(95, prev + Math.max(1, Math.round((95 - prev) * 0.2)));
+      });
+    }, 260);
+
+    setIsModalImageLoading(true);
+    setModalImageLoadProgress((prev) => (prev > 0 ? prev : 8));
+
+    warmImageForPreview(modalImageUrl, controller.signal, bumpProgress)
+      .then((objectUrl) => {
+        if (!mounted || controller.signal.aborted) return;
+        objectUrlToCleanup = objectUrl || '';
+        setModalPreviewSrc(objectUrlToCleanup);
+        setModalImageLoadProgress(100);
+        setIsModalImageLoading(false);
+      })
+      .catch((error) => {
+        if (!mounted || controller.signal.aborted) return;
+        console.warn('Failed to warm image preview cache', error);
+        setModalImageLoadProgress(100);
+        setIsModalImageLoading(false);
+      })
+      .finally(() => {
+        if (timer) {
+          window.clearInterval(timer);
+        }
+      });
+
+    return () => {
+      mounted = false;
+      if (timer) {
+        window.clearInterval(timer);
+      }
+      controller.abort();
+      if (imageLoadAbortRef.current === controller) {
+        imageLoadAbortRef.current = null;
+      }
+    };
+  }, [isModalOpenurl, modalImageUrl]);
+
+  useEffect(() => {
+    if (!isModalOpenurl) {
+      setIsModalImageLoading(false);
+      setModalImageLoadProgress(0);
+      setModalPreviewSrc('');
+    }
+  }, [isModalOpenurl]);
+
+  useEffect(() => {
+    return () => {
+      if (imageLoadAbortRef.current) {
+        imageLoadAbortRef.current.abort();
+        imageLoadAbortRef.current = null;
+      }
+      preloadedMjLogImageUrls.forEach((objectUrl) => {
+        if (objectUrl && objectUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(objectUrl);
+        }
+      });
+      preloadedMjLogImageUrls.clear();
+      if (modalPreviewSrc && modalPreviewSrc.startsWith('blob:')) {
+        URL.revokeObjectURL(modalPreviewSrc);
+      }
+    };
+  }, []);
 
   // Initialize data
   useEffect(() => {
@@ -301,6 +496,9 @@ export const useMjLogsData = () => {
     isModalOpenurl,
     setIsModalOpenurl,
     modalImageUrl,
+    modalPreviewSrc,
+    isModalImageLoading,
+    modalImageLoadProgress,
 
     // Form state
     formApi,
