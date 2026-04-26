@@ -25,7 +25,7 @@ import {
   getTextContent,
 } from './utils';
 import axios from 'axios';
-import { MESSAGE_ROLES } from '../constants/playground.constants';
+import { MESSAGE_ROLES, MESSAGE_STATUS } from '../constants/playground.constants';
 
 export let API = axios.create({
   baseURL: import.meta.env.VITE_REACT_APP_SERVER_URL
@@ -214,10 +214,9 @@ const limitFallbackReferenceImages = (urls) => {
 };
 
 const buildImageConversationContext = (messages, lastUserIndex) => {
-  const contextMessages = messages.slice(
-    Math.max(0, lastUserIndex - 8),
-    lastUserIndex,
-  );
+  const contextMessages = messages
+    .slice(Math.max(0, lastUserIndex - 8), lastUserIndex)
+    .filter(shouldIncludeInConversationContext);
   const parts = contextMessages
     .map((msg) => {
       const text = getTextContent(msg).trim();
@@ -241,12 +240,43 @@ const buildImageConversationContext = (messages, lastUserIndex) => {
   return context.length > 4000 ? context.slice(-4000) : context;
 };
 
+const FALLBACK_PROMPT_ERROR_PREFIXES = [
+  '请求发生错误',
+  'An error occurred with the request',
+  'HTTP error!',
+  'Panic detected',
+  'chatgpt upstream 401:',
+  'chatgpt image channel:',
+];
+
+const isFallbackPromptErrorMessage = (message) => {
+  if (!message) {
+    return false;
+  }
+
+  if (message.status === MESSAGE_STATUS.ERROR) {
+    return true;
+  }
+
+  const text = getTextContent(message).trim();
+  if (!text) {
+    return false;
+  }
+
+  return FALLBACK_PROMPT_ERROR_PREFIXES.some((prefix) =>
+    text.startsWith(prefix),
+  );
+};
+
+const shouldIncludeInConversationContext = (message) =>
+  isValidMessage(message) && !isFallbackPromptErrorMessage(message);
+
 const buildChatGPTWebFallbackPrompt = (messages, systemPrompt = '') => {
   const parts = [];
   if (systemPrompt && systemPrompt.trim()) {
     parts.push(`System: ${systemPrompt.trim()}`);
   }
-  messages.forEach((msg) => {
+  messages.filter(shouldIncludeInConversationContext).forEach((msg) => {
     const text = getTextContent(msg).trim();
     const images = extractImageUrlsFromContent(msg.content)
       .map(normalizeImageReferenceUrl)

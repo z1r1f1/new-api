@@ -24,6 +24,7 @@ import { toast } from 'react-toastify';
 import {
   THINK_TAG_REGEX,
   MESSAGE_ROLES,
+  MESSAGE_STATUS,
 } from '../constants/playground.constants';
 import { TABLE_COMPACT_MODES_KEY } from '../constants';
 import { MOBILE_BREAKPOINT } from '../hooks/common/useIsMobile';
@@ -474,7 +475,19 @@ export const formatMessageForAPI = (message) => {
 
 // 验证消息是否有效
 export const isValidMessage = (message) => {
-  return message && message.role && (message.content || message.content === '');
+  if (!message || !message.role) {
+    return false;
+  }
+
+  if (
+    message.status === MESSAGE_STATUS.LOADING ||
+    message.status === MESSAGE_STATUS.INCOMPLETE ||
+    message.status === MESSAGE_STATUS.ERROR
+  ) {
+    return false;
+  }
+
+  return message.content || message.content === '';
 };
 
 // 获取最后一条用户消息
