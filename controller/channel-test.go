@@ -672,6 +672,9 @@ func channelDeletionReasonAfterTest(result testResult, deleteUnauthorized bool) 
 			return "deactivated_workspace"
 		}
 	}
+	if result.newAPIError != nil && result.newAPIError.StatusCode == http.StatusPaymentRequired {
+		return "status_code_402"
+	}
 	if deleteUnauthorized && result.newAPIError != nil && result.newAPIError.StatusCode == http.StatusUnauthorized {
 		return "status_code_401"
 	}

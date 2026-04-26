@@ -73,4 +73,20 @@ func TestShouldDeleteChannelAfterTest(t *testing.T) {
 			t.Fatalf("expected manual batch 401 to trigger deletion, got %q", got)
 		}
 	})
+
+	t.Run("bad response 402 deletes channel", func(t *testing.T) {
+		result := testResult{
+			newAPIError: types.NewOpenAIError(
+				errors.New("bad response status code 402"),
+				types.ErrorCodeBadResponseStatusCode,
+				http.StatusPaymentRequired,
+			),
+		}
+		if got := channelDeletionReasonAfterTest(result, false); got != "status_code_402" {
+			t.Fatalf("expected automatic batch 402 to trigger deletion, got %q", got)
+		}
+		if got := channelDeletionReasonAfterTest(result, true); got != "status_code_402" {
+			t.Fatalf("expected manual batch 402 to trigger deletion, got %q", got)
+		}
+	})
 }
