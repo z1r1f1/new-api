@@ -939,6 +939,7 @@ type ChatSSEResult struct {
 	Content            string
 	FinishType         string
 	HasImageGeneration bool
+	HasInlineImage     bool
 	Err                error
 }
 
@@ -948,11 +949,13 @@ type ChatSSEState struct {
 	FinishType         string
 	IsAppendingText    bool
 	HasImageGeneration bool
+	HasInlineImage     bool
 }
 
 var (
-	reFileRef = regexp.MustCompile(`file-service://([A-Za-z0-9_-]+)`)
-	reSedRef  = regexp.MustCompile(`sediment://([A-Za-z0-9_-]+)`)
+	reFileRef           = regexp.MustCompile(`file-service://([A-Za-z0-9_-]+)`)
+	reSedRef            = regexp.MustCompile(`sediment://([A-Za-z0-9_-]+)`)
+	reMarkdownDataImage = regexp.MustCompile(`!\[([^\]]*)]\((data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+)\)`)
 )
 
 const imageGenerationUpstreamErrorText = "We experienced an error when generating images"
@@ -1021,6 +1024,7 @@ func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 		Content:            state.Content,
 		FinishType:         state.FinishType,
 		HasImageGeneration: state.HasImageGeneration,
+		HasInlineImage:     state.HasInlineImage,
 	}
 }
 
@@ -1036,6 +1040,7 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 					Content:            state.Content,
 					FinishType:         state.FinishType,
 					HasImageGeneration: state.HasImageGeneration,
+					HasInlineImage:     state.HasInlineImage,
 				}
 			}
 			_, done, err := CollectChatSSEEvent(ev, state)
@@ -1045,6 +1050,7 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 					Content:            state.Content,
 					FinishType:         state.FinishType,
 					HasImageGeneration: state.HasImageGeneration,
+					HasInlineImage:     state.HasInlineImage,
 					Err:                err,
 				}
 			}
@@ -1054,6 +1060,7 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 					Content:            state.Content,
 					FinishType:         state.FinishType,
 					HasImageGeneration: state.HasImageGeneration,
+					HasInlineImage:     state.HasInlineImage,
 				}
 			}
 			if strings.TrimSpace(state.Content) != "" {
@@ -1062,6 +1069,7 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 					Content:            state.Content,
 					FinishType:         state.FinishType,
 					HasImageGeneration: state.HasImageGeneration,
+					HasInlineImage:     state.HasInlineImage,
 				}
 			}
 			if state.ConversationID != "" && quietAfterReady > 0 {
@@ -1073,6 +1081,7 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 				Content:            state.Content,
 				FinishType:         state.FinishType,
 				HasImageGeneration: state.HasImageGeneration,
+				HasInlineImage:     state.HasInlineImage,
 			}
 		}
 	}
@@ -1124,6 +1133,11 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 	if latest == "" {
 		return "", false, nil
 	}
+	var hasInlineImage bool
+	latest, hasInlineImage = normalizeChatAssistantContent(latest)
+	if hasInlineImage {
+		state.HasInlineImage = true
+	}
 	if strings.HasPrefix(latest, state.Content) {
 		delta = latest[len(state.Content):]
 	} else if latest != state.Content {
@@ -1169,14 +1183,67 @@ func valueHasImageGenerationMarker(value any) bool {
 	return false
 }
 
+func chatContentHasInlineDataImage(content string) bool {
+	return reMarkdownDataImage.MatchString(content)
+}
+
+func normalizeChatAssistantContent(content string) (string, bool) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", false
+	}
+	lines := strings.Split(content, "\n")
+	filtered := lines[:0]
+	for _, line := range lines {
+		if isSkippedMainlineMetadataLine(line) {
+			continue
+		}
+		filtered = append(filtered, line)
+	}
+	normalized := strings.TrimSpace(strings.Join(filtered, "\n"))
+	return normalized, chatContentHasInlineDataImage(normalized)
+}
+
+func isSkippedMainlineMetadataLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+		return false
+	}
+	var payload map[string]any
+	if err := common.Unmarshal([]byte(line), &payload); err != nil {
+		return false
+	}
+	skipped, _ := payload["skipped_mainline"].(bool)
+	return skipped && len(payload) == 1
+}
+
+func appendNormalizedChatContent(state *ChatSSEState, value string) string {
+	if state == nil || value == "" {
+		return ""
+	}
+	previous := state.Content
+	normalized, hasInlineImage := normalizeChatAssistantContent(previous + value)
+	if hasInlineImage {
+		state.HasInlineImage = true
+	}
+	if normalized == previous {
+		state.Content = normalized
+		return ""
+	}
+	state.Content = normalized
+	if strings.HasPrefix(normalized, previous) {
+		return normalized[len(previous):]
+	}
+	return normalized
+}
+
 func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta string, done bool) {
 	path, _ := obj["p"].(string)
 	op, _ := obj["o"].(string)
 	if state.IsAppendingText && path == "" && op == "" {
 		value, _ := obj["v"].(string)
 		if value != "" {
-			state.Content += value
-			return value, false
+			return appendNormalizedChatContent(state, value), false
 		}
 	}
 	if strings.Contains(path, "/message/content/parts") {
@@ -1187,8 +1254,7 @@ func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta strin
 		switch op {
 		case "append":
 			state.IsAppendingText = true
-			state.Content += value
-			return value, false
+			return appendNormalizedChatContent(state, value), false
 		case "replace":
 			state.IsAppendingText = false
 			return replaceChatContent(value, state), false
@@ -1212,8 +1278,7 @@ func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta strin
 			}
 			if patchOp == "append" {
 				state.IsAppendingText = true
-				state.Content += value
-				delta += value
+				delta += appendNormalizedChatContent(state, value)
 			} else if patchOp == "replace" {
 				state.IsAppendingText = false
 				replaced := replaceChatContent(value, state)
@@ -1238,6 +1303,11 @@ func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta strin
 }
 
 func replaceChatContent(latest string, state *ChatSSEState) string {
+	var hasInlineImage bool
+	latest, hasInlineImage = normalizeChatAssistantContent(latest)
+	if hasInlineImage {
+		state.HasInlineImage = true
+	}
 	if strings.HasPrefix(latest, state.Content) {
 		delta := latest[len(state.Content):]
 		state.Content = latest

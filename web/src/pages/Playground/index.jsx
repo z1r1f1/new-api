@@ -49,6 +49,7 @@ import {
   getTextContent,
   buildApiPayload,
   encodeToBase64,
+  isImageGenerationModel,
 } from '../../helpers';
 
 // Components
@@ -58,7 +59,12 @@ import {
   OptimizedMessageContent,
   OptimizedMessageActions,
 } from '../../components/playground/OptimizedComponents';
-import { loadSessions } from '../../components/playground/configStorage';
+import {
+  loadSessions,
+  buildPlaygroundConversationKey,
+  getSessionConversationId,
+  updateSessionConversationId,
+} from '../../components/playground/configStorage';
 import ChatArea from '../../components/playground/ChatArea';
 import FloatingButtons from '../../components/playground/FloatingButtons';
 import { PlaygroundProvider } from '../../contexts/PlaygroundContext';
@@ -112,7 +118,6 @@ const Playground = () => {
     saveMessagesImmediately,
     switchPlaygroundSession,
     createNewPlaygroundSession,
-    updateActiveSessionMetadata,
     handleConfigImport,
     handleConfigReset,
     setShowSettings,
@@ -136,9 +141,34 @@ const Playground = () => {
       setActiveDebugTab,
       sseSourceRef,
       saveMessagesImmediately,
-      (conversationId) => {
+      (conversationId, context = {}) => {
         if (conversationId) {
-          updateActiveSessionMetadata({ webConversationId: conversationId });
+          const payloadModel =
+            context?.payload?.model ||
+            context?.requestContext?.model ||
+            context?.submitData?.requestContext?.model ||
+            context?.submitData?.model ||
+            inputs.model;
+          const payloadGroup =
+            context?.payload?.group ||
+            context?.requestContext?.group ||
+            context?.submitData?.requestContext?.group ||
+            context?.submitData?.group ||
+            inputs.group;
+          const isImagePayload =
+            Boolean(context?.isImagePayload) ||
+            isImageGenerationModel(payloadModel);
+          const conversationKey = buildPlaygroundConversationKey({
+            model: payloadModel,
+            group: payloadGroup,
+            kind: isImagePayload ? 'image' : 'chat',
+          });
+          updateSessionConversationId(
+            activeSessionId,
+            conversationKey,
+            conversationId,
+          );
+          setSessions(loadSessions());
         }
       },
     );
@@ -164,10 +194,17 @@ const Playground = () => {
     const latestSession = loadSessions().find(
       (session) => session.id === activeSessionId,
     );
+    const conversationKey = buildPlaygroundConversationKey({
+      model: inputs.model,
+      group: inputs.group,
+      kind: isImageGenerationModel(inputs.model) ? 'image' : 'chat',
+    });
     return (
-      latestSession?.webConversationId || activeSession?.webConversationId || ''
+      getSessionConversationId(latestSession, conversationKey) ||
+      getSessionConversationId(activeSession, conversationKey) ||
+      ''
     );
-  }, [activeSession?.webConversationId, activeSessionId]);
+  }, [activeSession, activeSessionId, inputs.group, inputs.model]);
 
   useEffect(() => {
     if (resumedImageTaskOnMountRef.current) return;

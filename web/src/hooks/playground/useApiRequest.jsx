@@ -59,6 +59,64 @@ const imageResponseToMarkdown = (data) => {
     .join('\n\n');
 };
 
+const markdownImageRegex = /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/images\/generations\/[^)\s]+|https?:\/\/[^)\s]+)\)/g;
+
+const hasInlineDataImagePayload = (content) =>
+  typeof content === 'string' &&
+  (content.includes('data:image/') || content.includes('/pg/images/generations/'));
+
+const stripSkippedMainlineMetadata = (content) =>
+  String(content || '')
+    .split('\n')
+    .filter((line) => line.trim() !== '{"skipped_mainline":true}')
+    .join('\n')
+    .trim();
+
+const isGeneratedImageAltText = (text) =>
+  /^image[_\s-]*\d+$/i.test(String(text || '').trim()) ||
+  /^generated image\s+\d+$/i.test(String(text || '').trim());
+
+const markdownImagesToMessageContent = (content) => {
+  if (typeof content !== 'string' || !content.trim()) {
+    return content;
+  }
+  const normalized = stripSkippedMainlineMetadata(content);
+  const images = [];
+  const text = normalized
+    .replace(markdownImageRegex, (_match, alt, url) => {
+      const safeAlt = String(alt || '').trim();
+      images.push({
+        type: 'image_url',
+        image_url: { url: String(url || '').replace(/[\r\n]/g, '') },
+      });
+      return safeAlt && !isGeneratedImageAltText(safeAlt)
+        ? `\n${safeAlt}\n`
+        : '\n';
+    })
+    .trim();
+
+  if (images.length === 0) {
+    return normalized;
+  }
+
+  return [
+    ...(text
+      ? [
+          {
+            type: 'text',
+            text,
+          },
+        ]
+      : []),
+    ...images,
+  ];
+};
+
+const getStreamingDisplayContent = (rawContent) =>
+  hasInlineDataImagePayload(rawContent)
+    ? '正在接收图片数据，完成后会显示可放大和下载的图片预览...'
+    : rawContent;
+
 const buildImageTaskContentUrl = (taskId, index) =>
   `${API_ENDPOINTS.IMAGE_GENERATIONS}/${encodeURIComponent(taskId)}/image/${index}`;
 
@@ -252,7 +310,12 @@ export const useApiRequest = (
           } else if (type === 'content') {
             const shouldCollapseReasoning =
               !lastMessage.content && lastMessage.reasoningContent;
-            const newContent = (lastMessage.content || '') + textChunk;
+            const previousContent =
+              typeof lastMessage.rawContent === 'string'
+                ? lastMessage.rawContent
+                : lastMessage.content || '';
+            const newContent = previousContent + textChunk;
+            const displayContent = getStreamingDisplayContent(newContent);
 
             let shouldCollapseFromThinkTag = false;
             let thinkingCompleteFromTags = lastMessage.isThinkingComplete;
@@ -286,7 +349,8 @@ export const useApiRequest = (
 
             newMessage = {
               ...newMessage,
-              content: newContent,
+              content: displayContent,
+              rawContent: displayContent === newContent ? undefined : newContent,
               status: MESSAGE_STATUS.INCOMPLETE,
               ...autoCollapseState,
             };
@@ -319,6 +383,13 @@ export const useApiRequest = (
           ...prevMessage.slice(0, -1),
           {
             ...lastMessage,
+            content:
+              status === MESSAGE_STATUS.COMPLETE
+                ? markdownImagesToMessageContent(
+                    lastMessage.rawContent || lastMessage.content,
+                  )
+                : lastMessage.content,
+            rawContent: undefined,
             status: status,
             ...autoCollapseState,
           },
@@ -410,7 +481,12 @@ export const useApiRequest = (
         const taskData = await response.json();
         const conversationId = extractChatGPTWebConversationId(taskData?.data);
         if (conversationId && onConversationId) {
-          onConversationId(conversationId);
+          onConversationId(conversationId, {
+            submitData,
+            taskData,
+            requestContext: submitData?.requestContext || null,
+            isImagePayload: true,
+          });
         }
         setDebugData((prev) => ({
           ...prev,
@@ -645,7 +721,15 @@ export const useApiRequest = (
         const submitData = await response.json();
         const conversationId = extractChatGPTWebConversationId(submitData);
         if (conversationId && onConversationId) {
-          onConversationId(conversationId);
+          onConversationId(conversationId, {
+            submitData,
+            isImagePayload,
+            requestContext: {
+              model: payload.model,
+              group: payload.group,
+              kind: isImagePayload ? 'image' : 'chat',
+            },
+          });
         }
 
         setDebugData((prev) => ({
@@ -658,10 +742,23 @@ export const useApiRequest = (
           submitData?.task_id || submitData?.taskId || submitData?.id;
 
         if (isImagePayload && imageTaskId) {
-          updatePendingImageGenerationMessage(imageTaskId, submitData, -1);
+          const imageTaskSubmitData = {
+            ...submitData,
+            requestContext: {
+              model: payload.model,
+              group: payload.group,
+              kind: 'image',
+            },
+          };
+          updatePendingImageGenerationMessage(
+            imageTaskId,
+            imageTaskSubmitData,
+            -1,
+          );
           await finishImageGenerationTask({
             taskId: imageTaskId,
-            submitData,
+            submitData: imageTaskSubmitData,
+            requestContext: imageTaskSubmitData.requestContext,
           });
           return;
         }
@@ -678,6 +775,9 @@ export const useApiRequest = (
             : '';
 
           const processed = processThinkTags(content, reasoningContent);
+          const finalContent = markdownImagesToMessageContent(
+            processed.content,
+          );
 
           setMessage((prevMessage) => {
             const newMessages = [...prevMessage];
@@ -690,9 +790,10 @@ export const useApiRequest = (
 
               newMessages[newMessages.length - 1] = {
                 ...lastMessage,
-                content: processed.content,
+                content: finalContent,
                 reasoningContent: processed.reasoningContent,
                 status: MESSAGE_STATUS.COMPLETE,
+                rawContent: undefined,
                 ...autoCollapseState,
               };
               setTimeout(() => saveMessages(newMessages), 0);
@@ -750,6 +851,7 @@ export const useApiRequest = (
   // SSE请求
   const handleSSE = useCallback(
     (payload) => {
+      const requestPayload = payload;
       setDebugData((prev) => ({
         ...prev,
         request: payload,
@@ -791,10 +893,21 @@ export const useApiRequest = (
         }
 
         try {
-          const payload = JSON.parse(e.data);
-          const conversationId = extractChatGPTWebConversationId(payload);
+          const responsePayload = JSON.parse(e.data);
+          const conversationId =
+            extractChatGPTWebConversationId(responsePayload);
           if (conversationId && onConversationId) {
-            onConversationId(conversationId);
+            onConversationId(conversationId, {
+              requestContext: {
+                model: requestPayload.model,
+                group: requestPayload.group,
+                kind: isImageGenerationPayload(requestPayload)
+                  ? 'image'
+                  : 'chat',
+              },
+              isImagePayload:
+                isImageGenerationPayload(requestPayload),
+            });
           }
           responseData += e.data + '\n';
 
@@ -809,7 +922,7 @@ export const useApiRequest = (
             sseMessages: [...(prev.sseMessages || []), e.data],
           }));
 
-          const delta = payload.choices?.[0]?.delta;
+          const delta = responsePayload.choices?.[0]?.delta;
           if (delta) {
             if (delta.reasoning_content) {
               streamMessageUpdate(delta.reasoning_content, 'reasoning');

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -343,6 +344,48 @@ func TestParseChatSSEDetectsImageGenerationMarker(t *testing.T) {
 	}
 	if !result.HasImageGeneration {
 		t.Fatal("expected image generation marker to be detected")
+	}
+}
+
+func TestParseChatSSENormalizesSkippedMainlineInlineImage(t *testing.T) {
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["{\"skipped_mainline\":true}\n\n![image_1](data:image/png;base64,iVBORw0KGgo=)"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if strings.Contains(result.Content, "skipped_mainline") {
+		t.Fatalf("expected skipped_mainline metadata to be removed, got %q", result.Content)
+	}
+	if result.Content != "![image_1](data:image/png;base64,iVBORw0KGgo=)" {
+		t.Fatalf("unexpected normalized content: %q", result.Content)
+	}
+	if !result.HasInlineImage {
+		t.Fatal("expected inline data image to be detected")
+	}
+}
+
+func TestParseChatSSEPatchSkipsMainlineMetadataDelta(t *testing.T) {
+	stream := make(chan SSEEvent, 5)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"{\"skipped_mainline\":true}"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"v":"\n\n![image_1](data:image/png;base64,iVBORw0KGgo=)"}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if result.Content != "![image_1](data:image/png;base64,iVBORw0KGgo=)" {
+		t.Fatalf("unexpected normalized patch content: %q", result.Content)
+	}
+	if !result.HasInlineImage {
+		t.Fatal("expected inline data image to be detected")
 	}
 }
 

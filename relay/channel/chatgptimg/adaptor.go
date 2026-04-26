@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
@@ -371,14 +372,16 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info), nil
 	}
 	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
+	content = materializePlaygroundInlineDataImages(content, info, usedPrompt, req.Model)
 	textContent := content
-	allowImagePoll := shouldPollChatGeneratedImages(req, usedPrompt, textContent, hasImageGeneration)
+	hasInlineDataImage := chatContentHasInlineDataImage(content)
+	allowImagePoll := !hasInlineDataImage && shouldPollChatGeneratedImages(req, usedPrompt, textContent, hasImageGeneration)
 	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll); err != nil {
 		return nil, err
 	} else if imageMarkdown != "" {
@@ -695,6 +698,141 @@ func appendMarkdownBlock(content, markdown string) string {
 	return content + "\n\n" + markdown
 }
 
+func materializePlaygroundInlineDataImages(content string, info *relaycommon.RelayInfo, prompt, modelName string) string {
+	if info == nil || !info.IsPlayground || !chatContentHasInlineDataImage(content) {
+		return content
+	}
+	matches := reMarkdownDataImage.FindAllStringSubmatchIndex(content, -1)
+	if len(matches) == 0 {
+		return content
+	}
+
+	taskID := model.GenerateTaskID()
+	data := make([]dto.ImageData, 0, len(matches))
+	var b strings.Builder
+	last := 0
+	for _, match := range matches {
+		if len(match) < 6 || match[0] < last {
+			continue
+		}
+		alt := strings.TrimSpace(content[match[2]:match[3]])
+		dataURL := content[match[4]:match[5]]
+		_, b64, ok := splitInlineDataImageURL(dataURL)
+		if !ok {
+			continue
+		}
+		b.WriteString(content[last:match[0]])
+		imageIndex := len(data)
+		if alt == "" {
+			alt = fmt.Sprintf("image_%d", imageIndex+1)
+		}
+		b.WriteString(fmt.Sprintf("![%s](/pg/images/generations/%s/image/%d)", alt, taskID, imageIndex))
+		data = append(data, dto.ImageData{B64Json: b64})
+		last = match[1]
+	}
+	if len(data) == 0 {
+		return content
+	}
+	b.WriteString(content[last:])
+
+	now := time.Now().Unix()
+	task := &model.Task{
+		TaskID:     taskID,
+		UserId:     info.UserId,
+		Group:      strings.TrimSpace(info.UsingGroup),
+		SubmitTime: now,
+		StartTime:  now,
+		FinishTime: now,
+		Status:     model.TaskStatusSuccess,
+		Progress:   "100%",
+		ChannelId:  0,
+		Platform:   constant.TaskPlatformPlaygroundImage,
+		Action:     constant.TaskActionGenerate,
+		Properties: model.Properties{
+			Input:             strings.TrimSpace(prompt),
+			UpstreamModelName: strings.TrimSpace(modelName),
+			OriginModelName:   strings.TrimSpace(modelName),
+		},
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: taskID,
+			ResultURL:      fmt.Sprintf("/pg/images/generations/%s/image/0", taskID),
+		},
+	}
+	if info.ChannelMeta != nil {
+		task.ChannelId = info.ChannelMeta.ChannelId
+	}
+	task.SetData(dto.ImageResponse{
+		Created: now,
+		Data:    data,
+	})
+	if err := task.Insert(); err != nil {
+		return content
+	}
+	recordInlineChatDrawingLog(info, strings.TrimSpace(prompt), strings.TrimSpace(modelName), taskID, len(data))
+	return strings.TrimSpace(b.String())
+}
+
+func recordInlineChatDrawingLog(info *relaycommon.RelayInfo, prompt, modelName, taskID string, imageCount int) {
+	if info == nil || info.IsChannelTest || taskID == "" || imageCount <= 0 {
+		return
+	}
+	submitTime := time.Now().UnixMilli()
+	if !info.StartTime.IsZero() {
+		submitTime = info.StartTime.UnixMilli()
+	}
+	finishTime := time.Now().UnixMilli()
+	propertiesBytes, _ := common.Marshal(map[string]any{
+		"source":     ChannelName,
+		"model":      modelName,
+		"task_id":    taskID,
+		"inline":     true,
+		"playground": info.IsPlayground,
+	})
+	properties := string(propertiesBytes)
+	channelID := 0
+	if info.ChannelMeta != nil {
+		channelID = info.ChannelMeta.ChannelId
+	}
+	for index := 0; index < imageCount; index++ {
+		mjID := taskID
+		if imageCount > 1 {
+			mjID = fmt.Sprintf("%s-%d", taskID, index+1)
+		}
+		_ = (&model.Midjourney{
+			Code:        1,
+			UserId:      info.UserId,
+			Action:      "IMAGINE",
+			MjId:        mjID,
+			Prompt:      prompt,
+			Description: ChannelName,
+			State:       modelName,
+			SubmitTime:  submitTime,
+			StartTime:   submitTime,
+			FinishTime:  finishTime,
+			ImageUrl:    fmt.Sprintf("/pg/images/generations/%s/image/%d", taskID, index),
+			Status:      string(model.TaskStatusSuccess),
+			Progress:    "100%",
+			ChannelId:   channelID,
+			Quota:       info.FinalPreConsumedQuota,
+			Properties:  properties,
+		}).Insert()
+	}
+}
+
+func splitInlineDataImageURL(dataURL string) (contentType, b64 string, ok bool) {
+	dataURL = strings.TrimSpace(dataURL)
+	comma := strings.Index(dataURL, ",")
+	if !strings.HasPrefix(dataURL, "data:image/") || comma < 0 {
+		return "", "", false
+	}
+	contentType = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(dataURL[:comma], "data:"), ";base64"))
+	b64 = strings.NewReplacer("\r", "", "\n", "", " ", "").Replace(strings.TrimSpace(dataURL[comma+1:]))
+	if contentType == "" || b64 == "" {
+		return "", "", false
+	}
+	return contentType, b64, true
+}
+
 func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string) (*chatStreamStart, error) {
 	cr, err := client.ChatRequirementsV2(ctx)
 	if err != nil {
@@ -741,9 +879,9 @@ func chatModelForWeb(model string) string {
 	return model
 }
 
-func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo) *http.Response {
 	pr, pw := io.Pipe()
-	go streamChatCompletion(ctx, client, stream, req, prompt, baseline, pw)
+	go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, pw)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -751,7 +889,7 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 	}
 }
 
-func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, pw *io.PipeWriter) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, pw *io.PipeWriter) {
 	defer pw.Close()
 	id := buildTransientChatCompletionID()
 	created := time.Now().Unix()
@@ -761,6 +899,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	}
 	writeChatStreamChunk(pw, id, created, model, "assistant", "", nil, nil)
 	state := &ChatSSEState{}
+	streamedContent := ""
 	for ev := range stream {
 		delta, done, collectErr := CollectChatSSEEvent(ev, state)
 		if state.ConversationID != "" {
@@ -771,7 +910,10 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 			return
 		}
 		if delta != "" {
-			writeChatStreamChunk(pw, id, created, model, "", delta, nil, nil)
+			if !state.HasInlineImage && !chatContentHasInlineDataImage(delta) && !chatContentHasInlineDataImage(state.Content) {
+				streamedContent += delta
+				writeChatStreamChunk(pw, id, created, model, "", delta, nil, nil)
+			}
 		}
 		if done {
 			break
@@ -781,7 +923,19 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		_ = pw.CloseWithError(imageGenerationUpstreamError())
 		return
 	}
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)); err != nil {
+	finalContent := materializePlaygroundInlineDataImages(state.Content, info, prompt, model)
+	if finalContent != "" && finalContent != streamedContent {
+		delta := finalContent
+		if strings.HasPrefix(finalContent, streamedContent) {
+			delta = finalContent[len(streamedContent):]
+		}
+		if delta != "" {
+			writeChatStreamChunk(pw, id, created, model, "", delta, nil, nil)
+			streamedContent = finalContent
+		}
+	}
+	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {
@@ -791,7 +945,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		writeChatStreamChunk(pw, id, created, model, "", imageMarkdown, nil, nil)
 	}
 	finish := "stop"
-	usage := buildChatUsage(prompt, state.Content, model)
+	usage := buildChatUsage(prompt, streamedContent, model)
 	writeChatStreamChunk(pw, id, created, model, "", "", &finish, &usage)
 	writeChatDone(pw)
 }

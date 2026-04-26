@@ -25,6 +25,9 @@ import { getTextContent } from '../../helpers/utils';
 
 const MAX_SESSION_COUNT = 30;
 const MAX_PERSISTED_DATA_URL_BYTES = 256 * 1024;
+const DEFAULT_CONVERSATION_KEY = '__default__';
+const markdownImageRegex =
+  /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/images\/generations\/[^)\s]+|https?:\/\/[^)\s]+)\)/g;
 
 const generateSessionId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -71,7 +74,48 @@ const isLargeDataUrl = (value) =>
   value.startsWith('data:') &&
   estimateStringBytes(value) > MAX_PERSISTED_DATA_URL_BYTES;
 
+const isGeneratedImageAltText = (text) =>
+  /^image[_\s-]*\d+$/i.test(String(text || '').trim()) ||
+  /^generated image\s+\d+$/i.test(String(text || '').trim());
+
+const stripSkippedMainlineMetadata = (content) =>
+  String(content || '')
+    .split('\n')
+    .filter((line) => line.trim() !== '{"skipped_mainline":true}')
+    .join('\n')
+    .trim();
+
+const normalizeMarkdownImagesContent = (content) => {
+  if (typeof content !== 'string' || !content.includes('![')) {
+    return content;
+  }
+  const normalized = stripSkippedMainlineMetadata(content);
+  const images = [];
+  const text = normalized
+    .replace(markdownImageRegex, (_match, alt, url) => {
+      const safeAlt = String(alt || '').trim();
+      images.push({
+        type: 'image_url',
+        image_url: { url: String(url || '').replace(/[\r\n]/g, '') },
+      });
+      return safeAlt && !isGeneratedImageAltText(safeAlt)
+        ? `\n${safeAlt}\n`
+        : '\n';
+    })
+    .trim();
+
+  if (images.length === 0) {
+    return normalized;
+  }
+
+  return [
+    ...(text ? [{ type: 'text', text }] : []),
+    ...images,
+  ];
+};
+
 const sanitizeContentForStorage = (content) => {
+  content = normalizeMarkdownImagesContent(content);
   if (!Array.isArray(content)) {
     return content;
   }
@@ -103,18 +147,55 @@ const sanitizeMessagesForStorage = (messages) =>
   normalizeMessages(messages).map((message) => ({
     ...message,
     content: sanitizeContentForStorage(message?.content),
+    rawContent: undefined,
   }));
+
+const normalizeMessageForStorage = (message) => ({
+  ...message,
+  content: sanitizeContentForStorage(message?.content),
+  rawContent: undefined,
+});
+
+const normalizeMessagesForStorage = (messages) =>
+  normalizeMessages(messages).map(normalizeMessageForStorage);
+
+const normalizeConversationIdMap = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {};
+  }
+  return Object.entries(value).reduce((acc, [key, conversationId]) => {
+    const normalizedKey = String(key || '').trim();
+    const normalizedConversationId = String(conversationId || '').trim();
+    if (normalizedKey && normalizedConversationId) {
+      acc[normalizedKey] = normalizedConversationId;
+    }
+    return acc;
+  }, {});
+};
 
 const normalizeSession = (session) => {
   const now = new Date().toISOString();
-  const messages = normalizeMessages(session?.messages);
+  const messages = normalizeMessagesForStorage(session?.messages);
+  const conversationIds = normalizeConversationIdMap(
+    session?.webConversationIds,
+  );
+  const legacyConversationId = String(session?.webConversationId || '').trim();
+  if (!Object.keys(conversationIds).length && legacyConversationId) {
+    conversationIds[DEFAULT_CONVERSATION_KEY] = legacyConversationId;
+  }
+  const primaryConversationId =
+    legacyConversationId ||
+    conversationIds[DEFAULT_CONVERSATION_KEY] ||
+    Object.values(conversationIds).find((value) => String(value || '').trim()) ||
+    '';
   return {
     id: session?.id || generateSessionId(),
     title: session?.title || buildSessionTitle(messages),
     messages,
     createdAt: session?.createdAt || session?.timestamp || now,
     updatedAt: session?.updatedAt || session?.timestamp || now,
-    webConversationId: session?.webConversationId || '',
+    webConversationId: primaryConversationId,
+    webConversationIds: conversationIds,
   };
 };
 
@@ -144,7 +225,7 @@ const ensureSessions = () => {
   const existingSessions = getStoredSessions();
   if (existingSessions.length > 0) return trimSessions(existingSessions);
 
-  const legacyMessages = getLegacyMessages();
+  const legacyMessages = normalizeMessagesForStorage(getLegacyMessages());
   const initialSession = normalizeSession({
     id: generateSessionId(),
     title: buildSessionTitle(legacyMessages),
@@ -200,6 +281,103 @@ export const createPlaygroundSession = (messages = []) =>
     messages: normalizeMessages(messages),
   });
 
+export const buildPlaygroundConversationKey = ({
+  model = '',
+  group = '',
+  kind = 'chat',
+} = {}) => {
+  const normalizedKind = String(kind || 'chat').trim().toLowerCase() || 'chat';
+  const normalizedGroup = String(group || '').trim() || '__default_group__';
+  const normalizedModel = String(model || '').trim() || '__default_model__';
+  return [normalizedKind, normalizedGroup, normalizedModel].join('::');
+};
+
+export const getSessionConversationId = (session, conversationKey = '') => {
+  const normalizedKey = String(conversationKey || '').trim();
+  if (!session) {
+    return '';
+  }
+  const conversationIds = normalizeConversationIdMap(
+    session?.webConversationIds,
+  );
+  if (normalizedKey && conversationIds[normalizedKey]) {
+    return conversationIds[normalizedKey];
+  }
+  const explicitKeys = Object.keys(conversationIds).filter(
+    (key) => key !== DEFAULT_CONVERSATION_KEY,
+  );
+  if (explicitKeys.length > 0) {
+    return '';
+  }
+  if (conversationIds[DEFAULT_CONVERSATION_KEY]) {
+    return conversationIds[DEFAULT_CONVERSATION_KEY];
+  }
+  return String(session?.webConversationId || '').trim();
+};
+
+export const updateSessionConversationId = (
+  sessionId,
+  conversationKey,
+  conversationId,
+) => {
+  try {
+    const normalizedSessionId = String(sessionId || '').trim();
+    const normalizedConversationKey = String(conversationKey || '').trim();
+    const normalizedConversationId = String(conversationId || '').trim();
+    if (
+      !normalizedSessionId ||
+      !normalizedConversationKey ||
+      !normalizedConversationId
+    ) {
+      return;
+    }
+
+    const sessions = ensureSessions();
+    const now = new Date().toISOString();
+    let found = false;
+    const updatedSessions = sessions.map((session) => {
+      if (session.id !== normalizedSessionId) {
+        return session;
+      }
+      found = true;
+      const conversationIds = normalizeConversationIdMap(
+        session?.webConversationIds,
+      );
+      if (conversationIds[normalizedConversationKey] === normalizedConversationId) {
+        return session;
+      }
+      delete conversationIds[DEFAULT_CONVERSATION_KEY];
+      conversationIds[normalizedConversationKey] = normalizedConversationId;
+      return normalizeSession({
+        ...session,
+        webConversationId: normalizedConversationId,
+        webConversationIds: conversationIds,
+        updatedAt: now,
+      });
+    });
+
+    if (!found) {
+      updatedSessions.unshift(
+        normalizeSession({
+          id: normalizedSessionId,
+          title: '新会话',
+          messages: [],
+          createdAt: now,
+          updatedAt: now,
+          webConversationId: normalizedConversationId,
+          webConversationIds: {
+            [normalizedConversationKey]: normalizedConversationId,
+          },
+        }),
+      );
+    }
+
+    persistSessions(updatedSessions);
+  } catch (error) {
+    console.error('更新会话会话ID失败:', error);
+  }
+};
+
 export const updateSessionMetadata = (sessionId, metadata = {}) => {
   try {
     if (!sessionId || !metadata || Object.keys(metadata).length === 0) return;
@@ -254,7 +432,7 @@ export const saveConfig = (config) => {
  */
 export const saveMessages = (messages, sessionId = null) => {
   const persistMessages = (messagesToPersist) => {
-    const normalizedMessages = normalizeMessages(messagesToPersist);
+    const normalizedMessages = normalizeMessagesForStorage(messagesToPersist);
     const messagesToSave = {
       messages: normalizedMessages,
       timestamp: new Date().toISOString(),

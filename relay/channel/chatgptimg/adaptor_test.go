@@ -58,7 +58,7 @@ func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, pw)
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
