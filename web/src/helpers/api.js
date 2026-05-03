@@ -474,6 +474,42 @@ export const buildApiPayload = (
   return payload;
 };
 
+export const normalizePlaygroundPayloadForTransport = (payload) => {
+  if (!payload || typeof payload !== 'object') {
+    return payload;
+  }
+
+  if (!isImageGenerationModel(payload.model)) {
+    return payload;
+  }
+
+  if (!Array.isArray(payload.messages) || payload.messages.length === 0) {
+    return payload;
+  }
+
+  const normalizedImagePayload = buildImageGenerationPayload(
+    payload.messages,
+    '',
+    {
+      model: payload.model,
+      group: payload.group,
+    },
+    {
+      webConversationId: String(payload.conversation_id || '').trim(),
+    },
+  );
+
+  const mergedPayload = {
+    ...normalizedImagePayload,
+    ...payload,
+  };
+
+  delete mergedPayload.messages;
+  delete mergedPayload.stream;
+
+  return mergedPayload;
+};
+
 // 处理API错误响应
 export const handleApiError = (error, response = null) => {
   const errorInfo = {

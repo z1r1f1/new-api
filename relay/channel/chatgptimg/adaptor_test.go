@@ -1,6 +1,7 @@
 package chatgptimg
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	"github.com/gin-gonic/gin"
 )
 
 func TestBuildChatPromptFromMessages(t *testing.T) {
@@ -159,5 +162,88 @@ func TestConvertImageRequestCarriesConversationID(t *testing.T) {
 	}
 	if len(got.FallbackReferenceImages) != 1 || got.FallbackReferenceImages[0] != "data:image/png;base64,abc" {
 		t.Fatalf("unexpected fallback reference images: %#v", got.FallbackReferenceImages)
+	}
+}
+
+func TestBuildImageStreamPayloadWrapsFinalPayloadAndDone(t *testing.T) {
+	payload := &generationResponse{
+		Created:        123,
+		ConversationID: "conv-1",
+		Usage: dto.Usage{
+			PromptTokens:     1,
+			CompletionTokens: 2,
+			TotalTokens:      3,
+		},
+		Data: []dto.ImageData{{Url: "https://example.com/image.png"}},
+	}
+
+	rawPayload, err := common.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload failed: %v", err)
+	}
+	out := buildImageStreamPayload(rawPayload)
+	if !strings.Contains(string(out), "data: [DONE]") {
+		t.Fatalf("expected DONE marker, got %q", string(out))
+	}
+	decoded := strings.TrimSpace(strings.TrimPrefix(strings.SplitN(string(out), "\n\n", 2)[0], "data: "))
+	var got generationResponse
+	if err := common.UnmarshalJsonStr(decoded, &got); err != nil {
+		t.Fatalf("failed to decode streamed payload: %v", err)
+	}
+	if got.ConversationID != "conv-1" || got.Usage.TotalTokens != 3 {
+		t.Fatalf("unexpected streamed payload: %#v", got)
+	}
+}
+
+type closeTrackingReadCloser struct {
+	*bytes.Reader
+	closed bool
+}
+
+func (c *closeTrackingReadCloser) Close() error {
+	c.closed = true
+	return nil
+}
+
+func TestStreamImageResponseClosesBodyAndWritesSSE(t *testing.T) {
+	payload := &generationResponse{
+		Created:        123,
+		ConversationID: "conv-1",
+		Usage: dto.Usage{
+			PromptTokens:     1,
+			CompletionTokens: 2,
+			TotalTokens:      3,
+		},
+		Data: []dto.ImageData{{Url: "https://example.com/image.png"}},
+	}
+	rawPayload, err := common.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload failed: %v", err)
+	}
+	body := buildImageStreamPayload(rawPayload)
+	rc := &closeTrackingReadCloser{Reader: bytes.NewReader(body)}
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       rc,
+	}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+
+	usage, apiErr := streamImageResponse(c, resp)
+	if apiErr != nil {
+		t.Fatalf("streamImageResponse returned error: %v", apiErr)
+	}
+	if !rc.closed {
+		t.Fatal("expected response body to be closed")
+	}
+	if usage == nil || usage.TotalTokens != 3 {
+		t.Fatalf("unexpected usage: %#v", usage)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
+		t.Fatalf("expected SSE content-type, got %q", got)
+	}
+	if !strings.Contains(recorder.Body.String(), "data: [DONE]") {
+		t.Fatalf("expected DONE marker in downstream SSE, got %q", recorder.Body.String())
 	}
 }

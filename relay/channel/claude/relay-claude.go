@@ -1,10 +1,13 @@
 package claude
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -376,6 +379,12 @@ func RequestOpenAI2ClaudeMessage(c *gin.Context, textRequest dto.GeneralOpenAIRe
 								Text: common.GetPointer[string](mediaMessage.Text),
 							})
 						}
+					case dto.ContentTypeFile:
+						fileMessages, err := openAIFileToClaudeMediaMessages(mediaMessage.GetFile())
+						if err != nil {
+							return nil, err
+						}
+						claudeMediaMessages = append(claudeMediaMessages, fileMessages...)
 					default:
 						source := mediaMessage.ToFileSource()
 						if source == nil {
@@ -707,6 +716,49 @@ func setMessageDeltaUsageInt(data string, path string, localValue int) string {
 		return data
 	}
 	return patchedData
+}
+
+func openAIFileToClaudeMediaMessages(file *dto.MessageFile) ([]dto.ClaudeMediaMessage, error) {
+	if file == nil || strings.TrimSpace(file.FileData) == "" {
+		return nil, nil
+	}
+
+	extMime := strings.ToLower(strings.TrimSpace(mime.TypeByExtension(strings.ToLower(filepath.Ext(strings.TrimSpace(file.FileName))))))
+	switch {
+	case extMime == "application/pdf":
+		return []dto.ClaudeMediaMessage{{
+			Type: "document",
+			Source: &dto.ClaudeMessageSource{
+				Type:      "base64",
+				MediaType: "application/pdf",
+				Data:      file.FileData,
+			},
+		}}, nil
+	case isClaudeTextFileMime(extMime):
+		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(file.FileData))
+		if err != nil {
+			return nil, fmt.Errorf("decode claude text file content failed: %w", err)
+		}
+		text := string(decoded)
+		return []dto.ClaudeMediaMessage{{
+			Type: "text",
+			Text: common.GetPointer(text),
+		}}, nil
+	default:
+		return nil, nil
+	}
+}
+
+func isClaudeTextFileMime(mimeType string) bool {
+	if strings.HasPrefix(mimeType, "text/") {
+		return true
+	}
+	switch mimeType {
+	case "application/json", "application/xml", "application/javascript":
+		return true
+	default:
+		return false
+	}
 }
 
 func FormatClaudeResponseInfo(claudeResponse *dto.ClaudeResponse, oaiResponse *dto.ChatCompletionsStreamResponse, claudeInfo *ClaudeResponseInfo) bool {

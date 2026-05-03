@@ -303,6 +303,14 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 	if err != nil {
 		return nil, fmt.Errorf("chatgpt web channel: marshal synthetic response failed: %w", err)
 	}
+	if info != nil && info.IsStream {
+		payloadBytes = buildImageStreamPayload(payloadBytes)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
+		}, nil
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
@@ -1108,6 +1116,9 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	if resp == nil {
 		return nil, types.NewError(errors.New("chatgpt web channel: nil response"), types.ErrorCodeBadResponse)
 	}
+	if info != nil && info.IsStream && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
+		return streamImageResponse(c, resp)
+	}
 	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
 		return openai.OpenaiHandlerWithUsage(c, info, resp)
 	}
@@ -1115,6 +1126,69 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		return openai.OaiStreamHandler(c, info, resp)
 	}
 	return openai.OpenaiHandler(c, info, resp)
+}
+
+func buildImageStreamPayload(payloadBytes []byte) []byte {
+	payloadBytes = bytes.TrimSpace(payloadBytes)
+	if len(payloadBytes) == 0 {
+		return []byte("data: [DONE]\n\n")
+	}
+	var b strings.Builder
+	b.Grow(len(payloadBytes) + 16)
+	b.WriteString("data: ")
+	b.Write(payloadBytes)
+	b.WriteString("\n\n")
+	b.WriteString("data: [DONE]\n\n")
+	return []byte(b.String())
+}
+
+func streamImageResponse(c *gin.Context, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
+	defer service.CloseResponseBodyGracefully(resp)
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
+	}
+
+	var payload generationResponse
+	if err := decodeImageStreamPayload(responseBody, &payload); err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
+	}
+
+	service.IOCopyBytesGracefully(c, resp, responseBody)
+	return &payload.Usage, nil
+}
+
+func decodeImageStreamPayload(body []byte, payload *generationResponse) error {
+	if payload == nil {
+		return errors.New("chatgpt web channel: nil image payload target")
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return errors.New("chatgpt web channel: empty image stream body")
+	}
+	parts := bytes.Split(trimmed, []byte("\n\n"))
+	for _, part := range parts {
+		part = bytes.TrimSpace(part)
+		if len(part) == 0 {
+			continue
+		}
+		if bytes.Equal(part, []byte("data: [DONE]")) {
+			continue
+		}
+		if !bytes.HasPrefix(part, []byte("data: ")) {
+			continue
+		}
+		data := bytes.TrimSpace(bytes.TrimPrefix(part, []byte("data: ")))
+		if len(data) == 0 {
+			continue
+		}
+		if err := common.Unmarshal(data, payload); err != nil {
+			return fmt.Errorf("chatgpt web channel: decode image stream payload failed: %w", err)
+		}
+		return nil
+	}
+	return errors.New("chatgpt web channel: image stream payload not found")
 }
 
 func (a *Adaptor) GetModelList() []string { return ModelList }

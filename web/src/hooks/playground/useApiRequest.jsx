@@ -28,6 +28,7 @@ import {
 import {
   getUserIdFromLocalStorage,
   handleApiError,
+  normalizePlaygroundPayloadForTransport,
   processThinkTags,
   processIncompleteThinkTags,
 } from '../../helpers';
@@ -1107,10 +1108,12 @@ export const useApiRequest = (
   // 发送请求
   const sendRequest = useCallback(
     (payload, isStream) => {
-      if (isImageGenerationPayload(payload) || !isStream) {
-        handleNonStreamRequest(payload);
+      const normalizedPayload = normalizePlaygroundPayloadForTransport(payload);
+
+      if (isImageGenerationPayload(normalizedPayload) || !isStream) {
+        handleNonStreamRequest(normalizedPayload);
       } else {
-        handleSSE(payload);
+        handleSSE(normalizedPayload);
       }
     },
     [handleSSE, handleNonStreamRequest],

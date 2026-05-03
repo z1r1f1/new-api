@@ -14,6 +14,7 @@ import (
 type ImageRequest struct {
 	Model             string          `json:"model"`
 	Prompt            string          `json:"prompt" binding:"required"`
+	Stream            *bool           `json:"stream,omitempty"`
 	N                 *uint           `json:"n,omitempty"`
 	Size              string          `json:"size,omitempty"`
 	Quality           string          `json:"quality,omitempty"`
@@ -160,7 +161,7 @@ func (i *ImageRequest) GetTokenCountMeta() *types.TokenCountMeta {
 }
 
 func (i *ImageRequest) IsStream(c *gin.Context) bool {
-	return false
+	return i != nil && i.Stream != nil && *i.Stream
 }
 
 func (i *ImageRequest) SetModelName(modelName string) {
