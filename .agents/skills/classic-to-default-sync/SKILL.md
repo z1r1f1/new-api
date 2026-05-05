@@ -1,11 +1,13 @@
 ---
 name: classic-to-default-sync
-description: Inspect a given commit's web/classic changes and sync all features/fixes to web/default. Use when the user provides a commit ID and wants to audit whether web/default already has the same features as web/classic, port missing features, improve suboptimal implementations, fix bugs, and remove redundant code. Trigger phrases include: "/classic-to-default-sync <hash>", "classic-to-default-sync <hash>", "sync classic to default", "port from classic", "compare classic commit", "classic 和 default 对比", "把这次 classic 的修改同步到 default", "查看这次提交 classic 中的修改并同步", or any request supplying a commit hash together with classic/default comparison intent.
+description: Use when a commit changes web/classic and those features, fixes, or UI changes must be audited, compared, or ported into web/default for parity.
 ---
 
 # Classic-to-Default Sync
 
 Given a **commit ID**, audit all `web/classic` changes and ensure `web/default` reaches feature parity with the best possible implementation.
+
+Trigger phrases include: `/classic-to-default-sync <hash>`, `classic-to-default-sync <hash>`, `sync classic to default`, `port from classic`, `compare classic commit`, `classic 和 default 对比`, `把这次 classic 的修改同步到 default`, `查看这次提交 classic 中的修改并同步`, or any request supplying a commit hash together with classic/default comparison intent.
 
 ## Input
 
