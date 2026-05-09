@@ -26,6 +26,12 @@ import (
 )
 
 func Playground(c *gin.Context) {
+	if err := sanitizePlaygroundChatRequest(c); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
 	playgroundRelay(c, types.RelayFormatOpenAI)
 }
 
@@ -502,4 +508,68 @@ func playgroundRelay(c *gin.Context, relayFormat types.RelayFormat) {
 		return
 	}
 	Relay(c, relayFormat)
+}
+
+func sanitizePlaygroundChatRequest(c *gin.Context) error {
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return err
+	}
+
+	body, err := storage.Bytes()
+	if err != nil {
+		return err
+	}
+
+	var payload map[string]any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return err
+	}
+
+	changed := false
+	changed = deleteNumberIfEqual(payload, "temperature", 0.7) || changed
+	changed = deleteNumberIfEqual(payload, "top_p", 1) || changed
+	changed = deleteNumberIfEqual(payload, "frequency_penalty", 0) || changed
+	changed = deleteNumberIfEqual(payload, "presence_penalty", 0) || changed
+
+	if !changed {
+		if _, err := storage.Seek(0, io.SeekStart); err != nil {
+			return err
+		}
+		c.Request.Body = io.NopCloser(storage)
+		return nil
+	}
+
+	sanitizedBody, err := common.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	sanitizedStorage, err := common.CreateBodyStorage(sanitizedBody)
+	if err != nil {
+		return err
+	}
+
+	_ = storage.Close()
+	c.Set(common.KeyBodyStorage, sanitizedStorage)
+	c.Set(common.KeyRequestBody, sanitizedBody)
+	c.Request.Body = io.NopCloser(sanitizedStorage)
+	c.Request.ContentLength = int64(len(sanitizedBody))
+	c.Request.Header.Set("Content-Length", strconv.Itoa(len(sanitizedBody)))
+	return nil
+}
+
+func deleteNumberIfEqual(payload map[string]any, key string, expected float64) bool {
+	value, ok := payload[key]
+	if !ok {
+		return false
+	}
+
+	number, ok := value.(float64)
+	if !ok || number != expected {
+		return false
+	}
+
+	delete(payload, key)
+	return true
 }

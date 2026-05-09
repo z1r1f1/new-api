@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { getUserModels, getUserGroups } from './api'
+import { getUserModelsByGroup, getUserGroups } from './api'
 import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundInput } from './components/playground-input'
 import { DEFAULT_GROUP } from './constants'
@@ -34,12 +34,12 @@ export function Playground() {
 
   // Load models
   const { data: modelsData, isLoading: isLoadingModels } = useQuery({
-    queryKey: ['playground-models'],
-    queryFn: getUserModels,
+    queryKey: ['playground-models', config.group],
+    queryFn: () => getUserModelsByGroup(config.group),
   })
 
   // Load groups
-  const { data: groupsData } = useQuery({
+  const { data: groupsData, isLoading: isLoadingGroups } = useQuery({
     queryKey: ['playground-groups'],
     queryFn: getUserGroups,
   })
@@ -76,7 +76,14 @@ export function Playground() {
         ]
 
     setGroups(processedGroups)
-  }, [groupsData, setGroups])
+
+    const isCurrentGroupValid = processedGroups.some(
+      (group) => group.value === config.group
+    )
+    if (!isCurrentGroupValid) {
+      updateConfig('group', DEFAULT_GROUP)
+    }
+  }, [groupsData, config.group, setGroups, updateConfig])
 
   const handleSendMessage = (text: string) => {
     const userMessage = createUserMessage(text)
@@ -173,11 +180,11 @@ export function Playground() {
       {/* Input area: center content and constrain to the same container width */}
       <div className='mx-auto w-full max-w-4xl'>
         <PlaygroundInput
-          disabled={isGenerating}
+          disabled={isGenerating || isLoadingModels || models.length === 0}
           groups={groups}
           groupValue={config.group}
           isGenerating={isGenerating}
-          isModelLoading={isLoadingModels}
+          isModelLoading={isLoadingModels || isLoadingGroups}
           modelValue={config.model}
           models={models}
           onGroupChange={(value) => updateConfig('group', value)}

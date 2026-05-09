@@ -1,3 +1,4 @@
+import { DEFAULT_CONFIG } from '../constants'
 import type {
   ChatCompletionRequest,
   Message,
@@ -5,6 +6,37 @@ import type {
   ParameterEnabled,
 } from '../types'
 import { formatMessageForAPI, isValidMessage } from './message-utils'
+
+const omitWhenDefaultParameterKeys: Array<keyof ParameterEnabled> = [
+  'temperature',
+  'top_p',
+  'frequency_penalty',
+  'presence_penalty',
+]
+
+function shouldIncludeParameter(
+  key: keyof ParameterEnabled,
+  config: PlaygroundConfig,
+  parameterEnabled: ParameterEnabled
+) {
+  if (!parameterEnabled[key]) {
+    return false
+  }
+
+  const value = config[key as keyof PlaygroundConfig]
+  if (value === undefined || value === null) {
+    return false
+  }
+
+  if (
+    omitWhenDefaultParameterKeys.includes(key) &&
+    value === DEFAULT_CONFIG[key as keyof PlaygroundConfig]
+  ) {
+    return false
+  }
+
+  return true
+}
 
 /**
  * Build API request payload from messages and config
@@ -37,11 +69,9 @@ export function buildChatCompletionPayload(
   ]
 
   parameterKeys.forEach((key) => {
-    if (parameterEnabled[key]) {
+    if (shouldIncludeParameter(key, config, parameterEnabled)) {
       const value = config[key as keyof PlaygroundConfig]
-      if (value !== undefined && value !== null) {
-        ;(payload as unknown as Record<string, unknown>)[key] = value
-      }
+      ;(payload as unknown as Record<string, unknown>)[key] = value
     }
   })
 

@@ -717,6 +717,34 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     },
 
     {
+      accessorKey: 'ip',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('IP')} />
+      ),
+      cell: function IpCell({ row }) {
+        const { sensitiveVisible } = useUsageLogsContext()
+        const log = row.original
+        const showIp =
+          (log.type === 2 || log.type === 5 || (isAdmin && log.type === 1)) &&
+          !!log.ip
+
+        if (!showIp) return null
+
+        return (
+          <StatusBadge
+            label={sensitiveVisible ? log.ip : '••••'}
+            copyText={sensitiveVisible ? log.ip : undefined}
+            size='sm'
+            showDot={false}
+            className='max-w-[140px] border-orange-200 bg-orange-50 font-mono text-orange-700 dark:border-orange-900/50 dark:bg-orange-950/30 dark:text-orange-300'
+          />
+        )
+      },
+      meta: { label: t('IP'), mobileHidden: true },
+      size: 120,
+    },
+
+    {
       accessorKey: 'content',
       header: t('Details'),
       cell: function DetailsCell({ row }) {

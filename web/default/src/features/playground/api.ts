@@ -23,7 +23,26 @@ export async function sendChatCompletion(
  * Get user available models
  */
 export async function getUserModels(): Promise<ModelOption[]> {
-  const res = await api.get(API_ENDPOINTS.USER_MODELS)
+  return getUserModelsByGroup()
+}
+
+/**
+ * Get user available models for a selected group
+ */
+export async function getUserModelsByGroup(
+  group?: string
+): Promise<ModelOption[]> {
+  const query = group ? `?group=${encodeURIComponent(group)}` : ''
+  const res = await api
+    .get(`${API_ENDPOINTS.USER_MODELS}${query}`, {
+      skipErrorHandler: true,
+    } as Record<string, unknown>)
+    .catch(() => null)
+
+  if (!res) {
+    return []
+  }
+
   const { data } = res
 
   if (!data.success || !Array.isArray(data.data)) {
@@ -40,7 +59,16 @@ export async function getUserModels(): Promise<ModelOption[]> {
  * Get user groups
  */
 export async function getUserGroups(): Promise<GroupOption[]> {
-  const res = await api.get(API_ENDPOINTS.USER_GROUPS)
+  const res = await api
+    .get(API_ENDPOINTS.USER_GROUPS, {
+      skipErrorHandler: true,
+    } as Record<string, unknown>)
+    .catch(() => null)
+
+  if (!res) {
+    return []
+  }
+
   const { data } = res
 
   if (!data.success || !data.data) {
