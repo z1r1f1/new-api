@@ -1,0 +1,2 @@
+FROM new-api-prod-local:latest
+COPY new-api /new-api
