@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type ColumnDef } from '@tanstack/react-table'
 import {
   AlertTriangle,
@@ -54,6 +54,7 @@ import {
   isTagAggregateRow,
   type TagRow,
 } from '../lib'
+import { getCodexAccountTypeBadge } from '../lib/codex-account'
 import { parseUpstreamUpdateMeta } from '../lib/upstream-update-utils'
 import type { Channel } from '../types'
 import { useChannels } from './channels-provider'
@@ -79,6 +80,55 @@ function parseIonetMeta(otherInfo: string | null | undefined): null | {
     return null
   }
   return null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function parseChannelOtherInfo(channel: Channel): Record<string, unknown> {
+  if (!channel.other_info) return {}
+  try {
+    const parsed = JSON.parse(channel.other_info)
+    return isRecord(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function getCodexAccountType(response?: CodexUsageDialogData | null): unknown {
+  const payload = response?.data
+  if (!isRecord(payload)) return undefined
+
+  const rateLimit = payload.rate_limit
+  if (payload.plan_type != null) return payload.plan_type
+  if (isRecord(rateLimit)) return rateLimit.plan_type
+}
+
+function getCachedCodexAccountType(channel: Channel): unknown {
+  const otherInfo = parseChannelOtherInfo(channel)
+  return otherInfo.codex_account_type ?? otherInfo.plan_type
+}
+
+function getLastStatusCodeInfo(channel: Channel): {
+  code?: number
+  time?: number
+} {
+  const otherInfo = parseChannelOtherInfo(channel)
+  const code = Number(otherInfo.last_status_code)
+  const time = Number(otherInfo.last_status_code_time)
+  return {
+    code:
+      Number.isFinite(code) && code >= 100 && code <= 599 ? code : undefined,
+    time: Number.isFinite(time) && time > 0 ? time : undefined,
+  }
+}
+
+function getStatusCodeVariant(code: number) {
+  if (code >= 200 && code < 300) return 'success'
+  if (code >= 400 && code < 500) return 'warning'
+  if (code >= 500) return 'danger'
+  return 'neutral'
 }
 
 /**
@@ -107,6 +157,59 @@ function renderLimitedItems(
         />
       )}
     </div>
+  )
+}
+
+function CodexAccountTypeCell({ channel }: { channel: Channel }) {
+  const { t } = useTranslation()
+  const isMultiKey = isMultiKeyChannel(channel)
+  const cachedAccountType = getCachedCodexAccountType(channel)
+
+  const { data, isLoading, isFetching } = useQuery({
+    queryKey: ['codex-usage', channel.id],
+    queryFn: () => getCodexUsage(channel.id),
+    enabled: channel.type === 57 && !isMultiKey && !cachedAccountType,
+    staleTime: 5 * 60 * 1000,
+    retry: false,
+  })
+
+  if (channel.type !== 57) {
+    return <span className='text-muted-foreground text-xs'>-</span>
+  }
+
+  if (isMultiKey) {
+    return (
+      <StatusBadge
+        label={t('Multi-key')}
+        variant='neutral'
+        size='sm'
+        copyable={false}
+      />
+    )
+  }
+
+  if (!cachedAccountType && (isLoading || isFetching)) {
+    return (
+      <StatusBadge
+        label={t('Loading...')}
+        variant='neutral'
+        size='sm'
+        copyable={false}
+      />
+    )
+  }
+
+  const accountBadge = getCodexAccountTypeBadge(
+    cachedAccountType || getCodexAccountType(data),
+    t
+  )
+  return (
+    <StatusBadge
+      label={accountBadge.label}
+      variant={accountBadge.variant}
+      size='sm'
+      copyable={false}
+    />
   )
 }
 
@@ -704,6 +807,21 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
       enableSorting: false,
     },
 
+    // Codex account type column
+    {
+      id: 'codex_account_type',
+      meta: { label: t('Codex Account') },
+      header: t('Codex Account'),
+      cell: ({ row }) => {
+        if (isTagAggregateRow(row.original)) {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+        return <CodexAccountTypeCell channel={row.original as Channel} />
+      },
+      size: 130,
+      enableSorting: false,
+    },
+
     // Status column
     {
       accessorKey: 'status',
@@ -761,18 +879,15 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         if (status === 3) {
           let statusReason = ''
           let statusTime = ''
-          try {
-            const otherInfo = channel.other_info
-              ? JSON.parse(channel.other_info)
-              : null
-            if (otherInfo) {
-              statusReason = otherInfo.status_reason || ''
-              statusTime = otherInfo.status_time
-                ? formatTimestampToDate(otherInfo.status_time)
+          const otherInfo = parseChannelOtherInfo(channel)
+          if (Object.keys(otherInfo).length > 0) {
+            statusReason =
+              typeof otherInfo.status_reason === 'string'
+                ? otherInfo.status_reason
                 : ''
-            }
-          } catch {
-            /* empty */
+            statusTime = otherInfo.status_time
+              ? formatTimestampToDate(Number(otherInfo.status_time))
+              : ''
           }
 
           if (statusReason || statusTime) {
@@ -826,6 +941,49 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         return false
       },
       size: 120,
+      enableSorting: false,
+    },
+
+    // Last status code column
+    {
+      id: 'last_status_code',
+      meta: { label: t('Status Code') },
+      header: t('Status Code'),
+      cell: ({ row }) => {
+        if (isTagAggregateRow(row.original)) {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+        const channel = row.original as Channel
+        const { code, time } = getLastStatusCodeInfo(channel)
+        if (!code) {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+
+        const badge = (
+          <StatusBadge
+            label={String(code)}
+            variant={getStatusCodeVariant(code)}
+            size='sm'
+            copyText={String(code)}
+          />
+        )
+
+        if (!time) return badge
+
+        return (
+          <TooltipProvider delay={100}>
+            <Tooltip>
+              <TooltipTrigger render={<span />}>{badge}</TooltipTrigger>
+              <TooltipContent side='top'>
+                <div className='text-xs'>
+                  {t('Time:')} {formatTimestampToDate(time)}
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        )
+      },
+      size: 110,
       enableSorting: false,
     },
 

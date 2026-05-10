@@ -16,8 +16,10 @@ import {
   Trash2,
   RefreshCw,
   Loader2,
+  RotateCcw,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -33,6 +35,7 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { redoChannelOAuth } from '../api'
 import { MODEL_FETCHABLE_TYPES } from '../constants'
 import {
   channelsQueryKeys,
@@ -58,9 +61,22 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
   const [isTesting, setIsTesting] = useState(false)
   const [isTogglingStatus, setIsTogglingStatus] = useState(false)
+  const [isRedoingOAuth, setIsRedoingOAuth] = useState(false)
 
   const isEnabled = isChannelEnabled(channel)
   const isMultiKey = isMultiKeyChannel(channel)
+  const canRedoOAuth =
+    !isMultiKey && (channel.type === 57 || channel.type === 58)
+  const isChatGPTWebChannel = channel.type === 58
+  const redoActionLabel = isChatGPTWebChannel
+    ? t('Redo ChatGPT')
+    : t('Redo OAuth')
+  const redoFailureMessage = isChatGPTWebChannel
+    ? t('Failed to redo ChatGPT')
+    : t('Failed to redo OAuth')
+  const redoSuccessMessage = isChatGPTWebChannel
+    ? t('ChatGPT redo completed')
+    : t('OAuth redo completed')
 
   const handleEdit = () => {
     setCurrentRow(channel)
@@ -107,6 +123,23 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const handleManageKeys = () => {
     setCurrentRow(channel)
     setOpen('multi-key-manage')
+  }
+
+  const handleRedoOAuth = async () => {
+    if (isRedoingOAuth) return
+    setIsRedoingOAuth(true)
+    try {
+      const res = await redoChannelOAuth(channel.id, channel.type)
+      if (!res.success) {
+        throw new Error(res.message || redoFailureMessage)
+      }
+      toast.success(res.message || redoSuccessMessage)
+      queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : redoFailureMessage)
+    } finally {
+      setIsRedoingOAuth(false)
+    }
   }
 
   const handleToggleStatus = async (
@@ -242,6 +275,23 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
               {t('Upstream Updates')}
               <DropdownMenuShortcut>
                 <RefreshCw size={16} />
+              </DropdownMenuShortcut>
+            </DropdownMenuItem>
+          )}
+
+          {/* Redo OAuth through AutoTeam */}
+          {canRedoOAuth && (
+            <DropdownMenuItem
+              onClick={handleRedoOAuth}
+              disabled={isRedoingOAuth}
+            >
+              {redoActionLabel}
+              <DropdownMenuShortcut>
+                {isRedoingOAuth ? (
+                  <Loader2 size={16} className='animate-spin' />
+                ) : (
+                  <RotateCcw size={16} />
+                )}
               </DropdownMenuShortcut>
             </DropdownMenuItem>
           )}

@@ -435,6 +435,12 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
+		if httpResp.StatusCode >= 100 && httpResp.StatusCode <= 599 {
+			statusCode := httpResp.StatusCode
+			gopool.Go(func() {
+				model.UpdateChannelLastStatusCode(channel.Id, statusCode)
+			})
+		}
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(

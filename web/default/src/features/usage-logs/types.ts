@@ -29,6 +29,8 @@ export interface CommonFilters {
  * Common logs specific filters
  */
 export interface CommonLogFilters extends CommonFilters {
+  channelId?: string
+  channelName?: string
   model?: string
   token?: string
   group?: string
@@ -103,6 +105,9 @@ export interface LogOtherData {
   cache_creation_tokens?: number
   cache_creation_tokens_5m?: number
   cache_creation_tokens_1h?: number
+  cache_write_tokens?: number
+  input_tokens_total?: number
+  usage_semantic?: string
   claude?: boolean
   model_ratio?: number
   completion_ratio?: number
@@ -179,6 +184,9 @@ export interface LogStatistics {
   quota: number
   rpm: number
   tpm: number
+  prompt_tokens: number
+  completion_tokens: number
+  avg_cache_hit_rate: number
 }
 
 // ============================================================================
@@ -246,7 +254,8 @@ export interface GetLogsParams {
   model_name?: string
   start_timestamp?: number
   end_timestamp?: number
-  channel?: number
+  channel_id?: number
+  channel_name?: string
   group?: string
   request_id?: string
 }
@@ -269,7 +278,8 @@ export interface GetLogStatsParams {
   model_name?: string
   start_timestamp?: number
   end_timestamp?: number
-  channel?: number
+  channel_id?: number
+  channel_name?: string
   group?: string
   request_id?: string
 }

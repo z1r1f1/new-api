@@ -18,10 +18,15 @@ func GetAllLogs(c *gin.Context) {
 	username := c.Query("username")
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
-	channel, _ := strconv.Atoi(c.Query("channel"))
+	channel, _ := strconv.Atoi(c.Query("channel_id"))
+	if channel == 0 {
+		// Backward compatibility for old clients that used `channel` as channel id.
+		channel, _ = strconv.Atoi(c.Query("channel"))
+	}
+	channelName := c.Query("channel_name")
 	group := c.Query("group")
 	requestId := c.Query("request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, group, requestId)
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, requestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -40,9 +45,14 @@ func GetUserLogs(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
+	channel, _ := strconv.Atoi(c.Query("channel_id"))
+	if channel == 0 {
+		channel, _ = strconv.Atoi(c.Query("channel"))
+	}
+	channelName := c.Query("channel_name")
 	group := c.Query("group")
 	requestId := c.Query("request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), group, requestId)
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, requestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -100,9 +110,14 @@ func GetLogsStat(c *gin.Context) {
 	tokenName := c.Query("token_name")
 	username := c.Query("username")
 	modelName := c.Query("model_name")
-	channel, _ := strconv.Atoi(c.Query("channel"))
+	channel, _ := strconv.Atoi(c.Query("channel_id"))
+	if channel == 0 {
+		channel, _ = strconv.Atoi(c.Query("channel"))
+	}
+	channelName := c.Query("channel_name")
 	group := c.Query("group")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	requestId := c.Query("request_id")
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, requestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -112,9 +127,12 @@ func GetLogsStat(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"quota": stat.Quota,
-			"rpm":   stat.Rpm,
-			"tpm":   stat.Tpm,
+			"quota":              stat.Quota,
+			"rpm":                stat.Rpm,
+			"tpm":                stat.Tpm,
+			"prompt_tokens":      stat.PromptTokens,
+			"completion_tokens":  stat.CompletionTokens,
+			"avg_cache_hit_rate": stat.AvgCacheHitRate,
 		},
 	})
 	return
@@ -127,9 +145,14 @@ func GetLogsSelfStat(c *gin.Context) {
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	tokenName := c.Query("token_name")
 	modelName := c.Query("model_name")
-	channel, _ := strconv.Atoi(c.Query("channel"))
+	channel, _ := strconv.Atoi(c.Query("channel_id"))
+	if channel == 0 {
+		channel, _ = strconv.Atoi(c.Query("channel"))
+	}
+	channelName := c.Query("channel_name")
 	group := c.Query("group")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, group)
+	requestId := c.Query("request_id")
+	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, requestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -139,9 +162,12 @@ func GetLogsSelfStat(c *gin.Context) {
 		"success": true,
 		"message": "",
 		"data": gin.H{
-			"quota": quotaNum.Quota,
-			"rpm":   quotaNum.Rpm,
-			"tpm":   quotaNum.Tpm,
+			"quota":              quotaNum.Quota,
+			"rpm":                quotaNum.Rpm,
+			"tpm":                quotaNum.Tpm,
+			"prompt_tokens":      quotaNum.PromptTokens,
+			"completion_tokens":  quotaNum.CompletionTokens,
+			"avg_cache_hit_rate": quotaNum.AvgCacheHitRate,
 			//"token": tokenNum,
 		},
 	})

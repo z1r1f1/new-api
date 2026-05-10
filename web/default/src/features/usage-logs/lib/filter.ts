@@ -24,7 +24,6 @@ export function buildSearchParams(
   const baseParams: Record<string, unknown> = {
     ...(filters.startTime && { startTime: filters.startTime.getTime() }),
     ...(filters.endTime && { endTime: filters.endTime.getTime() }),
-    ...(filters.channel && { channel: filters.channel }),
   }
 
   switch (logCategory) {
@@ -32,6 +31,10 @@ export function buildSearchParams(
       const commonFilters = filters as CommonLogFilters
       return {
         ...baseParams,
+        ...(commonFilters.channelId && { channelId: commonFilters.channelId }),
+        ...(commonFilters.channelName && {
+          channelName: commonFilters.channelName,
+        }),
         ...(commonFilters.model && { model: commonFilters.model }),
         ...(commonFilters.token && { token: commonFilters.token }),
         ...(commonFilters.group && { group: commonFilters.group }),
@@ -43,6 +46,7 @@ export function buildSearchParams(
       const drawingFilters = filters as DrawingLogFilters
       return {
         ...baseParams,
+        ...(drawingFilters.channel && { channel: drawingFilters.channel }),
         ...(drawingFilters.mjId && { filter: drawingFilters.mjId }),
       }
     }
@@ -50,6 +54,7 @@ export function buildSearchParams(
       const taskFilters = filters as TaskLogFilters
       return {
         ...baseParams,
+        ...(taskFilters.channel && { channel: taskFilters.channel }),
         ...(taskFilters.taskId && { filter: taskFilters.taskId }),
       }
     }

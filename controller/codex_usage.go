@@ -1,9 +1,12 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +19,195 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func normalizeCodexUsagePlanType(value any) string {
+	planType := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
+	switch planType {
+	case "free", "plus", "pro", "team", "enterprise":
+		return planType
+	default:
+		return ""
+	}
+}
+
+func stringFieldFromMap(data map[string]interface{}, key string) string {
+	if data == nil {
+		return ""
+	}
+	value, ok := data[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func mapFieldFromMap(data map[string]interface{}, key string) map[string]interface{} {
+	if data == nil {
+		return nil
+	}
+	value, ok := data[key]
+	if !ok || value == nil {
+		return nil
+	}
+	nested, ok := value.(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	return nested
+}
+
+func extractCodexUsagePlanType(payload any) string {
+	data, ok := payload.(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if planType := normalizeCodexUsagePlanType(stringFieldFromMap(data, "plan_type")); planType != "" {
+		return planType
+	}
+	if planType := normalizeCodexUsagePlanType(stringFieldFromMap(mapFieldFromMap(data, "rate_limit"), "plan_type")); planType != "" {
+		return planType
+	}
+	return ""
+}
+
+func persistCodexChannelAccountType(ch *model.Channel, planType string) {
+	normalizedPlanType := normalizeCodexUsagePlanType(planType)
+	if ch == nil || normalizedPlanType == "" {
+		return
+	}
+	otherInfo := ch.GetOtherInfo()
+	if strings.TrimSpace(fmt.Sprint(otherInfo["codex_account_type"])) == normalizedPlanType {
+		return
+	}
+	otherInfo["codex_account_type"] = normalizedPlanType
+	otherInfo["codex_account_type_updated_at"] = common.GetTimestamp()
+	encoded, err := common.Marshal(otherInfo)
+	if err != nil {
+		common.SysError("failed to marshal codex account type: " + err.Error())
+		return
+	}
+	ch.OtherInfo = string(encoded)
+	if err := model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("other_info", ch.OtherInfo).Error; err != nil {
+		common.SysError("failed to persist codex account type: " + err.Error())
+	}
+}
+
+func getAutoTeamAPIURL() string {
+	apiURL := strings.TrimSpace(os.Getenv("AUTOTEAM_API_URL"))
+	if apiURL == "" {
+		apiURL = "http://127.0.0.1:8788"
+	}
+	return strings.TrimRight(apiURL, "/")
+}
+
+func getAutoTeamAPIKey() string {
+	apiKey := strings.TrimSpace(os.Getenv("AUTOTEAM_API_KEY"))
+	if apiKey == "" {
+		apiKey = strings.TrimSpace(os.Getenv("AUTOTEAM_TOKEN"))
+	}
+	return apiKey
+}
+
+func RedoChannelAutoTeamOAuth(c *gin.Context) {
+	channelId, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
+		return
+	}
+
+	ch, err := model.GetChannelById(channelId, true)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if ch == nil {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel not found"})
+		return
+	}
+	if ch.Type != constant.ChannelTypeCodex && ch.Type != constant.ChannelTypeChatGPTImage {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel type is not supported"})
+		return
+	}
+	if ch.ChannelInfo.IsMultiKey {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "multi-key channel is not supported"})
+		return
+	}
+
+	email := strings.TrimSpace(ch.Name)
+	if email == "" {
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel name is required"})
+		return
+	}
+
+	path := "/api/accounts/login"
+	requestPayload := gin.H{"email": email}
+	if ch.Type == constant.ChannelTypeChatGPTImage {
+		path = "/api/accounts/redo-chatgpt-tokens"
+		requestPayload = gin.H{"emails": []string{email}}
+	}
+
+	requestBody, err := common.Marshal(requestPayload)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		getAutoTeamAPIURL()+path,
+		bytes.NewReader(requestBody),
+	)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey := getAutoTeamAPIKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		common.SysError("failed to call autoteam redo oauth: " + err.Error())
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "调用 AutoTeam 重做 OAuth 失败，请检查服务状态"})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+
+	var payload any
+	if len(body) > 0 && common.Unmarshal(body, &payload) != nil {
+		payload = string(body)
+	}
+
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	message := ""
+	if data, ok := payload.(map[string]interface{}); ok {
+		message = strings.TrimSpace(fmt.Sprint(data["message"]))
+		if message == "<nil>" {
+			message = ""
+		}
+	}
+	if !ok && message == "" {
+		message = fmt.Sprintf("AutoTeam status: %d", resp.StatusCode)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success":         ok,
+		"message":         message,
+		"upstream_status": resp.StatusCode,
+		"data":            payload,
+	})
+}
 
 func GetCodexChannelUsage(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("id"))
@@ -113,6 +305,9 @@ func GetCodexChannelUsage(c *gin.Context) {
 	}
 
 	ok := statusCode >= 200 && statusCode < 300
+	if ok {
+		persistCodexChannelAccountType(ch, extractCodexUsagePlanType(payload))
+	}
 	resp := gin.H{
 		"success":         ok,
 		"message":         "",

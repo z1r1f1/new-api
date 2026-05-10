@@ -296,6 +296,8 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		return true
 	}
 
+	responseCompleted := false
+
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
 		if streamErr != nil {
 			sr.Stop(streamErr)
@@ -443,6 +445,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		case "response.function_call_arguments.done":
 
 		case "response.completed":
+			responseCompleted = true
 			if streamResp.Response != nil {
 				if streamResp.Response.Model != "" {
 					model = streamResp.Response.Model
@@ -494,6 +497,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 				}
 				sentStop = true
 			}
+			sr.Done()
 
 		case "response.error", "response.failed":
 			if streamResp.Response != nil {
@@ -510,6 +514,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		default:
 		}
 	})
+	if responseCompleted && streamErr == nil {
+		markResponsesStreamCompleted(info)
+	}
 
 	if streamErr != nil {
 		return nil, streamErr

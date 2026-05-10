@@ -72,6 +72,8 @@ export function getChannelTypeIcon(type: number): string {
     40: 'SiliconCloud', // SiliconFlow
     44: 'OpenAI', // MokaAI
     20: 'OpenRouter', // OpenRouter
+    57: 'OpenAI', // Codex
+    58: 'OpenAI', // ChatGPTWeb
 
     // Image/Video generation
     2: 'Midjourney', // Midjourney

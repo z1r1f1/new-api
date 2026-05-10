@@ -49,6 +49,7 @@ function Combobox(
         onValueChange={(value) => props.onValueChange?.(value)}
         placeholder={props.searchPlaceholder ?? props.placeholder}
         emptyText={props.emptyText}
+        allowCustomValue={props.allowCustomValue}
         className={props.className}
       />
     )

@@ -467,6 +467,48 @@ export function ChannelMutateDrawer({
     return options
   }, [currentType, t])
 
+  const selectedChannelTypeOption = useMemo(
+    () =>
+      channelTypeOptions.find((option) => Number(option.value) === currentType),
+    [channelTypeOptions, currentType]
+  )
+
+  const [channelTypeInputValue, setChannelTypeInputValue] = useState('')
+
+  useEffect(() => {
+    setChannelTypeInputValue(
+      selectedChannelTypeOption?.label || `#${currentType}`
+    )
+  }, [currentType, selectedChannelTypeOption])
+
+  const handleChannelTypeValueChange = useCallback(
+    (value: string | null) => {
+      if (value === null) return
+
+      const normalizedValue = value.trim().toLowerCase()
+      const selectedOption = channelTypeOptions.find(
+        (option) =>
+          option.value === value ||
+          option.label.trim().toLowerCase() === normalizedValue
+      )
+
+      if (!selectedOption) {
+        setChannelTypeInputValue(value)
+        return
+      }
+
+      const nextType = Number(selectedOption.value)
+      if (Number.isInteger(nextType) && nextType > 0) {
+        form.setValue('type', nextType, {
+          shouldDirty: true,
+          shouldValidate: true,
+        })
+        setChannelTypeInputValue(selectedOption.label)
+      }
+    },
+    [channelTypeOptions, form]
+  )
+
   // Extract redirect models from model_mapping (target values)
   const redirectModelList = useMemo(
     () => extractRedirectModels(currentModelMapping || ''),
@@ -1146,17 +1188,13 @@ export function ChannelMutateDrawer({
                         <FormControl>
                           <Combobox
                             options={channelTypeOptions}
-                            value={String(field.value)}
-                            onValueChange={(value) => {
-                              const nextType = Number(value)
-                              if (Number.isInteger(nextType) && nextType > 0) {
-                                field.onChange(nextType)
-                              }
-                            }}
+                            value={channelTypeInputValue}
+                            onValueChange={handleChannelTypeValueChange}
+                            id={field.name}
                             placeholder={t('Select channel type')}
                             searchPlaceholder={t('Search channel type...')}
                             emptyText={t('No channel type found.')}
-                            allowCustomValue
+                            allowCustomValue={false}
                           />
                         </FormControl>
                         <FormMessage />

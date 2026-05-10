@@ -68,6 +68,13 @@ export type CodexCredentialRefreshResponse = {
   }
 }
 
+export type AutoTeamRedoResponse = {
+  success: boolean
+  message?: string
+  upstream_status?: number
+  data?: Record<string, unknown>
+}
+
 // ============================================================================
 // Base Channel CRUD Operations
 // ============================================================================
@@ -276,6 +283,22 @@ export async function getCodexUsage(
     disableDuplicate: true,
   }
   const res = await api.get(`/api/channel/${channelId}/codex/usage`, config)
+  return res.data
+}
+
+export async function redoChannelOAuth(
+  channelId: number,
+  channelType?: number
+): Promise<AutoTeamRedoResponse> {
+  const config: ExtendedApiConfig = {
+    skipBusinessError: true,
+    disableDuplicate: true,
+  }
+  const path =
+    channelType === 58
+      ? `/api/channel/${channelId}/chatgpt/redo`
+      : `/api/channel/${channelId}/codex/redo_oauth`
+  const res = await api.post(path, {}, config)
   return res.data
 }
 

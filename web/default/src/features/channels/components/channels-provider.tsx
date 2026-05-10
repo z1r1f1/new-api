@@ -58,7 +58,8 @@ export function ChannelsProvider({ children }: { children: React.ReactNode }) {
     return localStorage.getItem('enable-tag-mode') === 'true'
   })
   const [idSort, setIdSort] = useState(() => {
-    return localStorage.getItem('channels-id-sort') === 'true'
+    const stored = localStorage.getItem('channels-id-sort')
+    return stored === null ? true : stored === 'true'
   })
 
   const queryClient = useQueryClient()

@@ -31,9 +31,7 @@ import { useUsageLogsContext } from './usage-logs-provider'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 const logTypeValues = ['0', '1', '2', '3', '4', '5', '6'] as const
-
 type LogTypeValue = (typeof logTypeValues)[number]
-
 function isLogTypeValue(value: string): value is LogTypeValue {
   return (logTypeValues as readonly string[]).includes(value)
 }
@@ -64,7 +62,13 @@ export function CommonLogsFilterBar<TData>(
     if (searchParams.startTime)
       next.startTime = new Date(searchParams.startTime)
     if (searchParams.endTime) next.endTime = new Date(searchParams.endTime)
-    if (searchParams.channel) next.channel = String(searchParams.channel)
+    if (searchParams.channelId) next.channelId = String(searchParams.channelId)
+    // Backward compatibility for old URLs that used `channel` as channel id.
+    if (!searchParams.channelId && searchParams.channel) {
+      next.channelId = String(searchParams.channel)
+    }
+    if (searchParams.channelName)
+      next.channelName = String(searchParams.channelName)
     if (searchParams.model) next.model = searchParams.model
     if (searchParams.token) next.token = searchParams.token
     if (searchParams.group) next.group = searchParams.group
@@ -72,6 +76,7 @@ export function CommonLogsFilterBar<TData>(
     if (searchParams.requestId) next.requestId = searchParams.requestId
 
     if (Object.keys(next).length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- sync URL search params into controlled filters.
       setFilters((prev) => ({ ...prev, ...next }))
     }
 
@@ -83,6 +88,8 @@ export function CommonLogsFilterBar<TData>(
     searchParams.startTime,
     searchParams.endTime,
     searchParams.channel,
+    searchParams.channelId,
+    searchParams.channelName,
     searchParams.model,
     searchParams.token,
     searchParams.group,
@@ -142,7 +149,8 @@ export function CommonLogsFilterBar<TData>(
   const hasExpandedFilters =
     !!filters.token ||
     !!filters.username ||
-    !!filters.channel ||
+    !!filters.channelId ||
+    !!filters.channelName ||
     !!filters.requestId
 
   const hasAdditionalFilters =
@@ -259,8 +267,18 @@ export function CommonLogsFilterBar<TData>(
           {isAdmin && (
             <Input
               placeholder={t('Channel ID')}
-              value={filters.channel || ''}
-              onChange={(e) => handleChange('channel', e.target.value)}
+              value={filters.channelId || ''}
+              onChange={(e) => handleChange('channelId', e.target.value)}
+              onKeyDown={handleKeyDown}
+              className={inputClass}
+            />
+          )}
+          {isAdmin && (
+            <Input
+              placeholder={t('Channel Name')}
+              type={sensitiveType}
+              value={filters.channelName || ''}
+              onChange={(e) => handleChange('channelName', e.target.value)}
               onKeyDown={handleKeyDown}
               className={inputClass}
             />

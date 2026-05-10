@@ -70,7 +70,7 @@ export type ChannelFormValues = z.infer<typeof channelFormSchema>
 
 export const CHANNEL_FORM_DEFAULT_VALUES: ChannelFormValues = {
   name: '',
-  type: 1,
+  type: 57,
   base_url: '',
   key: '',
   openai_organization: '',

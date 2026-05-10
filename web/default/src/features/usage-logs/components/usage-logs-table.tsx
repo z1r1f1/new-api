@@ -7,7 +7,6 @@ import {
   getCoreRowModel,
   getFacetedRowModel,
   getFacetedUniqueValues,
-  getFilteredRowModel,
   getPaginationRowModel,
   useReactTable,
 } from '@tanstack/react-table'
@@ -63,7 +62,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         ? [
             {
               columnId: 'channel',
-              searchKey: 'channel',
+              searchKey: 'channelId',
               type: 'string' as const,
             },
             {
@@ -127,7 +126,7 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     onPaginationChange,
     onColumnFiltersChange,
     getCoreRowModel: getCoreRowModel(),
-    getFilteredRowModel: getFilteredRowModel(),
+    manualFiltering: true,
     getPaginationRowModel: getPaginationRowModel(),
     getFacetedRowModel: getFacetedRowModel(),
     getFacetedUniqueValues: getFacetedUniqueValues(),

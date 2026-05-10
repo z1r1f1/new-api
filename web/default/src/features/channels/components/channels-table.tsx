@@ -91,6 +91,11 @@ export function ChannelsTable() {
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'type', searchKey: 'type', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
+      {
+        columnId: 'codex_account_type',
+        searchKey: 'codexAccount',
+        type: 'array',
+      },
       { columnId: 'model', searchKey: 'model', type: 'string' },
     ],
   })
@@ -102,6 +107,9 @@ export function ChannelsTable() {
     (columnFilters.find((f) => f.id === 'type')?.value as string[]) || []
   const groupFilter =
     (columnFilters.find((f) => f.id === 'group')?.value as string[]) || []
+  const codexAccountFilter =
+    (columnFilters.find((f) => f.id === 'codex_account_type')
+      ?.value as string[]) || []
   const modelFilterFromUrl =
     (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
 
@@ -127,6 +135,10 @@ export function ChannelsTable() {
   }, [debouncedModelFilter, modelFilterFromUrl, onColumnFiltersChange])
 
   const modelFilter = modelFilterFromUrl
+  const codexAccountParam =
+    codexAccountFilter.length > 0 && !codexAccountFilter.includes('all')
+      ? codexAccountFilter[0]
+      : undefined
 
   // Determine whether to use search or regular list API
   const shouldSearch = Boolean(globalFilter?.trim() || modelFilter.trim())
@@ -189,6 +201,7 @@ export function ChannelsTable() {
         typeFilter.length > 0 && !typeFilter.includes('all')
           ? Number(typeFilter[0])
           : undefined,
+      codex_account: codexAccountParam,
       tag_mode: enableTagMode,
       id_sort: idSort,
       ...sortParams,
@@ -212,6 +225,7 @@ export function ChannelsTable() {
             typeFilter.length > 0 && !typeFilter.includes('all')
               ? Number(typeFilter[0])
               : undefined,
+          codex_account: codexAccountParam,
           tag_mode: enableTagMode,
           id_sort: idSort,
           ...sortParams,
@@ -232,6 +246,7 @@ export function ChannelsTable() {
             typeFilter.length > 0 && !typeFilter.includes('all')
               ? Number(typeFilter[0])
               : undefined,
+          codex_account: codexAccountParam,
           tag_mode: enableTagMode,
           id_sort: idSort,
           ...sortParams,
@@ -353,6 +368,15 @@ export function ChannelsTable() {
     ...groupOptions,
   ]
 
+  const codexAccountFilterOptions = [
+    { label: t('All Codex Accounts'), value: 'all' },
+    { label: t('Free'), value: 'free' },
+    { label: t('Plus'), value: 'plus' },
+    { label: t('Pro'), value: 'pro' },
+    { label: t('Team'), value: 'team' },
+    { label: t('Enterprise'), value: 'enterprise' },
+  ]
+
   return (
     <DataTablePage
       table={table}
@@ -392,6 +416,12 @@ export function ChannelsTable() {
             columnId: 'group',
             title: t('Group'),
             options: groupFilterOptions,
+            singleSelect: true,
+          },
+          {
+            columnId: 'codex_account_type',
+            title: t('Codex Account'),
+            options: codexAccountFilterOptions,
             singleSelect: true,
           },
         ],

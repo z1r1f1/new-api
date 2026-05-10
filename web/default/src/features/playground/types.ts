@@ -8,6 +8,11 @@ export interface MessageVersion {
   content: string
 }
 
+export interface GeneratedImage {
+  url: string
+  alt: string
+}
+
 export interface Message {
   key: string
   from: MessageRole
@@ -86,6 +91,50 @@ export interface ChatCompletionResponse {
     completion_tokens: number
     total_tokens: number
   }
+}
+
+export interface ImageGenerationRequest {
+  model: string
+  group?: string
+  prompt: string
+  [key: string]: unknown
+}
+
+export interface ImageGenerationDataItem {
+  url?: string
+  b64_json?: string
+  revised_prompt?: string
+}
+
+export interface ImageGenerationResult {
+  data?: ImageGenerationDataItem[]
+  error?: {
+    message?: string
+    type?: string
+    code?: string
+  }
+  message?: string
+  [key: string]: unknown
+}
+
+export interface ImageGenerationSubmitResponse extends ImageGenerationResult {
+  task_id?: string
+  taskId?: string
+  id?: string
+  status?: string
+  poll_url?: string
+}
+
+export interface ImageGenerationTaskResponse {
+  task_id?: string
+  taskId?: string
+  id?: string
+  status?: string
+  raw_status?: string
+  progress?: string
+  fail_reason?: string
+  data?: ImageGenerationResult
+  [key: string]: unknown
 }
 
 // Configuration types

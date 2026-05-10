@@ -813,6 +813,37 @@ func UpdateChannelUsedQuota(id int, quota int) {
 	updateChannelUsedQuota(id, quota)
 }
 
+func UpdateChannelLastStatusCode(id int, statusCode int) {
+	if id <= 0 || statusCode < 100 || statusCode > 599 {
+		return
+	}
+	var channel Channel
+	if err := DB.Select("id", "other_info").First(&channel, "id = ?", id).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			common.SysLog(fmt.Sprintf("failed to get channel last status info: channel_id=%d, status_code=%d, error=%v", id, statusCode, err))
+		}
+		return
+	}
+
+	otherInfo := make(map[string]interface{})
+	if channel.OtherInfo != "" {
+		if err := common.Unmarshal([]byte(channel.OtherInfo), &otherInfo); err != nil {
+			common.SysLog(fmt.Sprintf("failed to unmarshal channel last status info: channel_id=%d, status_code=%d, error=%v", id, statusCode, err))
+			otherInfo = make(map[string]interface{})
+		}
+	}
+	otherInfo["last_status_code"] = statusCode
+	otherInfo["last_status_code_time"] = common.GetTimestamp()
+	encoded, err := common.Marshal(otherInfo)
+	if err != nil {
+		common.SysLog(fmt.Sprintf("failed to marshal channel last status info: channel_id=%d, status_code=%d, error=%v", id, statusCode, err))
+		return
+	}
+	if err := DB.Model(&Channel{}).Where("id = ?", id).Update("other_info", string(encoded)).Error; err != nil {
+		common.SysLog(fmt.Sprintf("failed to update channel last status info: channel_id=%d, status_code=%d, error=%v", id, statusCode, err))
+	}
+}
+
 func updateChannelUsedQuota(id int, quota int) {
 	err := DB.Model(&Channel{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", quota)).Error
 	if err != nil {

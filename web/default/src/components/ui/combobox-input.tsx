@@ -16,6 +16,7 @@ interface ComboboxInputProps {
   onValueChange: (value: string) => void
   placeholder?: string
   emptyText?: string
+  allowCustomValue?: boolean
   className?: string
   id?: string
 }
@@ -26,6 +27,7 @@ export function ComboboxInput({
   onValueChange,
   placeholder = 'Select or type...',
   emptyText = 'No option found.',
+  allowCustomValue = true,
   className,
   id,
 }: ComboboxInputProps) {
@@ -183,7 +185,7 @@ export function ComboboxInput({
           ) : (
             <div className='px-2 py-6 text-center text-sm'>
               {emptyText}
-              {value.trim() && (
+              {allowCustomValue && value.trim() && (
                 <div className='text-muted-foreground mt-1 text-xs'>
                   {t('Press Enter to use "{{value}}"', { value: value.trim() })}
                 </div>

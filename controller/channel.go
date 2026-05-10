@@ -20,6 +20,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
 type OpenAIModel struct {
@@ -69,6 +70,58 @@ func clearChannelInfo(channel *model.Channel) {
 	}
 }
 
+func codexAccountChannelPatterns(account string) (string, string, bool) {
+	normalized := normalizeCodexUsagePlanType(account)
+	if normalized == "" {
+		return "", "", false
+	}
+	return fmt.Sprintf("%%\"codex_account_type\":\"%s\"%%", normalized),
+		fmt.Sprintf("%%\"plan_type\":\"%s\"%%", normalized),
+		true
+}
+
+func applyCodexAccountChannelQuery(query *gorm.DB, account string) *gorm.DB {
+	accountPattern, planPattern, ok := codexAccountChannelPatterns(account)
+	if !ok {
+		return query
+	}
+	return query.
+		Where("type = ?", constant.ChannelTypeCodex).
+		Where("(LOWER(other_info) LIKE ? OR LOWER(other_info) LIKE ?)", accountPattern, planPattern)
+}
+
+func channelMatchesCodexAccount(channel *model.Channel, account string) bool {
+	normalized := normalizeCodexUsagePlanType(account)
+	if normalized == "" {
+		return true
+	}
+	if channel == nil || channel.Type != constant.ChannelTypeCodex {
+		return false
+	}
+	if channel.OtherInfo == "" {
+		return false
+	}
+	otherInfo := make(map[string]interface{})
+	if err := common.Unmarshal([]byte(channel.OtherInfo), &otherInfo); err != nil {
+		return false
+	}
+	return normalizeCodexUsagePlanType(otherInfo["codex_account_type"]) == normalized ||
+		normalizeCodexUsagePlanType(otherInfo["plan_type"]) == normalized
+}
+
+func filterChannelsByCodexAccount(channels []*model.Channel, account string) []*model.Channel {
+	if normalizeCodexUsagePlanType(account) == "" {
+		return channels
+	}
+	filtered := make([]*model.Channel, 0, len(channels))
+	for _, ch := range channels {
+		if channelMatchesCodexAccount(ch, account) {
+			filtered = append(filtered, ch)
+		}
+	}
+	return filtered
+}
+
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
@@ -76,6 +129,7 @@ func GetAllChannels(c *gin.Context) {
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	statusParam := c.Query("status")
+	codexAccount := c.Query("codex_account")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
 	statusFilter := parseStatusFilter(statusParam)
 	// type filter
@@ -115,6 +169,9 @@ func GetAllChannels(c *gin.Context) {
 				if typeFilter >= 0 && ch.Type != typeFilter {
 					continue
 				}
+				if !channelMatchesCodexAccount(ch, codexAccount) {
+					continue
+				}
 				filtered = append(filtered, ch)
 			}
 			channelData = append(channelData, filtered...)
@@ -125,6 +182,7 @@ func GetAllChannels(c *gin.Context) {
 		if typeFilter >= 0 {
 			baseQuery = baseQuery.Where("type = ?", typeFilter)
 		}
+		baseQuery = applyCodexAccountChannelQuery(baseQuery, codexAccount)
 		if statusFilter == common.ChannelStatusEnabled {
 			baseQuery = baseQuery.Where("status = ?", common.ChannelStatusEnabled)
 		} else if statusFilter == 0 {
@@ -146,6 +204,7 @@ func GetAllChannels(c *gin.Context) {
 	}
 
 	countQuery := model.DB.Model(&model.Channel{})
+	countQuery = applyCodexAccountChannelQuery(countQuery, codexAccount)
 	if statusFilter == common.ChannelStatusEnabled {
 		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
 	} else if statusFilter == 0 {
@@ -247,6 +306,7 @@ func SearchChannels(c *gin.Context) {
 	group := c.Query("group")
 	modelKeyword := c.Query("model")
 	statusParam := c.Query("status")
+	codexAccount := c.Query("codex_account")
 	statusFilter := parseStatusFilter(statusParam)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
@@ -294,6 +354,8 @@ func SearchChannels(c *gin.Context) {
 		}
 		channelData = filtered
 	}
+
+	channelData = filterChannelsByCodexAccount(channelData, codexAccount)
 
 	// calculate type counts for search results
 	typeCounts := make(map[int64]int64)

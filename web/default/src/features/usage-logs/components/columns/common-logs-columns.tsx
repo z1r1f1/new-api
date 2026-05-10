@@ -627,17 +627,36 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
         const promptTokens = log.prompt_tokens || 0
         const completionTokens = log.completion_tokens || 0
-        if (promptTokens === 0 && completionTokens === 0) {
-          return <span className='text-muted-foreground text-xs'>-</span>
-        }
-
         const cacheReadTokens = other?.cache_tokens || 0
         const cacheWrite5m = other?.cache_creation_tokens_5m || 0
         const cacheWrite1h = other?.cache_creation_tokens_1h || 0
         const hasSplitCache = cacheWrite5m > 0 || cacheWrite1h > 0
-        const cacheWriteTokens = hasSplitCache
-          ? cacheWrite5m + cacheWrite1h
-          : other?.cache_creation_tokens || 0
+        const cacheWriteTokens =
+          other?.cache_write_tokens ||
+          (hasSplitCache
+            ? cacheWrite5m + cacheWrite1h
+            : other?.cache_creation_tokens || 0)
+        if (
+          promptTokens === 0 &&
+          completionTokens === 0 &&
+          cacheReadTokens === 0 &&
+          cacheWriteTokens === 0
+        ) {
+          return <span className='text-muted-foreground text-xs'>-</span>
+        }
+
+        const usageSemantic = String(other?.usage_semantic || '').toLowerCase()
+        const inputTokensTotal = other?.input_tokens_total || 0
+        const cacheHitBaseTokens =
+          inputTokensTotal > 0
+            ? inputTokensTotal
+            : usageSemantic === 'anthropic'
+              ? promptTokens + cacheReadTokens + cacheWriteTokens
+              : promptTokens
+        const cacheHitRate =
+          cacheHitBaseTokens > 0
+            ? (cacheReadTokens / cacheHitBaseTokens) * 100
+            : 0
 
         return (
           <div className='flex flex-col gap-0.5'>
@@ -655,6 +674,11 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                 {cacheWriteTokens > 0 && (
                   <span className='text-muted-foreground/60'>
                     ↑ {cacheWriteTokens.toLocaleString()}
+                  </span>
+                )}
+                {cacheHitBaseTokens > 0 && (
+                  <span className='text-muted-foreground/60'>
+                    {t('Hit Rate')} {cacheHitRate.toFixed(1)}%
                   </span>
                 )}
               </div>

@@ -24,6 +24,10 @@ import {
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
+import {
+  getCodexAccountTypeBadge,
+  normalizeCodexPlanType,
+} from '../../lib/codex-account'
 
 type CodexRateLimitWindow = {
   used_percent?: number
@@ -107,11 +111,6 @@ function formatDurationSeconds(
   return `${secs}${t('s')}`
 }
 
-function normalizePlanType(value: unknown): string {
-  if (value == null) return ''
-  return String(value).trim().toLowerCase()
-}
-
 function classifyWindowByDuration(
   windowData?: CodexRateLimitWindow | null
 ): 'weekly' | 'fiveHour' | null {
@@ -133,7 +132,9 @@ function resolveRateLimitWindows(data: RateLimitSource | null): {
   const primary = rateLimit?.primary_window ?? null
   const secondary = rateLimit?.secondary_window ?? null
   const windows = [primary, secondary].filter(Boolean) as CodexRateLimitWindow[]
-  const planType = normalizePlanType(data?.plan_type ?? rateLimit?.plan_type)
+  const planType = normalizeCodexPlanType(
+    data?.plan_type ?? rateLimit?.plan_type
+  )
 
   let fiveHourWindow: CodexRateLimitWindow | null = null
   let weeklyWindow: CodexRateLimitWindow | null = null
@@ -166,30 +167,6 @@ function resolveRateLimitWindows(data: RateLimitSource | null): {
   }
 
   return { fiveHourWindow, weeklyWindow }
-}
-
-const PLAN_TYPE_BADGE: Record<
-  string,
-  { label: string; variant: StatusBadgeProps['variant'] }
-> = {
-  enterprise: { label: 'Enterprise', variant: 'success' },
-  team: { label: 'Team', variant: 'info' },
-  pro: { label: 'Pro', variant: 'blue' },
-  plus: { label: 'Plus', variant: 'purple' },
-  free: { label: 'Free', variant: 'warning' },
-}
-
-function getAccountTypeBadge(
-  value: unknown,
-  t: (key: string) => string
-): { label: string; variant: StatusBadgeProps['variant'] } {
-  const normalized = normalizePlanType(value)
-  return (
-    PLAN_TYPE_BADGE[normalized] ?? {
-      label: String(value || '') || t('Unknown'),
-      variant: 'neutral' as const,
-    }
-  )
 }
 
 function windowLabel(windowData?: CodexRateLimitWindow | null) {
@@ -347,7 +324,7 @@ export function CodexUsageDialog({
 
   const rateLimit = payload?.rate_limit
   const accountType = payload?.plan_type ?? rateLimit?.plan_type
-  const accountBadge = getAccountTypeBadge(accountType, t)
+  const accountBadge = getCodexAccountTypeBadge(accountType, t)
   const additionalRateLimits = (payload?.additional_rate_limits ?? []).filter(
     (item) => item && Object.keys(item).length > 0
   )

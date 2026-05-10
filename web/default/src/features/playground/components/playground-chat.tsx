@@ -31,6 +31,7 @@ import {
   SourcesTrigger,
 } from '@/components/ai-elements/sources'
 import { MESSAGE_ROLES } from '../constants'
+import { parseGeneratedImagesFromMarkdown } from '../lib/image-generation'
 import { getMessageContentStyles } from '../lib/message-styles'
 import { parseThinkTags } from '../lib/message-utils'
 import type { Message as MessageType } from '../types'
@@ -161,6 +162,11 @@ export function PlaygroundChat({
                               const displayContent = isAssistant
                                 ? parseThinkTags(version.content).visibleContent
                                 : version.content
+                              const { text, images } =
+                                parseGeneratedImagesFromMarkdown(displayContent)
+                              const showRenderableContent =
+                                showMessageContent &&
+                                (!!text || images.length > 0)
 
                               const actions = (
                                 <MessageActions
@@ -230,7 +236,7 @@ export function PlaygroundChat({
                                       {actions}
                                     </>
                                   ) : (
-                                    showMessageContent && (
+                                    showRenderableContent && (
                                       <>
                                         <MessageContent
                                           variant='flat'
@@ -238,7 +244,29 @@ export function PlaygroundChat({
                                             getMessageContentStyles()
                                           )}
                                         >
-                                          <Response>{displayContent}</Response>
+                                          {text && <Response>{text}</Response>}
+                                          {images.length > 0 && (
+                                            <div className='mt-3 grid gap-3 sm:grid-cols-2'>
+                                              {images.map(
+                                                (image, imageIndex) => (
+                                                  <a
+                                                    className='group/image bg-background block overflow-hidden rounded-lg border'
+                                                    href={image.url}
+                                                    key={`${message.key}-${version.id}-image-${imageIndex}`}
+                                                    rel='noopener noreferrer'
+                                                    target='_blank'
+                                                  >
+                                                    <img
+                                                      alt={image.alt}
+                                                      className='aspect-square w-full object-contain transition-transform group-hover/image:scale-[1.01]'
+                                                      loading='lazy'
+                                                      src={image.url}
+                                                    />
+                                                  </a>
+                                                )
+                                              )}
+                                            </div>
+                                          )}
                                         </MessageContent>
                                         {actions}
                                       </>

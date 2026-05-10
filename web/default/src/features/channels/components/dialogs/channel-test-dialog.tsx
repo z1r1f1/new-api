@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   type ColumnDef,
   type RowSelectionState,
@@ -47,7 +48,11 @@ import {
 import { DataTableBulkActions as BulkActionsToolbar } from '@/components/data-table'
 import { DataTablePagination } from '@/components/data-table/pagination'
 import { StatusBadge } from '@/components/status-badge'
-import { formatResponseTime, handleTestChannel } from '../../lib'
+import {
+  channelsQueryKeys,
+  formatResponseTime,
+  handleTestChannel,
+} from '../../lib'
 import { useChannels } from '../channels-provider'
 
 type ChannelTestDialogProps = {
@@ -101,6 +106,7 @@ export function ChannelTestDialog({
   onOpenChange,
 }: ChannelTestDialogProps) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const { currentRow } = useChannels()
   const [endpointType, setEndpointType] = useState('auto')
   const [isStreamTest, setIsStreamTest] = useState(false)
@@ -217,10 +223,18 @@ export function ChannelTestDialog({
           error: error instanceof Error ? error.message : 'Test failed',
         })
       } finally {
+        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
         markModelTesting(model, false)
       }
     },
-    [currentRow, endpointType, isStreamTest, markModelTesting, updateTestResult]
+    [
+      currentRow,
+      endpointType,
+      isStreamTest,
+      markModelTesting,
+      queryClient,
+      updateTestResult,
+    ]
   )
 
   const handleBatchTest = useCallback(

@@ -14,3 +14,16 @@ func TestModelListIncludesGPT55(t *testing.T) {
 		t.Fatal("expected codex ModelList to include gpt-5.5")
 	}
 }
+
+func TestModelListIncludesGPT53CodexSpark(t *testing.T) {
+	found := false
+	for _, model := range ModelList {
+		if model == "gpt-5.3-codex-spark" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("expected codex ModelList to include gpt-5.3-codex-spark")
+	}
+}

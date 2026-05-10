@@ -58,19 +58,28 @@ export function CommonLogsStats() {
 
   if (isLoading) {
     return (
-      <div className='flex items-center gap-2'>
+      <div className='flex flex-wrap items-center gap-2'>
         <Skeleton className='h-7 w-[150px] rounded-md' />
         <Skeleton className='h-7 w-[100px] rounded-md' />
         <Skeleton className='h-7 w-[120px] rounded-md' />
+        <Skeleton className='h-7 w-[150px] rounded-md' />
+        <Skeleton className='h-7 w-[150px] rounded-md' />
+        <Skeleton className='h-7 w-[160px] rounded-md' />
       </div>
     )
   }
+
+  const hiddenValue = '••••'
+  const formatCount = (value?: number) => (value || 0).toLocaleString()
+  const formatPercent = (value?: number) => `${(value || 0).toFixed(1)}%`
 
   return (
     <div className='flex flex-wrap items-center gap-2'>
       <StatBadge
         label={t('Usage')}
-        value={sensitiveVisible ? formatLogQuota(stats?.quota || 0) : '••••'}
+        value={
+          sensitiveVisible ? formatLogQuota(stats?.quota || 0) : hiddenValue
+        }
         accent='bg-sky-500/70'
       />
       <StatBadge
@@ -82,6 +91,25 @@ export function CommonLogsStats() {
         label={t('TPM')}
         value={stats?.tpm || 0}
         accent='bg-slate-400/70'
+      />
+      <StatBadge
+        label={t('Input Tokens')}
+        value={
+          sensitiveVisible ? formatCount(stats?.prompt_tokens) : hiddenValue
+        }
+        accent='bg-emerald-500/70'
+      />
+      <StatBadge
+        label={t('Output Tokens')}
+        value={
+          sensitiveVisible ? formatCount(stats?.completion_tokens) : hiddenValue
+        }
+        accent='bg-violet-500/70'
+      />
+      <StatBadge
+        label={t('Avg Cache Hit Rate')}
+        value={formatPercent(stats?.avg_cache_hit_rate)}
+        accent='bg-amber-500/70'
       />
     </div>
   )

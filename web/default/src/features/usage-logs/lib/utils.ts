@@ -169,7 +169,10 @@ export function buildApiParams(config: {
     return undefined
   }
 
-  // Build base params from search params
+  // Build base params from search params. Common logs keep channel name
+  // and channel id as separate filters; do not mirror channel_id into channel.
+  const channelId = Number(searchParams.channelId) || 0
+  const channelName = String(searchParams.channelName || '').trim()
   const params: GetLogsParams = {
     p: page,
     page_size: pageSize,
@@ -177,9 +180,8 @@ export function buildApiParams(config: {
     ...(searchParams.model ? { model_name: String(searchParams.model) } : {}),
     ...(searchParams.token ? { token_name: String(searchParams.token) } : {}),
     ...(searchParams.group ? { group: String(searchParams.group) } : {}),
-    ...(isAdmin && searchParams.channel
-      ? { channel: Number(searchParams.channel) || 0 }
-      : {}),
+    ...(isAdmin && channelId > 0 ? { channel_id: channelId } : {}),
+    ...(isAdmin && channelName ? { channel_name: channelName } : {}),
     ...(isAdmin && searchParams.username
       ? { username: String(searchParams.username) }
       : {}),
@@ -208,7 +210,13 @@ export function buildApiParams(config: {
           params.group = String(value)
           break
         case 'channel':
-          if (isAdmin) params.channel = Number(value) || 0
+        case 'channel_id':
+          if (isAdmin) {
+            params.channel_id = Number(value) || 0
+          }
+          break
+        case 'channel_name':
+          if (isAdmin) params.channel_name = String(value)
           break
         case 'username':
           if (isAdmin) params.username = String(value)

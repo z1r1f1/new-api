@@ -27,6 +27,7 @@ import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
+  channelsQueryKeys,
   handleDeleteAllDisabled,
   handleFixAbilities,
   handleTestAllChannels,
@@ -46,6 +47,7 @@ export function ChannelsPrimaryButtons() {
   } = useChannels()
   const queryClient = useQueryClient()
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const handleTagModeToggle = (checked: boolean) => {
     localStorage.setItem('enable-tag-mode', String(checked))
@@ -55,6 +57,18 @@ export function ChannelsPrimaryButtons() {
   const handleIdSortToggle = (checked: boolean) => {
     localStorage.setItem('channels-id-sort', String(checked))
     setIdSort(checked)
+  }
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    try {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: channelsQueryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: ['codex-usage'] }),
+      ])
+    } finally {
+      setIsRefreshing(false)
+    }
   }
 
   return (
@@ -84,6 +98,19 @@ export function ChannelsPrimaryButtons() {
             onCheckedChange={handleIdSortToggle}
           />
         </div>
+
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+        >
+          <RefreshCw
+            className={`h-4 w-4 ${isRefreshing ? 'animate-spin' : ''}`}
+          />
+          <span className='max-sm:hidden'>{t('Refresh')}</span>
+        </Button>
 
         {/* Create Channel */}
         <Button onClick={() => setOpen('create-channel')} size='sm'>

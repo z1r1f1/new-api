@@ -17,6 +17,7 @@ export const MESSAGE_STATUS = {
 // API endpoints
 export const API_ENDPOINTS = {
   CHAT_COMPLETIONS: '/pg/chat/completions',
+  IMAGE_GENERATIONS: '/pg/images/generations',
   USER_MODELS: '/api/user/models',
   USER_GROUPS: '/api/user/self/groups',
 } as const
@@ -61,6 +62,8 @@ export const ERROR_MESSAGES = {
   STREAM_START_ERROR: 'Error establishing connection',
   CONNECTION_CLOSED: 'Connection closed',
   INTERRUPTED: 'Generation was interrupted',
+  IMAGE_GENERATION_TIMEOUT: 'Image generation task timed out',
+  IMAGE_GENERATION_FAILED: 'Image generation failed',
 } as const
 
 // Message action button styles
