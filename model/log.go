@@ -553,22 +553,6 @@ func logOtherNumber(other map[string]interface{}, key string) float64 {
 	}
 }
 
-func cacheWriteTokensFromLogOther(other map[string]interface{}) float64 {
-	cacheWriteTokens := logOtherNumber(other, "cache_write_tokens")
-	if cacheWriteTokens > 0 {
-		return cacheWriteTokens
-	}
-	cacheCreationTokens := logOtherNumber(other, "cache_creation_tokens")
-	splitCacheWriteTokens := logOtherNumber(other, "cache_creation_tokens_5m") + logOtherNumber(other, "cache_creation_tokens_1h")
-	if splitCacheWriteTokens > 0 {
-		if cacheCreationTokens > splitCacheWriteTokens {
-			return cacheCreationTokens
-		}
-		return splitCacheWriteTokens
-	}
-	return cacheCreationTokens
-}
-
 func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominator float64) {
 	if strings.TrimSpace(row.Other) == "" {
 		return 0, float64(row.PromptTokens)
@@ -581,10 +565,6 @@ func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominato
 	inputTokensTotal := logOtherNumber(other, "input_tokens_total")
 	if inputTokensTotal > 0 {
 		return cacheReadTokens, inputTokensTotal
-	}
-	usageSemantic := strings.ToLower(strings.TrimSpace(fmt.Sprint(other["usage_semantic"])))
-	if usageSemantic == "anthropic" {
-		return cacheReadTokens, float64(row.PromptTokens) + cacheReadTokens + cacheWriteTokensFromLogOther(other)
 	}
 	return cacheReadTokens, float64(row.PromptTokens)
 }

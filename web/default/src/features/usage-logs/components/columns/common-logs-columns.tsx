@@ -645,14 +645,9 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
           return <span className='text-muted-foreground text-xs'>-</span>
         }
 
-        const usageSemantic = String(other?.usage_semantic || '').toLowerCase()
         const inputTokensTotal = other?.input_tokens_total || 0
         const cacheHitBaseTokens =
-          inputTokensTotal > 0
-            ? inputTokensTotal
-            : usageSemantic === 'anthropic'
-              ? promptTokens + cacheReadTokens + cacheWriteTokens
-              : promptTokens
+          inputTokensTotal > 0 ? inputTokensTotal : promptTokens
         const cacheHitRate =
           cacheHitBaseTokens > 0
             ? (cacheReadTokens / cacheHitBaseTokens) * 100
