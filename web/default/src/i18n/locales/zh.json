@@ -584,6 +584,7 @@
     "Channel Affinity: Upstream Cache Hit": "渠道亲和性：上游缓存命中",
     "Channel Extra Settings": "渠道额外设置",
     "Channel ID": "渠道 ID",
+    "Channel Name": "渠道名称描述",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "渠道亲和性会基于从请求上下文或 JSON Body 提取的 Key，优先复用上一次成功的渠道。",
     "Channel copied successfully": "渠道复制成功",
     "Channel created successfully": "渠道创建成功",

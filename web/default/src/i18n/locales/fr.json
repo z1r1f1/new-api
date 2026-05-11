@@ -584,6 +584,7 @@
     "Channel Affinity: Upstream Cache Hit": "Affinité de canal : hit de cache en amont",
     "Channel Extra Settings": "Paramètres supplémentaires du canal",
     "Channel ID": "ID du Canal",
+    "Channel Name": "Nom du canal",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "L'affinité de canal réutilise le dernier canal ayant réussi, en se basant sur les clés extraites du contexte de la requête ou du corps JSON.",
     "Channel copied successfully": "Canal copié avec succès",
     "Channel created successfully": "Canal créé avec succès",

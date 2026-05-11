@@ -584,6 +584,7 @@
     "Channel Affinity: Upstream Cache Hit": "チャネルアフィニティ：上流キャッシュヒット",
     "Channel Extra Settings": "チャネル詳細設定",
     "Channel ID": "チャネルID",
+    "Channel Name": "チャンネル名",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "チャネルアフィニティは、リクエストコンテキストまたは JSON Body から抽出したキーに基づいて、前回成功したチャネルを優先的に再利用します。",
     "Channel copied successfully": "チャンネルが正常にコピーされました",
     "Channel created successfully": "チャンネルが正常に作成されました",

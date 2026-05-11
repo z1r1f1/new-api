@@ -584,6 +584,7 @@
     "Channel Affinity: Upstream Cache Hit": "Ưu tiên kênh: Cache hit từ upstream",
     "Channel Extra Settings": "Cài đặt thêm kênh",
     "Channel ID": "Mã kênh",
+    "Channel Name": "Tên kênh",
     "Channel affinity reuses the last successful channel based on keys extracted from the request context or JSON body.": "Ưu tiên kênh sẽ sử dụng lại kênh thành công gần nhất dựa trên các khóa được trích xuất từ ngữ cảnh yêu cầu hoặc JSON body.",
     "Channel copied successfully": "Sao chép kênh thành công",
     "Channel created successfully": "Tạo kênh thành công",
