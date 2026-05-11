@@ -28,6 +28,7 @@ const (
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
+	maxChannelAffinityRequestPrefixChars    = 65536
 )
 
 var (
@@ -440,8 +441,8 @@ func buildChannelAffinityRequestPrefixDebug(c *gin.Context, maxChars int) (strin
 	if maxChars <= 0 {
 		maxChars = 512
 	}
-	if maxChars > 4096 {
-		maxChars = 4096
+	if maxChars > maxChannelAffinityRequestPrefixChars {
+		maxChars = maxChannelAffinityRequestPrefixChars
 	}
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {

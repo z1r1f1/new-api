@@ -347,3 +347,20 @@ func TestChannelAffinityRequestPrefixLoggingSetting(t *testing.T) {
 	require.Equal(t, len([]rune(expectedPrefix)), info["request_prefix_len"])
 	require.Equal(t, len([]rune(body)), info["request_body_len"])
 }
+
+func TestChannelAffinityRequestPrefixDebugClampsLargeLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	body := strings.Repeat("a", maxChannelAffinityRequestPrefixChars+10)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	prefix, prefixHash, prefixLen, bodyLen := buildChannelAffinityRequestPrefixDebug(ctx, maxChannelAffinityRequestPrefixChars+1000)
+
+	require.Len(t, []rune(prefix), maxChannelAffinityRequestPrefixChars)
+	require.Equal(t, affinityFingerprint(prefix), prefixHash)
+	require.Equal(t, maxChannelAffinityRequestPrefixChars, prefixLen)
+	require.Equal(t, maxChannelAffinityRequestPrefixChars+10, bodyLen)
+}

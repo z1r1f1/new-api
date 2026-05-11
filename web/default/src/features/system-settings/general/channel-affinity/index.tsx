@@ -50,6 +50,8 @@ import { RULE_TEMPLATES, cloneTemplate, makeUniqueName } from './constants'
 import { RuleEditorDialog } from './rule-editor-dialog'
 import type { AffinityRule, CacheStats, ChannelAffinitySettings } from './types'
 
+const MAX_REQUEST_PREFIX_CHARS = 65536
+
 function parseRules(jsonStr: string): AffinityRule[] {
   try {
     const arr = JSON.parse(jsonStr || '[]')
@@ -191,7 +193,7 @@ export function ChannelAffinitySection(props: Props) {
 
   const normalizeRequestPrefixChars = (value: number) => {
     if (!Number.isFinite(value)) return 512
-    return Math.min(4096, Math.max(1, Math.trunc(value)))
+    return Math.min(MAX_REQUEST_PREFIX_CHARS, Math.max(1, Math.trunc(value)))
   }
 
   const handleSave = async () => {
@@ -437,7 +439,7 @@ export function ChannelAffinitySection(props: Props) {
             <Input
               type='number'
               min={1}
-              max={4096}
+              max={MAX_REQUEST_PREFIX_CHARS}
               value={requestPrefixChars}
               onChange={(e) =>
                 setRequestPrefixChars(
