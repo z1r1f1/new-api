@@ -65,6 +65,8 @@ const defaultModelSettings: ModelSettings = {
   'channel_affinity_setting.switch_on_success': true,
   'channel_affinity_setting.max_entries': 100000,
   'channel_affinity_setting.default_ttl_seconds': 3600,
+  'channel_affinity_setting.log_request_prefix': false,
+  'channel_affinity_setting.request_prefix_chars': 512,
   'channel_affinity_setting.rules': '[]',
   'model_deployment.ionet.api_key': '',
   'model_deployment.ionet.enabled': false,

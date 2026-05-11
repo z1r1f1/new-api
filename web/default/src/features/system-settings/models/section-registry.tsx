@@ -139,6 +139,10 @@ const MODELS_SECTIONS = [
             settings['channel_affinity_setting.max_entries'],
           'channel_affinity_setting.default_ttl_seconds':
             settings['channel_affinity_setting.default_ttl_seconds'],
+          'channel_affinity_setting.log_request_prefix':
+            settings['channel_affinity_setting.log_request_prefix'],
+          'channel_affinity_setting.request_prefix_chars':
+            settings['channel_affinity_setting.request_prefix_chars'],
           'channel_affinity_setting.rules':
             settings['channel_affinity_setting.rules'],
         }}

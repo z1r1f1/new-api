@@ -74,6 +74,37 @@ func TestApplyChannelAffinityOverrideTemplate_MergeTemplate(t *testing.T) {
 	require.EqualValues(t, 2, overrideInfo["param_override_keys"])
 }
 
+func TestApplyChannelAffinityOverrideTemplate_PreservesRequestPrefixInfo(t *testing.T) {
+	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
+		RuleName: "rule-with-template",
+		ParamTemplate: map[string]interface{}{
+			"temperature": 0.2,
+		},
+		RequestPrefix:     `{"prompt":"hello world"}`,
+		RequestPrefixHash: "prefix-sha1",
+		RequestPrefixLen:  24,
+		RequestBodyLen:    64,
+	})
+	ctx.Set(ginKeyChannelAffinityLogInfo, map[string]interface{}{
+		"channel_id": 901,
+	})
+
+	merged, applied := ApplyChannelAffinityOverrideTemplate(ctx, map[string]interface{}{})
+	require.True(t, applied)
+	require.Equal(t, 0.2, merged["temperature"])
+
+	anyInfo, ok := ctx.Get(ginKeyChannelAffinityLogInfo)
+	require.True(t, ok)
+	info, ok := anyInfo.(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, 901, info["channel_id"])
+	require.Equal(t, `{"prompt":"hello world"}`, info["request_prefix"])
+	require.Equal(t, "prefix-sha1", info["request_prefix_sha1"])
+	require.Equal(t, 24, info["request_prefix_len"])
+	require.Equal(t, 64, info["request_body_len"])
+	require.Contains(t, info, "override_template")
+}
+
 func TestApplyChannelAffinityOverrideTemplate_MergeOperations(t *testing.T) {
 	ctx := buildChannelAffinityTemplateContextForTest(channelAffinityMeta{
 		RuleName: "rule-with-ops-template",
@@ -244,4 +275,75 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	require.False(t, exists)
 	_, exists = info.RuntimeHeadersOverride["x-codex-turn-metadata"]
 	require.False(t, exists)
+}
+
+func TestChannelAffinityRequestPrefixLoggingSetting(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	oldEnabled := setting.Enabled
+	oldDefaultTTLSeconds := setting.DefaultTTLSeconds
+	oldLogRequestPrefix := setting.LogRequestPrefix
+	oldRequestPrefixChars := setting.RequestPrefixChars
+	oldRules := append([]operation_setting.ChannelAffinityRule(nil), setting.Rules...)
+	t.Cleanup(func() {
+		setting.Enabled = oldEnabled
+		setting.DefaultTTLSeconds = oldDefaultTTLSeconds
+		setting.LogRequestPrefix = oldLogRequestPrefix
+		setting.RequestPrefixChars = oldRequestPrefixChars
+		setting.Rules = oldRules
+	})
+
+	setting.Enabled = true
+	setting.DefaultTTLSeconds = 3600
+	setting.RequestPrefixChars = 32
+	setting.Rules = []operation_setting.ChannelAffinityRule{
+		{
+			Name:       "debug-prefix-test",
+			ModelRegex: []string{"^gpt-5$"},
+			KeySources: []operation_setting.ChannelAffinityKeySource{
+				{Type: "gjson", Path: "prompt_cache_key"},
+			},
+		},
+	}
+
+	body := `{"prompt_cache_key":"cache-key-1","input":"line1 line2 line3","model":"gpt-5"}`
+	expectedPrefix := string([]rune(body)[:32])
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	setting.LogRequestPrefix = false
+	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5", "default")
+	require.False(t, found)
+	require.Equal(t, 0, channelID)
+	MarkChannelAffinityUsed(ctx, "default", 901)
+	anyInfo, ok := ctx.Get(ginKeyChannelAffinityLogInfo)
+	require.True(t, ok)
+	info, ok := anyInfo.(map[string]interface{})
+	require.True(t, ok)
+	require.NotContains(t, info, "request_prefix")
+
+	rec = httptest.NewRecorder()
+	ctx, _ = gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	setting.LogRequestPrefix = true
+	channelID, found = GetPreferredChannelByAffinity(ctx, "gpt-5", "default")
+	require.False(t, found)
+	require.Equal(t, 0, channelID)
+	MarkChannelAffinityUsed(ctx, "default", 901)
+	anyInfo, ok = ctx.Get(ginKeyChannelAffinityLogInfo)
+	require.True(t, ok)
+	info, ok = anyInfo.(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, expectedPrefix, info["request_prefix"])
+	require.Equal(t, affinityFingerprint(expectedPrefix), info["request_prefix_sha1"])
+	require.Equal(t, len([]rune(expectedPrefix)), info["request_prefix_len"])
+	require.Equal(t, len([]rune(body)), info["request_body_len"])
 }

@@ -87,6 +87,12 @@ export function ChannelAffinitySection(props: Props) {
   const [defaultTtl, setDefaultTtl] = useState(
     props.defaultValues['channel_affinity_setting.default_ttl_seconds']
   )
+  const [logRequestPrefix, setLogRequestPrefix] = useState(
+    props.defaultValues['channel_affinity_setting.log_request_prefix']
+  )
+  const [requestPrefixChars, setRequestPrefixChars] = useState(
+    props.defaultValues['channel_affinity_setting.request_prefix_chars']
+  )
   const [rules, setRules] = useState<AffinityRule[]>(() =>
     parseRules(props.defaultValues['channel_affinity_setting.rules'])
   )
@@ -120,6 +126,12 @@ export function ChannelAffinitySection(props: Props) {
     setMaxEntries(props.defaultValues['channel_affinity_setting.max_entries'])
     setDefaultTtl(
       props.defaultValues['channel_affinity_setting.default_ttl_seconds']
+    )
+    setLogRequestPrefix(
+      props.defaultValues['channel_affinity_setting.log_request_prefix']
+    )
+    setRequestPrefixChars(
+      props.defaultValues['channel_affinity_setting.request_prefix_chars']
     )
     const parsed = parseRules(
       props.defaultValues['channel_affinity_setting.rules']
@@ -177,6 +189,11 @@ export function ChannelAffinitySection(props: Props) {
     }
   }
 
+  const normalizeRequestPrefixChars = (value: number) => {
+    if (!Number.isFinite(value)) return 512
+    return Math.min(4096, Math.max(1, Math.trunc(value)))
+  }
+
   const handleSave = async () => {
     let rulesJson: string
     if (editMode === 'json') {
@@ -227,6 +244,22 @@ export function ChannelAffinitySection(props: Props) {
         updates.push({
           key: 'channel_affinity_setting.default_ttl_seconds',
           value: String(defaultTtl),
+        })
+      if (
+        logRequestPrefix !==
+        props.defaultValues['channel_affinity_setting.log_request_prefix']
+      )
+        updates.push({
+          key: 'channel_affinity_setting.log_request_prefix',
+          value: String(logRequestPrefix),
+        })
+      if (
+        requestPrefixChars !==
+        props.defaultValues['channel_affinity_setting.request_prefix_chars']
+      )
+        updates.push({
+          key: 'channel_affinity_setting.request_prefix_chars',
+          value: String(normalizeRequestPrefixChars(requestPrefixChars)),
         })
 
       const origRules = props.defaultValues['channel_affinity_setting.rules']
@@ -384,6 +417,35 @@ export function ChannelAffinitySection(props: Props) {
               'If the affinity channel fails and retry succeeds on another channel, update affinity to the successful channel.'
             )}
           </span>
+        </div>
+
+        <div className='grid gap-3 rounded-md border p-3'>
+          <div className='flex items-center gap-2'>
+            <Switch
+              checked={logRequestPrefix}
+              onCheckedChange={setLogRequestPrefix}
+            />
+            <Label>{t('Print request prefix')}</Label>
+          </div>
+          <p className='text-muted-foreground text-xs'>
+            {t(
+              'When enabled, write a truncated request body prefix into channel affinity admin logs to debug upstream cache misses. It may contain prompt content; keep disabled unless troubleshooting.'
+            )}
+          </p>
+          <div className='grid max-w-xs gap-1.5'>
+            <Label>{t('Request prefix length')}</Label>
+            <Input
+              type='number'
+              min={1}
+              max={4096}
+              value={requestPrefixChars}
+              onChange={(e) =>
+                setRequestPrefixChars(
+                  normalizeRequestPrefixChars(Number(e.target.value))
+                )
+              }
+            />
+          </div>
         </div>
 
         <Separator />

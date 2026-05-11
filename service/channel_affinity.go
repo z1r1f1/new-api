@@ -41,19 +41,23 @@ var (
 )
 
 type channelAffinityMeta struct {
-	CacheKey       string
-	TTLSeconds     int
-	RuleName       string
-	SkipRetry      bool
-	ParamTemplate  map[string]interface{}
-	KeySourceType  string
-	KeySourceKey   string
-	KeySourcePath  string
-	KeyHint        string
-	KeyFingerprint string
-	UsingGroup     string
-	ModelName      string
-	RequestPath    string
+	CacheKey          string
+	TTLSeconds        int
+	RuleName          string
+	SkipRetry         bool
+	ParamTemplate     map[string]interface{}
+	KeySourceType     string
+	KeySourceKey      string
+	KeySourcePath     string
+	KeyHint           string
+	KeyFingerprint    string
+	UsingGroup        string
+	ModelName         string
+	RequestPath       string
+	RequestPrefix     string
+	RequestPrefixHash string
+	RequestPrefixLen  int
+	RequestBodyLen    int
 }
 
 type ChannelAffinityStatsContext struct {
@@ -429,6 +433,48 @@ func buildChannelAffinityKeyHint(s string) string {
 	return s[:4] + "..." + s[len(s)-4:]
 }
 
+func buildChannelAffinityRequestPrefixDebug(c *gin.Context, maxChars int) (string, string, int, int) {
+	if c == nil {
+		return "", "", 0, 0
+	}
+	if maxChars <= 0 {
+		maxChars = 512
+	}
+	if maxChars > 4096 {
+		maxChars = 4096
+	}
+	storage, err := common.GetBodyStorage(c)
+	if err != nil {
+		return "", "", 0, 0
+	}
+	body, err := storage.Bytes()
+	if err != nil || len(body) == 0 {
+		return "", "", 0, 0
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return "", "", 0, 0
+	}
+	text = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(text)
+	text = strings.Join(strings.Fields(text), " ")
+	runes := []rune(text)
+	bodyLen := len(runes)
+	if len(runes) > maxChars {
+		text = string(runes[:maxChars])
+	}
+	return text, affinityFingerprint(text), len([]rune(text)), bodyLen
+}
+
+func appendChannelAffinityRequestPrefixInfo(info map[string]interface{}, meta channelAffinityMeta) {
+	if info == nil || meta.RequestPrefix == "" {
+		return
+	}
+	info["request_prefix"] = meta.RequestPrefix
+	info["request_prefix_sha1"] = meta.RequestPrefixHash
+	info["request_prefix_len"] = meta.RequestPrefixLen
+	info["request_body_len"] = meta.RequestBodyLen
+}
+
 func cloneStringAnyMap(src map[string]interface{}) map[string]interface{} {
 	if len(src) == 0 {
 		return map[string]interface{}{}
@@ -505,11 +551,12 @@ func appendChannelAffinityTemplateAdminInfo(c *gin.Context, meta channelAffinity
 	if anyInfo, ok := c.Get(ginKeyChannelAffinityLogInfo); ok {
 		if info, ok := anyInfo.(map[string]interface{}); ok {
 			info["override_template"] = templateInfo
+			appendChannelAffinityRequestPrefixInfo(info, meta)
 			c.Set(ginKeyChannelAffinityLogInfo, info)
 			return
 		}
 	}
-	c.Set(ginKeyChannelAffinityLogInfo, map[string]interface{}{
+	info := map[string]interface{}{
 		"reason":            meta.RuleName,
 		"rule_name":         meta.RuleName,
 		"using_group":       meta.UsingGroup,
@@ -521,7 +568,9 @@ func appendChannelAffinityTemplateAdminInfo(c *gin.Context, meta channelAffinity
 		"key_hint":          meta.KeyHint,
 		"key_fp":            meta.KeyFingerprint,
 		"override_template": templateInfo,
-	})
+	}
+	appendChannelAffinityRequestPrefixInfo(info, meta)
+	c.Set(ginKeyChannelAffinityLogInfo, info)
 }
 
 // ApplyChannelAffinityOverrideTemplate merges per-rule channel override templates onto the selected channel override config.
@@ -588,20 +637,28 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		}
 		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
 		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+		requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen := "", "", 0, 0
+		if setting.LogRequestPrefix {
+			requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen = buildChannelAffinityRequestPrefixDebug(c, setting.RequestPrefixChars)
+		}
 		setChannelAffinityContext(c, channelAffinityMeta{
-			CacheKey:       cacheKeyFull,
-			TTLSeconds:     ttlSeconds,
-			RuleName:       rule.Name,
-			SkipRetry:      rule.SkipRetryOnFailure,
-			ParamTemplate:  cloneStringAnyMap(rule.ParamOverrideTemplate),
-			KeySourceType:  strings.TrimSpace(usedSource.Type),
-			KeySourceKey:   strings.TrimSpace(usedSource.Key),
-			KeySourcePath:  strings.TrimSpace(usedSource.Path),
-			KeyHint:        buildChannelAffinityKeyHint(affinityValue),
-			KeyFingerprint: affinityFingerprint(affinityValue),
-			UsingGroup:     usingGroup,
-			ModelName:      modelName,
-			RequestPath:    path,
+			CacheKey:          cacheKeyFull,
+			TTLSeconds:        ttlSeconds,
+			RuleName:          rule.Name,
+			SkipRetry:         rule.SkipRetryOnFailure,
+			ParamTemplate:     cloneStringAnyMap(rule.ParamOverrideTemplate),
+			KeySourceType:     strings.TrimSpace(usedSource.Type),
+			KeySourceKey:      strings.TrimSpace(usedSource.Key),
+			KeySourcePath:     strings.TrimSpace(usedSource.Path),
+			KeyHint:           buildChannelAffinityKeyHint(affinityValue),
+			KeyFingerprint:    affinityFingerprint(affinityValue),
+			UsingGroup:        usingGroup,
+			ModelName:         modelName,
+			RequestPath:       path,
+			RequestPrefix:     requestPrefix,
+			RequestPrefixHash: requestPrefixHash,
+			RequestPrefixLen:  requestPrefixLen,
+			RequestBodyLen:    requestBodyLen,
 		})
 
 		cache := getChannelAffinityCache()
@@ -658,6 +715,10 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		"key_path":       meta.KeySourcePath,
 		"key_hint":       meta.KeyHint,
 		"key_fp":         meta.KeyFingerprint,
+	}
+	appendChannelAffinityRequestPrefixInfo(info, meta)
+	if meta.RequestPrefix != "" {
+		common.SysLog(fmt.Sprintf("channel affinity request prefix: rule=%s model=%s group=%s key_fp=%s prefix_sha1=%s prefix_len=%d body_len=%d prefix=%q", meta.RuleName, meta.ModelName, meta.UsingGroup, meta.KeyFingerprint, meta.RequestPrefixHash, meta.RequestPrefixLen, meta.RequestBodyLen, meta.RequestPrefix))
 	}
 	c.Set(ginKeyChannelAffinityLogInfo, info)
 }
