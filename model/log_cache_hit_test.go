@@ -1,10 +1,17 @@
 package model
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
 )
+
+func TestLogTokenStatRowIncludesIDForFindInBatchesCursor(t *testing.T) {
+	if _, ok := reflect.TypeOf(logTokenStatRow{}).FieldByName("Id"); !ok {
+		t.Fatal("logTokenStatRow must include Id so GORM FindInBatches can advance the primary-key cursor")
+	}
+}
 
 func TestCacheHitRatePartsUsesLoggedPromptTokensForAnthropicUsage(t *testing.T) {
 	other, err := common.Marshal(map[string]interface{}{

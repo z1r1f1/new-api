@@ -519,6 +519,7 @@ func applyCommonLogStatFilters(tx *gorm.DB, logType int, startTimestamp int64, e
 }
 
 type logTokenStatRow struct {
+	Id               int
 	PromptTokens     int
 	CompletionTokens int
 	Other            string
@@ -597,7 +598,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	}
 
 	if logType == LogTypeUnknown || logType == LogTypeConsume {
-		cacheTx := LOG_DB.Model(&Log{}).Select("prompt_tokens, completion_tokens, other")
+		cacheTx := LOG_DB.Model(&Log{}).Select("id, prompt_tokens, completion_tokens, other")
 		cacheTx, err = applyCommonLogStatFilters(cacheTx, LogTypeConsume, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, requestId, true)
 		if err != nil {
 			return stat, err
