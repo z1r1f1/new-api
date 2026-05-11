@@ -66,6 +66,8 @@
   "WeChat": "WeChat",
   "Xinference": "Xinference",
   "Xunfei": "Xunfei",
+  "Alipay": "Alipay",
+  "WeChat Pay": "WeChat Pay",
   "Zhipu V4": "Zhipu V4",
   "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]": "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]",
   "[{\"name\":\"支付宝\",\"type\":\"alipay\",\"color\":\"#1677FF\"}]": "[{\"name\":\"Alipay\",\"type\":\"alipay\",\"color\":\"#1677FF\"}]",

@@ -52,6 +52,8 @@
   "Webhook URL:": "Webhook URL:",
   "Xinference": "Xinference",
   "Xunfei": "Xunfei",
+  "Alipay": "Alipay",
+  "WeChat Pay": "WeChat Pay",
   "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]": "[{\"ChatGPT\":\"https://chat.openai.com\"},{\"Lobe Chat\":\"https://chat-preview.lobehub.com/?settings={...}\"}]",
   "[{\"name\":\"支付宝\",\"type\":\"alipay\",\"color\":\"#1677FF\"}]": "[{\"name\":\"Alipay\",\"type\":\"alipay\",\"color\":\"#1677FF\"}]",
   "checkout.session.completed": "checkout.session.completed",

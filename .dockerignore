@@ -13,3 +13,4 @@ docs
 /web/dist-check*
 /web/dist
 /.runtime
+!THIRD-PARTY-LICENSES.md
