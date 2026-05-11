@@ -701,6 +701,10 @@ func shouldDeleteChannelAfterTest(result testResult) bool {
 	return channelDeletionReasonAfterTest(result, false) != ""
 }
 
+func shouldPreserveChannelAfterTestDeletion(channel *model.Channel) bool {
+	return channel != nil && (channel.Type == constant.ChannelTypeCodex || channel.Type == constant.ChannelTypeChatGPTImage)
+}
+
 func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
 	if len(jsonBytes) == 0 {
 		return ""
@@ -972,14 +976,18 @@ func runChannelAutoTests(channels []*model.Channel, notify bool, deleteUnauthori
 			milliseconds := tok.Sub(tik).Milliseconds()
 
 			if deleteReason := channelDeletionReasonAfterTest(result, deleteUnauthorized); deleteReason != "" {
-				if err := channel.Delete(); err != nil {
-					common.SysError(fmt.Sprintf("failed to delete channel after %s: channel_id=%d err=%v", deleteReason, channel.Id, err))
+				if shouldPreserveChannelAfterTestDeletion(channel) {
+					common.SysLog(fmt.Sprintf("kept channel #%d (%s) after %s because ChatGPT Web/Codex channels are not auto-deleted", channel.Id, channel.Name, deleteReason))
 				} else {
-					common.SysLog(fmt.Sprintf("deleted channel #%d (%s) because test result matched %s", channel.Id, channel.Name, deleteReason))
-					model.InitChannelCache()
+					if err := channel.Delete(); err != nil {
+						common.SysError(fmt.Sprintf("failed to delete channel after %s: channel_id=%d err=%v", deleteReason, channel.Id, err))
+					} else {
+						common.SysLog(fmt.Sprintf("deleted channel #%d (%s) because test result matched %s", channel.Id, channel.Name, deleteReason))
+						model.InitChannelCache()
+					}
+					time.Sleep(common.RequestInterval)
+					continue
 				}
-				time.Sleep(common.RequestInterval)
-				continue
 			}
 
 			shouldBanChannel := false

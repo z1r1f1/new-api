@@ -99,3 +99,26 @@ func TestShouldDeleteChannelAfterTest(t *testing.T) {
 		}
 	})
 }
+
+func TestShouldPreserveChannelAfterTestDeletion(t *testing.T) {
+	t.Run("preserves codex channel", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeCodex}
+		if !shouldPreserveChannelAfterTestDeletion(channel) {
+			t.Fatalf("expected Codex channel to be preserved from auto deletion")
+		}
+	})
+
+	t.Run("preserves chatgpt web channel", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
+		if !shouldPreserveChannelAfterTestDeletion(channel) {
+			t.Fatalf("expected ChatGPT Web channel to be preserved from auto deletion")
+		}
+	})
+
+	t.Run("does not preserve normal channel", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+		if shouldPreserveChannelAfterTestDeletion(channel) {
+			t.Fatalf("expected normal OpenAI channel to keep existing deletion behavior")
+		}
+	})
+}
