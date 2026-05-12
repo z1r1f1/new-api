@@ -40,10 +40,8 @@ func StreamScannerHandler(c *gin.Context, resp *http.Response, info *relaycommon
 		return
 	}
 
-	// 仅在未预置时初始化，避免覆盖上游已记录的流状态
-	if info.StreamStatus == nil {
-		info.StreamStatus = relaycommon.NewStreamStatus()
-	}
+	// 每次进入 scanner 都重新记录本次上游流状态
+	info.StreamStatus = relaycommon.NewStreamStatus()
 
 	// 确保响应体总是被关闭
 	defer func() {
