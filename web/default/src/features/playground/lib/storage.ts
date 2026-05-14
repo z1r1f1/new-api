@@ -356,11 +356,14 @@ export function loadMessages(): Message[] | null {
         : isRecord(parsed) && Array.isArray(parsed.messages)
           ? parsed.messages
           : null
-      if (messages) {
-        const sanitized = sanitizeMessagesOnLoad(messages as Message[])
-        saveMessages(sanitized)
-        return sanitized
+      if (!messages) {
+        localStorage.removeItem(STORAGE_KEYS.MESSAGES)
+        return null
       }
+      const sanitized = sanitizeMessagesOnLoad(messages as Message[])
+      // Persist sanitized result to avoid re-sanitizing legacy shapes on subsequent loads
+      saveMessages(sanitized)
+      return sanitized
     }
   } catch (error) {
     // eslint-disable-next-line no-console

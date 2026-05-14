@@ -146,29 +146,16 @@ export function Playground() {
   useEffect(() => {
     if (!groupsData) return
 
-    // Add auto group if not present
-    const hasAutoGroup = groupsData.some((g) => g.value === DEFAULT_GROUP)
-    const processedGroups = hasAutoGroup
-      ? groupsData
-      : [
-          {
-            value: DEFAULT_GROUP,
-            label: 'Auto',
-            ratio: 1,
-            desc: 'Circuit Breaker',
-          },
-          ...groupsData,
-        ]
+    setGroups(groupsData)
 
-    setGroups(processedGroups)
-
-    const isCurrentGroupValid = processedGroups.some(
-      (group) => group.value === config.group
-    )
-    if (!isCurrentGroupValid) {
-      updateConfig('group', DEFAULT_GROUP)
+    const hasCurrentGroup = groupsData.some((g) => g.value === config.group)
+    if (!hasCurrentGroup && groupsData.length > 0) {
+      const fallback =
+        groupsData.find((g) => g.value === DEFAULT_GROUP)?.value ??
+        groupsData[0].value
+      updateConfig('group', fallback)
     }
-  }, [groupsData, config.group, setGroups, updateConfig])
+  }, [groupsData, setGroups, config.group, updateConfig])
 
   const previewResult = useMemo(
     () =>
