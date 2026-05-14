@@ -65,6 +65,69 @@ Regression examples:
 
 Follow `.trellis/spec/backend/database-guidelines.md` and the project-level DB rules. New DB code must work on SQLite, MySQL, and PostgreSQL, or include explicit guarded branches.
 
+### SMTP email TLS modes
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to `common.SendEmail`, SMTP settings, registration email verification, password-reset email, or email notification delivery.
+- The `SMTPSSLEnabled` option means “use a secure SMTP connection”, but SMTP servers expose two different secure modes.
+
+#### 2. Signatures
+
+- Sender entrypoint: `common.SendEmail(subject string, receiver string, content string) error`
+- Runtime settings:
+  - `common.SMTPServer`
+  - `common.SMTPPort`
+  - `common.SMTPSSLEnabled`
+  - `common.SMTPAccount`
+  - `common.SMTPFrom`
+  - `common.SMTPToken`
+  - `common.SMTPForceAuthLogin`
+
+#### 3. Contracts
+
+- Port `465` uses implicit TLS: connect with TLS from the first byte, then create the SMTP client.
+- Non-465 ports with `SMTPSSLEnabled=true` use explicit STARTTLS: connect in plaintext, read SMTP greeting/EHLO, require `STARTTLS`, then upgrade.
+- Non-465 ports with `SMTPSSLEnabled=false` may use `smtp.SendMail`; Go's `net/smtp` can still auto-upgrade when the server advertises STARTTLS.
+
+#### 4. Validation & Error Matrix
+
+- `SMTPServer == "" && SMTPAccount == ""` -> return `SMTP 服务器未配置`.
+- `SMTPFrom` without an email domain -> return `invalid SMTP account`.
+- `SMTPSSLEnabled=true`, non-465 port, server lacks `STARTTLS` -> return `SMTP server does not support STARTTLS`.
+- Never use implicit TLS on port `587`; that causes `tls: first record does not look like a TLS handshake` with STARTTLS submission servers.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `SMTPPort=465`, `SMTPSSLEnabled=true` -> implicit TLS.
+- Good: `SMTPPort=587`, `SMTPSSLEnabled=true` -> plaintext SMTP greeting followed by STARTTLS.
+- Base: `SMTPPort=587`, `SMTPSSLEnabled=false` -> `smtp.SendMail` path may opportunistically STARTTLS.
+- Bad: `SMTPPort=587`, `SMTPSSLEnabled=true`, direct `tls.Dial` before SMTP greeting.
+
+#### 6. Tests Required
+
+- Add a regression test with a fake STARTTLS SMTP server asserting non-465 `SMTPSSLEnabled=true` sends plaintext `EHLO` first, then `STARTTLS`, and completes a message after TLS upgrade.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if SMTPPort == 465 || SMTPSSLEnabled {
+    conn, err := tls.Dial("tcp", addr, tlsConfig)
+}
+```
+
+Correct:
+
+```go
+if SMTPPort == 465 {
+    // implicit TLS
+} else if SMTPSSLEnabled {
+    // plaintext SMTP greeting, then STARTTLS
+}
+```
+
 ### Relay/provider changes
 
 When adding or modifying a channel:

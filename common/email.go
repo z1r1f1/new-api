@@ -33,6 +33,39 @@ func getSMTPAuth() smtp.Auth {
 	return smtp.PlainAuth("", SMTPAccount, SMTPToken, SMTPServer)
 }
 
+func newSMTPClient(addr string, tlsConfig *tls.Config) (*smtp.Client, error) {
+	if SMTPPort == 465 {
+		conn, err := tls.Dial("tcp", addr, tlsConfig)
+		if err != nil {
+			return nil, err
+		}
+		client, err := smtp.NewClient(conn, SMTPServer)
+		if err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
+		return client, nil
+	}
+
+	client, err := smtp.Dial(addr)
+	if err != nil {
+		return nil, err
+	}
+	if !SMTPSSLEnabled {
+		return client, nil
+	}
+
+	if ok, _ := client.Extension("STARTTLS"); !ok {
+		_ = client.Close()
+		return nil, fmt.Errorf("SMTP server does not support STARTTLS")
+	}
+	if err = client.StartTLS(tlsConfig); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
+	return client, nil
+}
+
 func SendEmail(subject string, receiver string, content string) error {
 	if SMTPFrom == "" { // for compatibility
 		SMTPFrom = SMTPAccount
@@ -61,11 +94,7 @@ func SendEmail(subject string, receiver string, content string) error {
 			InsecureSkipVerify: true,
 			ServerName:         SMTPServer,
 		}
-		conn, err := tls.Dial("tcp", fmt.Sprintf("%s:%d", SMTPServer, SMTPPort), tlsConfig)
-		if err != nil {
-			return err
-		}
-		client, err := smtp.NewClient(conn, SMTPServer)
+		client, err := newSMTPClient(addr, tlsConfig)
 		if err != nil {
 			return err
 		}
