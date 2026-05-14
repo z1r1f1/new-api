@@ -18,10 +18,37 @@ func TestShouldAutoTestUseStream(t *testing.T) {
 		}
 	})
 
-	t.Run("non codex channels do not use stream", func(t *testing.T) {
-		channel := &model.Channel{Type: 1}
+	t.Run("ordinary channels default to stream", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+		if !shouldUseStreamForAutomaticChannelTest(channel) {
+			t.Fatalf("expected ordinary channel to use stream=true during auto test by default")
+		}
+	})
+
+	t.Run("chatgpt web channels use non-stream probe", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
 		if shouldUseStreamForAutomaticChannelTest(channel) {
-			t.Fatalf("expected non-codex channel to keep stream=false during auto test")
+			t.Fatalf("expected ChatGPT Web channel to use stream=false during auto test")
+		}
+	})
+}
+
+func TestParseChannelTestStreamQuery(t *testing.T) {
+	t.Run("defaults to stream when absent", func(t *testing.T) {
+		if !parseChannelTestStreamQuery("") {
+			t.Fatalf("expected missing stream query to default to true")
+		}
+	})
+
+	t.Run("honors explicit false", func(t *testing.T) {
+		if parseChannelTestStreamQuery("false") {
+			t.Fatalf("expected explicit stream=false to disable stream")
+		}
+	})
+
+	t.Run("honors explicit true", func(t *testing.T) {
+		if !parseChannelTestStreamQuery("true") {
+			t.Fatalf("expected explicit stream=true to enable stream")
 		}
 	})
 }
@@ -96,6 +123,29 @@ func TestShouldDeleteChannelAfterTest(t *testing.T) {
 		}
 		if got := channelDeletionReasonAfterTest(result, true); got != "status_code_402" {
 			t.Fatalf("expected manual batch 402 to trigger deletion, got %q", got)
+		}
+	})
+}
+
+func TestShouldForceNonStreamChannelTest(t *testing.T) {
+	t.Run("chatgpt web text endpoint uses non-stream probe", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
+		if !shouldForceNonStreamChannelTest(channel, string(constant.EndpointTypeOpenAI)) {
+			t.Fatalf("expected ChatGPT Web text endpoint test to force non-stream")
+		}
+	})
+
+	t.Run("chatgpt web image endpoint keeps normal image behavior", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
+		if shouldForceNonStreamChannelTest(channel, string(constant.EndpointTypeImageGeneration)) {
+			t.Fatalf("expected ChatGPT Web image endpoint test not to force text non-stream")
+		}
+	})
+
+	t.Run("ordinary channels keep requested stream behavior", func(t *testing.T) {
+		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
+		if shouldForceNonStreamChannelTest(channel, string(constant.EndpointTypeOpenAI)) {
+			t.Fatalf("expected ordinary OpenAI channel not to force non-stream")
 		}
 	})
 }

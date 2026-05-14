@@ -80,8 +80,8 @@ var channelAffinitySetting = ChannelAffinitySetting{
 	SwitchOnSuccess:    true,
 	MaxEntries:         100_000,
 	DefaultTTLSeconds:  3600,
-	LogRequestPrefix:   false,
-	RequestPrefixChars: 512,
+	LogRequestPrefix:   true,
+	RequestPrefixChars: 65536,
 	Rules: []ChannelAffinityRule{
 		{
 			Name:       "codex cli trace",

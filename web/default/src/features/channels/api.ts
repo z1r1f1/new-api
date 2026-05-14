@@ -91,6 +91,7 @@ export type AutoTeamRedoResponse = {
   message?: string
   upstream_status?: number
   data?: Record<string, unknown>
+  async?: boolean
 }
 
 // ============================================================================

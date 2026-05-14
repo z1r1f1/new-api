@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -98,7 +99,6 @@ func TestApplyChannelAffinityOverrideTemplate_PreservesRequestPrefixInfo(t *test
 	info, ok := anyInfo.(map[string]interface{})
 	require.True(t, ok)
 	require.Equal(t, 901, info["channel_id"])
-	require.Equal(t, `{"prompt":"hello world"}`, info["request_prefix"])
 	require.Equal(t, "prefix-sha1", info["request_prefix_sha1"])
 	require.Equal(t, 24, info["request_prefix_len"])
 	require.Equal(t, 64, info["request_body_len"])
@@ -342,10 +342,83 @@ func TestChannelAffinityRequestPrefixLoggingSetting(t *testing.T) {
 	require.True(t, ok)
 	info, ok = anyInfo.(map[string]interface{})
 	require.True(t, ok)
-	require.Equal(t, expectedPrefix, info["request_prefix"])
 	require.Equal(t, affinityFingerprint(expectedPrefix), info["request_prefix_sha1"])
 	require.Equal(t, len([]rune(expectedPrefix)), info["request_prefix_len"])
 	require.Equal(t, len([]rune(body)), info["request_body_len"])
+	debug, ok := info["request_debug"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, common.Sha1([]byte(body)), debug["body_sha1"])
+	require.Equal(t, []string{"input", "model", "prompt_cache_key"}, debug["top_level_keys"])
+	require.NotContains(t, info, "request_prefix")
+}
+
+func TestChannelAffinityInputDebugIncludesItemFingerprints(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`)
+
+	debug := buildChannelAffinityJSONDebug(body)
+	input, ok := debug["input"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, 2, input["items_count"])
+
+	itemFingerprints, ok := input["item_fingerprints"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, 2, itemFingerprints["total_count"])
+	require.Equal(t, 2, itemFingerprints["covered_count"])
+
+	items, ok := itemFingerprints["items"].([]map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, items, 2)
+	require.Equal(t, 0, items[0]["index"])
+	require.Equal(t, "message", items[0]["type"])
+	require.Equal(t, "user", items[0]["role"])
+	require.Equal(t, 1, items[1]["index"])
+	require.Equal(t, "function_call_output", items[1]["type"])
+	require.Contains(t, items[1], "sha1")
+	require.NotContains(t, items[0], "text")
+	require.NotContains(t, items[1], "output")
+}
+
+func TestChannelAffinityInputDebugCapsItemFingerprints(t *testing.T) {
+	items := make([]string, 0, maxChannelAffinityInputItemFingerprints+10)
+	for i := 0; i < maxChannelAffinityInputItemFingerprints+10; i++ {
+		items = append(items, fmt.Sprintf(`{"type":"message","role":"user","content":[{"type":"input_text","text":"%d"}]}`, i))
+	}
+	body := []byte(`{"input":[` + strings.Join(items, ",") + `]}`)
+
+	debug := buildChannelAffinityJSONDebug(body)
+	input, ok := debug["input"].(map[string]interface{})
+	require.True(t, ok)
+	itemFingerprints, ok := input["item_fingerprints"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, maxChannelAffinityInputItemFingerprints+10, itemFingerprints["total_count"])
+	require.Equal(t, maxChannelAffinityInputItemFingerprints, itemFingerprints["covered_count"])
+	require.Equal(t, 10, itemFingerprints["omitted_middle_count"])
+
+	fingerprints, ok := itemFingerprints["items"].([]map[string]interface{})
+	require.True(t, ok)
+	require.Len(t, fingerprints, maxChannelAffinityInputItemFingerprints)
+	require.Equal(t, 0, fingerprints[0]["index"])
+	require.Equal(t, maxChannelAffinityInputItemFingerprints+9, fingerprints[len(fingerprints)-1]["index"])
+}
+
+func TestChannelAffinityHeaderDebugHashesIndividualNonSensitiveHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
+	ctx.Request.Header.Set("Authorization", "Bearer secret")
+	ctx.Request.Header.Set("X-Codex-Turn-Metadata", "turn-a")
+	ctx.Request.Header.Set("X-Client-Request-Id", "request-a")
+
+	debug := buildChannelAffinityHeaderDebug(ctx)
+	require.Equal(t, []string{"x-client-request-id", "x-codex-turn-metadata"}, debug["keys"])
+	require.Equal(t, []string{"authorization"}, debug["redacted_keys"])
+	sha1ByKey, ok := debug["sha1_by_key"].(map[string]string)
+	require.True(t, ok)
+	require.Equal(t, common.Sha1([]byte("turn-a")), sha1ByKey["x-codex-turn-metadata"])
+	require.Equal(t, common.Sha1([]byte("request-a")), sha1ByKey["x-client-request-id"])
+	require.NotContains(t, sha1ByKey, "authorization")
 }
 
 func TestChannelAffinityRequestPrefixDebugClampsLargeLimit(t *testing.T) {
@@ -357,10 +430,34 @@ func TestChannelAffinityRequestPrefixDebugClampsLargeLimit(t *testing.T) {
 	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
-	prefix, prefixHash, prefixLen, bodyLen := buildChannelAffinityRequestPrefixDebug(ctx, maxChannelAffinityRequestPrefixChars+1000)
+	prefix, prefixHash, prefixLen, bodyLen, debug := buildChannelAffinityRequestPrefixDebug(ctx, maxChannelAffinityRequestPrefixChars+1000)
 
 	require.Len(t, []rune(prefix), maxChannelAffinityRequestPrefixChars)
 	require.Equal(t, affinityFingerprint(prefix), prefixHash)
 	require.Equal(t, maxChannelAffinityRequestPrefixChars, prefixLen)
 	require.Equal(t, maxChannelAffinityRequestPrefixChars+10, bodyLen)
+	require.Equal(t, common.Sha1([]byte(body)), debug["body_sha1"])
+}
+
+func TestClearCurrentChannelAffinityCache(t *testing.T) {
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	cache := getChannelAffinityCache()
+	cacheKey := channelAffinityCacheNamespace + ":test-clear-current-channel-affinity-cache"
+	_, _ = cache.DeleteMany([]string{cacheKey})
+	t.Cleanup(func() { _, _ = cache.DeleteMany([]string{cacheKey}) })
+
+	setChannelAffinityContext(ctx, channelAffinityMeta{
+		CacheKey:   cacheKey,
+		TTLSeconds: 60,
+	})
+	require.NoError(t, cache.SetWithTTL(cacheKey, 9527, time.Minute))
+
+	ClearCurrentChannelAffinityCache(ctx)
+
+	_, found, err := cache.Get(cacheKey)
+	require.NoError(t, err)
+	require.False(t, found)
 }

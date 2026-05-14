@@ -13,7 +13,9 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/i18n"
+	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -158,10 +160,29 @@ func Distribute() func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
-		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {
+		if channel != nil && shouldRecordChannelAffinity(c) {
 			service.RecordChannelAffinity(c, channel.Id)
 		}
 	}
+}
+
+func shouldRecordChannelAffinity(c *gin.Context) bool {
+	if c == nil || c.Writer == nil || c.Writer.Status() >= http.StatusBadRequest {
+		return false
+	}
+	relayInfo, ok := common.GetContextKeyType[*relaycommon.RelayInfo](c, constant.ContextKeyRelayInfo)
+	if !ok || relayInfo == nil || !relayInfo.IsStream || relayInfo.StreamStatus == nil {
+		return true
+	}
+	if relayInfo.StreamStatus.IsNormalEnd() && !relayInfo.StreamStatus.HasErrors() {
+		return true
+	}
+	logger.LogWarn(c, fmt.Sprintf(
+		"skip channel affinity record because stream ended abnormally: %s",
+		relayInfo.StreamStatus.Summary(),
+	))
+	service.ClearCurrentChannelAffinityCache(c)
+	return false
 }
 
 // getModelFromRequest 从请求中读取模型信息

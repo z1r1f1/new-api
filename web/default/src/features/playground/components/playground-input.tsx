@@ -64,6 +64,7 @@ interface PlaygroundInputProps {
   groups: GroupOption[]
   groupValue: string
   onGroupChange: (value: string) => void
+  showModelControls?: boolean
 }
 
 const suggestions = [
@@ -87,6 +88,7 @@ export function PlaygroundInput({
   groups,
   groupValue,
   onGroupChange,
+  showModelControls = true,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -183,15 +185,17 @@ export function PlaygroundInput({
           </PromptInputTools>
 
           <div className='flex items-center gap-1.5 md:gap-2'>
-            <ModelGroupSelector
-              selectedModel={modelValue}
-              models={models}
-              onModelChange={onModelChange}
-              selectedGroup={groupValue}
-              groups={groups}
-              onGroupChange={onGroupChange}
-              disabled={isModelSelectDisabled || isGroupSelectDisabled}
-            />
+            {showModelControls && (
+              <ModelGroupSelector
+                selectedModel={modelValue}
+                models={models}
+                onModelChange={onModelChange}
+                selectedGroup={groupValue}
+                groups={groups}
+                onGroupChange={onGroupChange}
+                disabled={isModelSelectDisabled || isGroupSelectDisabled}
+              />
+            )}
 
             {isGenerating && onStop ? (
               <PromptInputButton

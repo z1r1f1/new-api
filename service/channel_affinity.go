@@ -1,9 +1,11 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +31,7 @@ const (
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
 	maxChannelAffinityRequestPrefixChars    = 65536
+	maxChannelAffinityInputItemFingerprints = 32
 )
 
 var (
@@ -59,6 +62,7 @@ type channelAffinityMeta struct {
 	RequestPrefixHash string
 	RequestPrefixLen  int
 	RequestBodyLen    int
+	RequestDebug      map[string]interface{}
 }
 
 type ChannelAffinityStatsContext struct {
@@ -434,9 +438,9 @@ func buildChannelAffinityKeyHint(s string) string {
 	return s[:4] + "..." + s[len(s)-4:]
 }
 
-func buildChannelAffinityRequestPrefixDebug(c *gin.Context, maxChars int) (string, string, int, int) {
+func buildChannelAffinityRequestPrefixDebug(c *gin.Context, maxChars int) (string, string, int, int, map[string]interface{}) {
 	if c == nil {
-		return "", "", 0, 0
+		return "", "", 0, 0, nil
 	}
 	if maxChars <= 0 {
 		maxChars = 512
@@ -446,15 +450,32 @@ func buildChannelAffinityRequestPrefixDebug(c *gin.Context, maxChars int) (strin
 	}
 	storage, err := common.GetBodyStorage(c)
 	if err != nil {
-		return "", "", 0, 0
+		return "", "", 0, 0, nil
 	}
 	body, err := storage.Bytes()
 	if err != nil || len(body) == 0 {
-		return "", "", 0, 0
+		return "", "", 0, 0, nil
+	}
+	prefix, prefixHash, prefixLen, bodyLen, debug := buildChannelAffinityBodyDebug(body, maxChars)
+	if debug != nil {
+		debug["request_headers"] = buildChannelAffinityHeaderDebug(c)
+	}
+	return prefix, prefixHash, prefixLen, bodyLen, debug
+}
+
+func buildChannelAffinityBodyDebug(body []byte, maxChars int) (string, string, int, int, map[string]interface{}) {
+	if len(body) == 0 {
+		return "", "", 0, 0, nil
+	}
+	if maxChars <= 0 {
+		maxChars = 512
+	}
+	if maxChars > maxChannelAffinityRequestPrefixChars {
+		maxChars = maxChannelAffinityRequestPrefixChars
 	}
 	text := strings.TrimSpace(string(body))
 	if text == "" {
-		return "", "", 0, 0
+		return "", "", 0, 0, nil
 	}
 	text = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(text)
 	text = strings.Join(strings.Fields(text), " ")
@@ -463,17 +484,339 @@ func buildChannelAffinityRequestPrefixDebug(c *gin.Context, maxChars int) (strin
 	if len(runes) > maxChars {
 		text = string(runes[:maxChars])
 	}
-	return text, affinityFingerprint(text), len([]rune(text)), bodyLen
+	prefixLen := len([]rune(text))
+	prefixHash := affinityFingerprint(text)
+	debug := buildChannelAffinityJSONDebug(body)
+	debug["body_sha1"] = common.Sha1(body)
+	debug["body_bytes"] = len(body)
+	debug["body_chars_normalized"] = bodyLen
+	debug["first_prefix_sha1"] = prefixHash
+	debug["first_prefix_chars"] = prefixLen
+	return text, prefixHash, prefixLen, bodyLen, debug
 }
 
 func appendChannelAffinityRequestPrefixInfo(info map[string]interface{}, meta channelAffinityMeta) {
-	if info == nil || meta.RequestPrefix == "" {
+	if info == nil {
 		return
 	}
-	info["request_prefix"] = meta.RequestPrefix
-	info["request_prefix_sha1"] = meta.RequestPrefixHash
-	info["request_prefix_len"] = meta.RequestPrefixLen
-	info["request_body_len"] = meta.RequestBodyLen
+	if meta.RequestPrefixHash != "" {
+		info["request_prefix_sha1"] = meta.RequestPrefixHash
+		info["request_prefix_len"] = meta.RequestPrefixLen
+		info["request_body_len"] = meta.RequestBodyLen
+	}
+	if len(meta.RequestDebug) > 0 {
+		info["request_debug"] = meta.RequestDebug
+	}
+}
+
+func AppendChannelAffinityFinalRequestDebug(c *gin.Context, body []byte) {
+	if c == nil || len(body) == 0 {
+		return
+	}
+	anyInfo, ok := c.Get(ginKeyChannelAffinityLogInfo)
+	if !ok {
+		return
+	}
+	info, ok := anyInfo.(map[string]interface{})
+	if !ok {
+		return
+	}
+	setting := operation_setting.GetChannelAffinitySetting()
+	if setting == nil || !setting.LogRequestPrefix {
+		return
+	}
+	maxChars := 512
+	if setting.RequestPrefixChars > 0 {
+		maxChars = setting.RequestPrefixChars
+	}
+	_, _, _, _, debug := buildChannelAffinityBodyDebug(body, maxChars)
+	if len(debug) == 0 {
+		return
+	}
+	info["final_request_debug"] = debug
+	c.Set(ginKeyChannelAffinityLogInfo, info)
+	logChannelAffinityDebug("channel affinity final request debug", info, debug)
+}
+
+func buildChannelAffinityJSONDebug(body []byte) map[string]interface{} {
+	debug := make(map[string]interface{})
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(body, &obj); err != nil {
+		debug["json_valid"] = false
+		return debug
+	}
+	debug["json_valid"] = true
+	debug["top_level_keys"] = sortedRawMessageKeys(obj)
+
+	setStringFieldDebug(debug, obj, "model", "model")
+	setHashedRawFieldDebug(debug, obj, "prompt_cache_key", "prompt_cache_key")
+	setHashedRawFieldDebug(debug, obj, "previous_response_id", "previous_response_id")
+	setHashedRawFieldDebug(debug, obj, "conversation", "conversation")
+	setHashedRawFieldDebug(debug, obj, "instructions", "instructions")
+
+	if raw, ok := obj["input"]; ok {
+		debug["input"] = summarizeChannelAffinityInput(raw)
+	}
+	if raw, ok := obj["metadata"]; ok {
+		debug["metadata"] = summarizeChannelAffinityObject(raw)
+	}
+	if raw, ok := obj["reasoning"]; ok {
+		debug["reasoning"] = summarizeChannelAffinityObject(raw)
+	}
+	if raw, ok := obj["store"]; ok {
+		debug["store"] = summarizeScalarRawMessage(raw)
+	}
+	if raw, ok := obj["tools"]; ok {
+		debug["tools"] = summarizeChannelAffinityArray(raw)
+	}
+	return debug
+}
+
+func buildChannelAffinityHeaderDebug(c *gin.Context) map[string]interface{} {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	type headerDigest struct {
+		key  string
+		hash string
+	}
+	digests := make([]headerDigest, 0, len(c.Request.Header))
+	keys := make([]string, 0, len(c.Request.Header))
+	redactedKeys := make([]string, 0)
+	for key, values := range c.Request.Header {
+		normalized := strings.ToLower(strings.TrimSpace(key))
+		if normalized == "" {
+			continue
+		}
+		if isSensitiveChannelAffinityHeader(normalized) {
+			redactedKeys = append(redactedKeys, normalized)
+			continue
+		}
+		keys = append(keys, normalized)
+		digests = append(digests, headerDigest{
+			key:  normalized,
+			hash: common.Sha1([]byte(strings.Join(values, "\x00"))),
+		})
+	}
+	sort.Strings(keys)
+	sort.Strings(redactedKeys)
+	sort.Slice(digests, func(i, j int) bool {
+		return digests[i].key < digests[j].key
+	})
+	digestParts := make([]string, 0, len(digests))
+	sha1ByKey := make(map[string]string, len(digests))
+	for _, digest := range digests {
+		digestParts = append(digestParts, digest.key+"="+digest.hash)
+		sha1ByKey[digest.key] = digest.hash
+	}
+	debug := map[string]interface{}{
+		"keys":        keys,
+		"sha1":        common.Sha1([]byte(strings.Join(digestParts, "\n"))),
+		"sha1_by_key": sha1ByKey,
+	}
+	if len(redactedKeys) > 0 {
+		debug["redacted_keys"] = redactedKeys
+	}
+	return debug
+}
+
+func isSensitiveChannelAffinityHeader(header string) bool {
+	switch strings.ToLower(strings.TrimSpace(header)) {
+	case "authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key", "x-goog-api-key", "api-key":
+		return true
+	default:
+		return false
+	}
+}
+
+func setStringFieldDebug(debug map[string]interface{}, obj map[string]json.RawMessage, field string, output string) {
+	raw, ok := obj[field]
+	if !ok {
+		return
+	}
+	var value string
+	if err := common.Unmarshal(raw, &value); err == nil {
+		debug[output] = value
+		return
+	}
+	debug[output] = summarizeScalarRawMessage(raw)
+}
+
+func setHashedRawFieldDebug(debug map[string]interface{}, obj map[string]json.RawMessage, field string, output string) {
+	raw, ok := obj[field]
+	if !ok {
+		return
+	}
+	debug[output] = summarizeHashedRawMessage(raw)
+}
+
+func summarizeHashedRawMessage(raw json.RawMessage) map[string]interface{} {
+	summary := map[string]interface{}{
+		"json_type": common.GetJsonType(raw),
+		"sha1":      common.Sha1(raw),
+		"bytes":     len(raw),
+	}
+	if common.GetJsonType(raw) == "string" {
+		var value string
+		if err := common.Unmarshal(raw, &value); err == nil {
+			summary["chars"] = len([]rune(value))
+		}
+	}
+	return summary
+}
+
+func summarizeScalarRawMessage(raw json.RawMessage) interface{} {
+	jsonType := common.GetJsonType(raw)
+	switch jsonType {
+	case "boolean":
+		var value bool
+		if err := common.Unmarshal(raw, &value); err == nil {
+			return value
+		}
+	case "number":
+		return map[string]interface{}{
+			"json_type": jsonType,
+			"sha1":      common.Sha1(raw),
+		}
+	case "string":
+		return summarizeHashedRawMessage(raw)
+	}
+	return map[string]interface{}{
+		"json_type": jsonType,
+		"sha1":      common.Sha1(raw),
+		"bytes":     len(raw),
+	}
+}
+
+func summarizeChannelAffinityInput(raw json.RawMessage) map[string]interface{} {
+	summary := map[string]interface{}{
+		"json_type": common.GetJsonType(raw),
+		"sha1":      common.Sha1(raw),
+		"bytes":     len(raw),
+	}
+	var items []json.RawMessage
+	if err := common.Unmarshal(raw, &items); err != nil {
+		return summary
+	}
+	summary["items_count"] = len(items)
+	if len(items) > 0 {
+		summary["first_item"] = summarizeChannelAffinityInputItem(items[0])
+		summary["last_item"] = summarizeChannelAffinityInputItem(items[len(items)-1])
+		summary["item_fingerprints"] = summarizeChannelAffinityInputItemFingerprints(items)
+	}
+	return summary
+}
+
+func summarizeChannelAffinityInputItemFingerprints(items []json.RawMessage) map[string]interface{} {
+	summary := map[string]interface{}{
+		"limit":       maxChannelAffinityInputItemFingerprints,
+		"total_count": len(items),
+	}
+	if len(items) == 0 {
+		summary["items"] = []map[string]interface{}{}
+		summary["covered_count"] = 0
+		return summary
+	}
+
+	indexes := make([]int, 0, len(items))
+	if len(items) <= maxChannelAffinityInputItemFingerprints {
+		for i := range items {
+			indexes = append(indexes, i)
+		}
+	} else {
+		headCount := maxChannelAffinityInputItemFingerprints / 2
+		tailCount := maxChannelAffinityInputItemFingerprints - headCount
+		for i := 0; i < headCount; i++ {
+			indexes = append(indexes, i)
+		}
+		for i := len(items) - tailCount; i < len(items); i++ {
+			indexes = append(indexes, i)
+		}
+		summary["omitted_middle_count"] = len(items) - len(indexes)
+	}
+
+	fingerprints := make([]map[string]interface{}, 0, len(indexes))
+	for _, idx := range indexes {
+		item := summarizeChannelAffinityInputItem(items[idx])
+		item["index"] = idx
+		fingerprints = append(fingerprints, item)
+	}
+	summary["items"] = fingerprints
+	summary["covered_count"] = len(fingerprints)
+	return summary
+}
+
+func summarizeChannelAffinityInputItem(raw json.RawMessage) map[string]interface{} {
+	summary := map[string]interface{}{
+		"json_type": common.GetJsonType(raw),
+		"sha1":      common.Sha1(raw),
+		"bytes":     len(raw),
+	}
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &obj); err != nil {
+		return summary
+	}
+	summary["keys"] = sortedRawMessageKeys(obj)
+	setStringFieldDebug(summary, obj, "type", "type")
+	setStringFieldDebug(summary, obj, "role", "role")
+	if rawContent, ok := obj["content"]; ok {
+		summary["content"] = summarizeChannelAffinityArray(rawContent)
+	}
+	return summary
+}
+
+func summarizeChannelAffinityArray(raw json.RawMessage) map[string]interface{} {
+	summary := map[string]interface{}{
+		"json_type": common.GetJsonType(raw),
+		"sha1":      common.Sha1(raw),
+		"bytes":     len(raw),
+	}
+	var items []json.RawMessage
+	if err := common.Unmarshal(raw, &items); err == nil {
+		summary["items_count"] = len(items)
+	}
+	return summary
+}
+
+func summarizeChannelAffinityObject(raw json.RawMessage) map[string]interface{} {
+	summary := map[string]interface{}{
+		"json_type": common.GetJsonType(raw),
+		"sha1":      common.Sha1(raw),
+		"bytes":     len(raw),
+	}
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &obj); err == nil {
+		summary["keys"] = sortedRawMessageKeys(obj)
+	}
+	return summary
+}
+
+func sortedRawMessageKeys(obj map[string]json.RawMessage) []string {
+	keys := make([]string, 0, len(obj))
+	for key := range obj {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func logChannelAffinityDebug(message string, info map[string]interface{}, debug map[string]interface{}) {
+	if len(debug) == 0 {
+		return
+	}
+	fields := map[string]interface{}{
+		"debug": debug,
+	}
+	for _, key := range []string{"rule_name", "model", "using_group", "selected_group", "channel_id", "key_fp", "request_path"} {
+		if value, ok := info[key]; ok {
+			fields[key] = value
+		}
+	}
+	data, err := common.Marshal(fields)
+	if err != nil {
+		return
+	}
+	common.SysLog(fmt.Sprintf("%s: %s", message, string(data)))
 }
 
 func cloneStringAnyMap(src map[string]interface{}) map[string]interface{} {
@@ -639,8 +982,9 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
 		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
 		requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen := "", "", 0, 0
+		var requestDebug map[string]interface{}
 		if setting.LogRequestPrefix {
-			requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen = buildChannelAffinityRequestPrefixDebug(c, setting.RequestPrefixChars)
+			requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen, requestDebug = buildChannelAffinityRequestPrefixDebug(c, setting.RequestPrefixChars)
 		}
 		setChannelAffinityContext(c, channelAffinityMeta{
 			CacheKey:          cacheKeyFull,
@@ -660,6 +1004,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			RequestPrefixHash: requestPrefixHash,
 			RequestPrefixLen:  requestPrefixLen,
 			RequestBodyLen:    requestBodyLen,
+			RequestDebug:      requestDebug,
 		})
 
 		cache := getChannelAffinityCache()
@@ -718,10 +1063,10 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		"key_fp":         meta.KeyFingerprint,
 	}
 	appendChannelAffinityRequestPrefixInfo(info, meta)
-	if meta.RequestPrefix != "" {
-		common.SysLog(fmt.Sprintf("channel affinity request prefix: rule=%s model=%s group=%s key_fp=%s prefix_sha1=%s prefix_len=%d body_len=%d prefix=%q", meta.RuleName, meta.ModelName, meta.UsingGroup, meta.KeyFingerprint, meta.RequestPrefixHash, meta.RequestPrefixLen, meta.RequestBodyLen, meta.RequestPrefix))
-	}
 	c.Set(ginKeyChannelAffinityLogInfo, info)
+	if len(meta.RequestDebug) > 0 {
+		logChannelAffinityDebug("channel affinity request debug", info, meta.RequestDebug)
+	}
 }
 
 func AppendChannelAffinityAdminInfo(c *gin.Context, adminInfo map[string]interface{}) {
@@ -761,6 +1106,17 @@ func RecordChannelAffinity(c *gin.Context, channelID int) {
 	cache := getChannelAffinityCache()
 	if err := cache.SetWithTTL(cacheKey, channelID, time.Duration(ttlSeconds)*time.Second); err != nil {
 		common.SysError(fmt.Sprintf("channel affinity cache set failed: key=%s, err=%v", cacheKey, err))
+	}
+}
+
+func ClearCurrentChannelAffinityCache(c *gin.Context) {
+	cacheKey, _, ok := getChannelAffinityContext(c)
+	if !ok || cacheKey == "" {
+		return
+	}
+	cache := getChannelAffinityCache()
+	if _, err := cache.DeleteMany([]string{cacheKey}); err != nil {
+		common.SysError(fmt.Sprintf("channel affinity cache delete failed: key=%s, err=%v", cacheKey, err))
 	}
 }
 

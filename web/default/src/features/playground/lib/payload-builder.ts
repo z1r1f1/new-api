@@ -22,7 +22,9 @@ import type {
   Message,
   PlaygroundConfig,
   ParameterEnabled,
+  PlaygroundRequestPayload,
 } from '../types'
+import { buildImageGenerationPayload, isImageGenerationModel } from './image-generation'
 import { formatMessageForAPI, isValidMessage } from './message-utils'
 
 const omitWhenDefaultParameterKeys: Array<keyof ParameterEnabled> = [
@@ -94,4 +96,54 @@ export function buildChatCompletionPayload(
   })
 
   return payload
+}
+
+export function parseCustomRequestBody(
+  customRequestBody: string
+): { payload: PlaygroundRequestPayload | null; error: string | null } {
+  const trimmed = customRequestBody.trim()
+  if (!trimmed) {
+    return { payload: null, error: null }
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      return { payload: null, error: 'Custom request body must be a JSON object' }
+    }
+    return { payload: parsed as PlaygroundRequestPayload, error: null }
+  } catch (error) {
+    return {
+      payload: null,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+export function buildPlaygroundPreviewPayload(params: {
+  messages: Message[]
+  config: PlaygroundConfig
+  parameterEnabled: ParameterEnabled
+  customRequestMode: boolean
+  customRequestBody: string
+}): { payload: PlaygroundRequestPayload | null; error: string | null } {
+  if (params.customRequestMode) {
+    return parseCustomRequestBody(params.customRequestBody)
+  }
+
+  if (isImageGenerationModel(params.config.model)) {
+    return {
+      payload: buildImageGenerationPayload(params.messages, params.config),
+      error: null,
+    }
+  }
+
+  return {
+    payload: buildChatCompletionPayload(
+      params.messages,
+      params.config,
+      params.parameterEnabled
+    ),
+    error: null,
+  }
 }

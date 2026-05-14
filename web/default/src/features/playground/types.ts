@@ -47,6 +47,52 @@ export interface Message {
   errorCode?: string | null
 }
 
+export type PlaygroundDebugTab = 'preview' | 'request' | 'response'
+
+export interface PlaygroundDebugData {
+  previewRequest: unknown | null
+  gatewayRequest: unknown | null
+  upstreamRequest: unknown | null
+  request: unknown | null
+  response: unknown | null
+  sseMessages: string[]
+  timestamp: string | null
+  previewTimestamp: string | null
+  isStreaming: boolean
+}
+
+export interface PlaygroundWorkbenchState {
+  showSettings: boolean
+  showDebugPanel: boolean
+  customRequestMode: boolean
+  customRequestBody: string
+}
+
+export interface PlaygroundSession {
+  id: string
+  title: string
+  messages: Message[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PlaygroundImportData {
+  config?: Partial<PlaygroundConfig>
+  inputs?: Partial<PlaygroundConfig>
+  parameterEnabled?: Partial<ParameterEnabled>
+  customRequestMode?: boolean
+  customRequestBody?: string
+  showDebugPanel?: boolean
+  messages?: Message[]
+  sessions?: PlaygroundSession[]
+  activeSessionId?: string
+}
+
+export type PlaygroundRequestPayload =
+  | ChatCompletionRequest
+  | ImageGenerationRequest
+  | Record<string, unknown>
+
 // API payload types
 export interface ChatCompletionMessage {
   role: MessageRole
@@ -85,6 +131,7 @@ export interface ChatCompletionChunk {
       role?: MessageRole
       content?: string
       reasoning_content?: string
+      reasoning?: string
     }
     finish_reason: string | null
   }>

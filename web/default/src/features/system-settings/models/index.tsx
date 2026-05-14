@@ -23,6 +23,8 @@ import {
   getModelsSectionContent,
 } from './section-registry.tsx'
 
+const MAX_REQUEST_PREFIX_CHARS = 65536
+
 const defaultModelSettings: ModelSettings = {
   'global.pass_through_request_enabled': false,
   'global.thinking_model_blacklist': '[]',
@@ -65,8 +67,8 @@ const defaultModelSettings: ModelSettings = {
   'channel_affinity_setting.switch_on_success': true,
   'channel_affinity_setting.max_entries': 100000,
   'channel_affinity_setting.default_ttl_seconds': 3600,
-  'channel_affinity_setting.log_request_prefix': false,
-  'channel_affinity_setting.request_prefix_chars': 512,
+  'channel_affinity_setting.log_request_prefix': true,
+  'channel_affinity_setting.request_prefix_chars': MAX_REQUEST_PREFIX_CHARS,
   'channel_affinity_setting.rules': '[]',
   'model_deployment.ionet.api_key': '',
   'model_deployment.ionet.enabled': false,

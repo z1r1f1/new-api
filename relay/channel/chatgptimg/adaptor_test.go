@@ -12,6 +12,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -30,6 +31,23 @@ func TestBuildChatPromptFromMessages(t *testing.T) {
 	want := "System: be concise\n\nUser: hello\n\nAssistant: hi\n\nUser: how are you?"
 	if got != want {
 		t.Fatalf("unexpected prompt:\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestBuildChatPromptAddsImageGenerationInstruction(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-image-2",
+		Messages: []dto.Message{
+			{Role: "user", Content: "生成一张性感美女图片"},
+		},
+		ResponseFormat: &dto.ResponseFormat{Type: "json_object"},
+	}
+	got := buildChatPrompt(req)
+	if !strings.Contains(got, "actually create and return image") {
+		t.Fatalf("expected image generation instruction, got %q", got)
+	}
+	if strings.Contains(got, "valid JSON object only") {
+		t.Fatalf("image generation prompt must not force JSON-only response: %q", got)
 	}
 }
 
@@ -61,7 +79,7 @@ func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, pw)
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -93,7 +111,7 @@ func TestCollectChatGeneratedImageMarkdownSkipsLongPollForTextOnlyChat(t *testin
 	}
 
 	start := time.Now()
-	markdown, err := collectChatGeneratedImageMarkdown(context.Background(), client, "conv-text", imageBaseline{}, false)
+	markdown, err := collectChatGeneratedImageMarkdown(context.Background(), client, "conv-text", imageBaseline{}, false, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("collectChatGeneratedImageMarkdown returned error: %v", err)
 	}
@@ -112,6 +130,9 @@ func TestShouldPollChatGeneratedImagesDetectsIntent(t *testing.T) {
 	if !shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: 帮我生成图片：一只小猫", "", false) {
 		t.Fatal("expected Chinese image generation intent to enable polling")
 	}
+	if !shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: 生成一张性感美女图片", "", false) {
+		t.Fatal("expected Chinese generate-a-picture intent to enable polling")
+	}
 	if shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: hello", "hello", false) {
 		t.Fatal("expected plain text chat to skip image polling")
 	}
@@ -127,6 +148,8 @@ func TestParsePlaygroundImageReference(t *testing.T) {
 	}{
 		{name: "relative", ref: "/pg/images/generations/task_abc/image/2", wantTask: "task_abc", wantIndex: 2, wantOK: true},
 		{name: "absolute", ref: "https://example.com/pg/images/generations/task_xyz/image/0", wantTask: "task_xyz", wantIndex: 0, wantOK: true},
+		{name: "public relative", ref: "/pg/public/images/generations/task_public/image/1", wantTask: "task_public", wantIndex: 1, wantOK: true},
+		{name: "public absolute", ref: "http://151.145.66.232/pg/public/images/generations/task_ip/image/0", wantTask: "task_ip", wantIndex: 0, wantOK: true},
 		{name: "invalid", ref: "https://example.com/not-an-image", wantOK: false},
 	}
 
@@ -138,6 +161,64 @@ func TestParsePlaygroundImageReference(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRequestPublicBaseURLAddsForwardedPortWhenHostHasNoPort(t *testing.T) {
+	c := newChatGPTImgTestContext("http://151.145.66.232/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "151.145.66.232",
+		"X-Forwarded-Proto": "http",
+		"X-Forwarded-Port":  "8999",
+	})
+
+	if got := requestPublicBaseURL(c); got != "http://151.145.66.232:8999" {
+		t.Fatalf("unexpected public base URL: %q", got)
+	}
+}
+
+func TestRequestPublicBaseURLDoesNotDuplicateExistingPort(t *testing.T) {
+	c := newChatGPTImgTestContext("http://151.145.66.232/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "151.145.66.232:8999",
+		"X-Forwarded-Proto": "http",
+		"X-Forwarded-Port":  "80",
+	})
+
+	if got := requestPublicBaseURL(c); got != "http://151.145.66.232:8999" {
+		t.Fatalf("unexpected public base URL: %q", got)
+	}
+}
+
+func TestRequestPublicBaseURLUsesRFCForwardedHost(t *testing.T) {
+	c := newChatGPTImgTestContext("http://internal.local/v1/images/generations", map[string]string{
+		"Forwarded": "for=127.0.0.1;proto=http;host=151.145.66.232:8999",
+	})
+
+	if got := requestPublicBaseURL(c); got != "http://151.145.66.232:8999" {
+		t.Fatalf("unexpected public base URL: %q", got)
+	}
+}
+
+func TestRequestPublicBaseURLAddsForwardedPortToIPv6Host(t *testing.T) {
+	c := newChatGPTImgTestContext("http://[2001:db8::1]/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "[2001:db8::1]",
+		"X-Forwarded-Proto": "http",
+		"X-Forwarded-Port":  "8999",
+	})
+
+	if got := requestPublicBaseURL(c); got != "http://[2001:db8::1]:8999" {
+		t.Fatalf("unexpected public base URL: %q", got)
+	}
+}
+
+func newChatGPTImgTestContext(target string, headers map[string]string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+	c.Request = req
+	return c
 }
 
 func TestConvertImageRequestCarriesConversationID(t *testing.T) {
@@ -162,6 +243,136 @@ func TestConvertImageRequestCarriesConversationID(t *testing.T) {
 	}
 	if len(got.FallbackReferenceImages) != 1 || got.FallbackReferenceImages[0] != "data:image/png;base64,abc" {
 		t.Fatalf("unexpected fallback reference images: %#v", got.FallbackReferenceImages)
+	}
+}
+
+func TestImageSSETextWithoutImageError(t *testing.T) {
+	err := imageSSETextWithoutImageError(ImageSSEResult{
+		ConversationID: "conv-1",
+		Content:        "I cannot generate that image.",
+	})
+	if err == nil {
+		t.Fatal("expected text-only image SSE to fail")
+	}
+	if !strings.Contains(err.Error(), "no image generated") || !strings.Contains(err.Error(), "I cannot generate") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := imageSSETextWithoutImageError(ImageSSEResult{
+		Content:        "Image generation started.",
+		ImageGenTaskID: "task-1",
+	}); err != nil {
+		t.Fatalf("expected image task to continue polling, got %v", err)
+	}
+}
+
+func TestBuildGenerationResponseUsesSignedURLForURLField(t *testing.T) {
+	imageBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/image.png" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(imageBytes)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+	signedURL := server.URL + "/image.png"
+	resp, err := buildGenerationResponse(context.Background(), client, generationRequest{}, &imageRunResult{
+		ConversationID: "conv-1",
+		SignedURLs:     []string{signedURL},
+	}, false, nil, "")
+	if err != nil {
+		t.Fatalf("buildGenerationResponse returned error: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected one image item, got %#v", resp.Data)
+	}
+	if resp.Data[0].Url != signedURL {
+		t.Fatalf("expected signed URL in url field, got %q", resp.Data[0].Url)
+	}
+	if strings.HasPrefix(resp.Data[0].Url, "data:") {
+		t.Fatalf("url field must not contain a data URL: %q", resp.Data[0].Url)
+	}
+	if resp.Data[0].B64Json == "" {
+		t.Fatal("expected b64_json to be populated")
+	}
+}
+
+func TestImageRefsToMarkdownUsesSignedURLNotDataURL(t *testing.T) {
+	var imageFetchCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/files/file-1/download":
+			_, _ = w.Write([]byte(`{"download_url":"` + "http://" + r.Host + `/image.png"}`))
+		case "/image.png":
+			imageFetchCount++
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+	markdown := imageRefsToMarkdown(context.Background(), client, "conv-1", []string{"file-1"}, nil, "", "", "")
+	if !strings.Contains(markdown, "]("+server.URL+"/image.png)") {
+		t.Fatalf("expected markdown to contain signed URL, got %q", markdown)
+	}
+	if strings.Contains(markdown, "data:image/") {
+		t.Fatalf("markdown must not contain a data URL: %q", markdown)
+	}
+	if imageFetchCount != 0 {
+		t.Fatalf("expected markdown conversion not to fetch image bytes, got %d fetches", imageFetchCount)
+	}
+}
+
+func TestMaterializeChatGPTContentImageURLsRemovesFailedUpstreamURL(t *testing.T) {
+	client := &Client{hc: http.DefaultClient}
+	content := "https://chatgpt.com/backend-api/estuary/content?id=file_1&sig=x"
+	got := materializeChatGPTContentImageURLs(context.Background(), client, content, &relaycommon.RelayInfo{
+		UserId: 1,
+	}, "prompt", "gpt-image-2", "")
+	if strings.Contains(got, "chatgpt.com/backend-api/estuary/content") {
+		t.Fatalf("expected failed upstream URL to be removed, got %q", got)
+	}
+}
+
+func TestExtractChatGPTImageURLsFromMarkdown(t *testing.T) {
+	content := "done ![image](https://chatgpt.com/backend-api/estuary/content?id=file_1&amp;sig=x)"
+	urls := extractChatGPTImageURLs(content)
+	if len(urls) != 1 || !strings.Contains(urls[0], "/backend-api/estuary/content") {
+		t.Fatalf("unexpected urls: %#v", urls)
+	}
+}
+
+func TestReplaceChatGPTImageURLsWrapsRawURLAsMarkdownImage(t *testing.T) {
+	content := "done https://chatgpt.com/backend-api/estuary/content?id=file_1&sig=x"
+	got := replaceChatGPTImageURLs(content, map[string]string{
+		"https://chatgpt.com/backend-api/estuary/content?id=file_1&sig=x": "/pg/public/images/generations/task_abc/image/0",
+	})
+	want := "done ![image_1](/pg/public/images/generations/task_abc/image/0)"
+	if got != want {
+		t.Fatalf("unexpected replacement:\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestReplaceChatGPTImageURLsKeepsMarkdownImageSyntax(t *testing.T) {
+	content := "done ![result](https://chatgpt.com/backend-api/estuary/content?id=file_1&amp;sig=x)"
+	got := replaceChatGPTImageURLs(content, map[string]string{
+		"https://chatgpt.com/backend-api/estuary/content?id=file_1&sig=x": "/pg/public/images/generations/task_abc/image/0",
+	})
+	want := "done ![result](/pg/public/images/generations/task_abc/image/0)"
+	if got != want {
+		t.Fatalf("unexpected replacement:\nwant: %q\n got: %q", want, got)
 	}
 }
 

@@ -20,12 +20,14 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 )
 
 func Playground(c *gin.Context) {
+	enablePlaygroundUpstreamDebug(c)
 	if err := sanitizePlaygroundChatRequest(c); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": err.Error(),
@@ -36,7 +38,31 @@ func Playground(c *gin.Context) {
 }
 
 func PlaygroundImageGeneration(c *gin.Context) {
+	enablePlaygroundUpstreamDebug(c)
 	playgroundImageGenerationAsync(c)
+}
+
+func PlaygroundDebug(c *gin.Context) {
+	debugID := service.NormalizePlaygroundDebugID(c.Param("debug_id"))
+	if debugID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "invalid debug id",
+		})
+		return
+	}
+	debug, ok := service.GetPlaygroundUpstreamRequestDebug(c.GetInt("id"), debugID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{
+			"success": false,
+			"message": "debug data not found",
+		})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"data":    debug,
+	})
 }
 
 func PlaygroundImageGenerationTask(c *gin.Context) {
@@ -83,6 +109,14 @@ func PlaygroundImageGenerationTask(c *gin.Context) {
 }
 
 func PlaygroundImageGenerationContent(c *gin.Context) {
+	servePlaygroundImageGenerationContent(c, true)
+}
+
+func PlaygroundImageGenerationPublicContent(c *gin.Context) {
+	servePlaygroundImageGenerationContent(c, false)
+}
+
+func servePlaygroundImageGenerationContent(c *gin.Context, requireUser bool) {
 	taskID := strings.TrimSpace(c.Param("task_id"))
 	if taskID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
@@ -99,8 +133,13 @@ func PlaygroundImageGenerationContent(c *gin.Context) {
 		return
 	}
 
-	userID := c.GetInt("id")
-	task, exist, err := model.GetByTaskId(userID, taskID)
+	var task *model.Task
+	var exist bool
+	if requireUser {
+		task, exist, err = model.GetByTaskId(c.GetInt("id"), taskID)
+	} else {
+		task, exist, err = model.GetByOnlyTaskId(taskID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": err.Error(),
@@ -108,6 +147,12 @@ func PlaygroundImageGenerationContent(c *gin.Context) {
 		return
 	}
 	if !exist || task == nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"error": "task not found",
+		})
+		return
+	}
+	if !requireUser && task.Platform != constant.TaskPlatformPlaygroundImage {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error": "task not found",
 		})
@@ -140,7 +185,28 @@ func PlaygroundImageGenerationContent(c *gin.Context) {
 	}
 
 	image := payload.Data[imageIndex]
-	if imageURL := strings.TrimSpace(image.URL); imageURL != "" {
+	servePlaygroundImageItem(c, image.URL, image.B64JSON)
+}
+
+func servePlaygroundImageItem(c *gin.Context, rawURL, rawB64JSON string) {
+	b64Data := strings.TrimSpace(rawB64JSON)
+	if comma := strings.Index(b64Data, ","); strings.HasPrefix(b64Data, "data:") && comma >= 0 {
+		b64Data = b64Data[comma+1:]
+	}
+	if b64Data != "" {
+		imageBytes, err := base64.StdEncoding.DecodeString(b64Data)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error": "failed to decode image data",
+			})
+			return
+		}
+		c.Header("Cache-Control", "private, max-age=3600")
+		c.Data(http.StatusOK, http.DetectContentType(imageBytes), imageBytes)
+		return
+	}
+
+	if imageURL := strings.TrimSpace(rawURL); imageURL != "" {
 		if strings.HasPrefix(imageURL, "data:") {
 			imageBytes, contentType, err := decodePlaygroundImageDataURL(imageURL)
 			if err != nil {
@@ -157,26 +223,9 @@ func PlaygroundImageGenerationContent(c *gin.Context) {
 		return
 	}
 
-	b64Data := strings.TrimSpace(image.B64JSON)
-	if comma := strings.Index(b64Data, ","); strings.HasPrefix(b64Data, "data:") && comma >= 0 {
-		b64Data = b64Data[comma+1:]
-	}
-	if b64Data == "" {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "image data not found",
-		})
-		return
-	}
-
-	imageBytes, err := base64.StdEncoding.DecodeString(b64Data)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "failed to decode image data",
-		})
-		return
-	}
-	c.Header("Cache-Control", "private, max-age=3600")
-	c.Data(http.StatusOK, http.DetectContentType(imageBytes), imageBytes)
+	c.JSON(http.StatusNotFound, gin.H{
+		"error": "image data not found",
+	})
 }
 
 func decodePlaygroundImageDataURL(dataURL string) ([]byte, string, error) {
@@ -296,6 +345,15 @@ func playgroundImageGenerationAsync(c *gin.Context) {
 		"status":   "submitted",
 		"poll_url": fmt.Sprintf("/pg/images/generations/%s", taskID),
 	})
+}
+
+func enablePlaygroundUpstreamDebug(c *gin.Context) {
+	debugID := service.NormalizePlaygroundDebugID(c.GetHeader(service.PlaygroundDebugIDHeader))
+	if debugID == "" {
+		return
+	}
+	common.SetContextKey(c, constant.ContextKeyPlaygroundDebugId, debugID)
+	c.Header(service.PlaygroundDebugIDHeader, debugID)
 }
 
 func preparePlaygroundRelay(c *gin.Context, relayFormat types.RelayFormat) (*relaycommon.RelayInfo, error) {

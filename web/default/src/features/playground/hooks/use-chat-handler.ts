@@ -19,11 +19,13 @@ For commercial licensing, please contact support@quantumnous.com
 import { useCallback, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  createPlaygroundDebugId,
+  getPlaygroundUpstreamRequest,
   getImageGenerationTask,
   sendChatCompletion,
   sendImageGeneration,
 } from '../api'
-import { MESSAGE_STATUS, ERROR_MESSAGES } from '../constants'
+import { DEBUG_TABS, MESSAGE_STATUS, ERROR_MESSAGES } from '../constants'
 import {
   buildChatCompletionPayload,
   buildImageGenerationPayload,
@@ -41,11 +43,15 @@ import {
   finalizeMessage,
 } from '../lib'
 import type {
+  ImageGenerationRequest,
   ImageGenerationSubmitResponse,
   ImageGenerationTaskResponse,
   Message,
   PlaygroundConfig,
   ParameterEnabled,
+  PlaygroundDebugData,
+  PlaygroundDebugTab,
+  PlaygroundRequestPayload,
 } from '../types'
 import { useStreamRequest } from './use-stream-request'
 
@@ -53,6 +59,8 @@ interface UseChatHandlerOptions {
   config: PlaygroundConfig
   parameterEnabled: ParameterEnabled
   onMessageUpdate: (updater: (prev: Message[]) => Message[]) => void
+  onDebugUpdate: (updater: (prev: PlaygroundDebugData) => PlaygroundDebugData) => void
+  onDebugTabChange: (tab: PlaygroundDebugTab) => void
 }
 
 /**
@@ -62,10 +70,133 @@ export function useChatHandler({
   config,
   parameterEnabled,
   onMessageUpdate,
+  onDebugUpdate,
+  onDebugTabChange,
 }: UseChatHandlerOptions) {
   const { sendStreamRequest, stopStream, isStreaming } = useStreamRequest()
   const [isImageGenerating, setIsImageGenerating] = useState(false)
   const imageAbortControllerRef = useRef<AbortController | null>(null)
+  const streamResponseRef = useRef('')
+
+  const getPayloadModel = useCallback(
+    (payload: PlaygroundRequestPayload) => {
+      const model = (payload as Record<string, unknown>).model
+      return typeof model === 'string' ? model : config.model
+    },
+    [config.model]
+  )
+
+  const getPayloadStream = useCallback(
+    (payload: PlaygroundRequestPayload) => {
+      const stream = (payload as Record<string, unknown>).stream
+      return typeof stream === 'boolean' ? stream : config.stream
+    },
+    [config.stream]
+  )
+
+  const getChatPayload = useCallback(
+    (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
+      return (
+        overridePayload ||
+        buildChatCompletionPayload(messages, config, parameterEnabled)
+      )
+    },
+    [config, parameterEnabled]
+  )
+
+  const getImagePayload = useCallback(
+    (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
+      if (!overridePayload) {
+        return buildImageGenerationPayload(messages, config)
+      }
+
+      const overrideRecord = overridePayload as Record<string, unknown>
+      const prompt = String(overrideRecord.prompt || '').trim()
+      if (!prompt) {
+        return buildImageGenerationPayload(messages, {
+          ...config,
+          model: getPayloadModel(overridePayload),
+        })
+      }
+
+      const sanitizedPayload = { ...overrideRecord }
+      delete sanitizedPayload.messages
+      delete sanitizedPayload.stream
+
+      return {
+        ...sanitizedPayload,
+        model: getPayloadModel(overridePayload),
+        group:
+          typeof sanitizedPayload.group === 'string'
+            ? sanitizedPayload.group
+            : config.group,
+        prompt,
+      } as ImageGenerationRequest
+    },
+    [config, getPayloadModel]
+  )
+
+  const startDebugRequest = useCallback(
+    (payload: PlaygroundRequestPayload, isStreamingRequest: boolean) => {
+      streamResponseRef.current = ''
+      onDebugUpdate((prev) => ({
+        ...prev,
+        gatewayRequest: payload,
+        upstreamRequest: null,
+        request: payload,
+        response: null,
+        sseMessages: [],
+        timestamp: new Date().toISOString(),
+        isStreaming: isStreamingRequest,
+      }))
+      onDebugTabChange(DEBUG_TABS.REQUEST)
+    },
+    [onDebugUpdate, onDebugTabChange]
+  )
+
+  const updateDebugUpstreamRequest = useCallback(
+    (upstreamRequest: unknown) => {
+      onDebugUpdate((prev) => ({
+        ...prev,
+        upstreamRequest,
+        request: upstreamRequest,
+      }))
+    },
+    [onDebugUpdate]
+  )
+
+  const fetchAndUpdateDebugUpstreamRequest = useCallback(
+    async (debugId: string) => {
+      const upstreamRequest = await getPlaygroundUpstreamRequest(debugId)
+      if (upstreamRequest !== null) {
+        updateDebugUpstreamRequest(upstreamRequest)
+      }
+    },
+    [updateDebugUpstreamRequest]
+  )
+
+  const completeDebugResponse = useCallback(
+    (response: unknown) => {
+      onDebugUpdate((prev) => ({
+        ...prev,
+        response,
+        isStreaming: false,
+      }))
+      onDebugTabChange(DEBUG_TABS.RESPONSE)
+    },
+    [onDebugUpdate, onDebugTabChange]
+  )
+
+  const appendDebugSseMessage = useCallback(
+    (message: string) => {
+      streamResponseRef.current += `${message}\n`
+      onDebugUpdate((prev) => ({
+        ...prev,
+        sseMessages: [...prev.sseMessages, message],
+      }))
+    },
+    [onDebugUpdate]
+  )
 
   // Handle stream update
   const handleStreamUpdate = useCallback(
@@ -123,40 +254,53 @@ export function useChatHandler({
 
   // Send streaming chat request
   const sendStreamingChat = useCallback(
-    (messages: Message[]) => {
-      const payload = buildChatCompletionPayload(
-        messages,
-        config,
-        parameterEnabled
-      )
+    (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
+      const payload = getChatPayload(messages, overridePayload)
+      const debugId = createPlaygroundDebugId()
+      startDebugRequest(payload, true)
       sendStreamRequest(
         payload,
         handleStreamUpdate,
-        handleStreamComplete,
-        handleStreamError
+        () => {
+          completeDebugResponse(streamResponseRef.current.trim())
+          handleStreamComplete()
+        },
+        (error, errorCode) => {
+          completeDebugResponse({ error, errorCode })
+          handleStreamError(error, errorCode)
+        },
+        appendDebugSseMessage,
+        debugId,
+        updateDebugUpstreamRequest
       )
     },
     [
-      config,
-      parameterEnabled,
+      getChatPayload,
+      startDebugRequest,
       sendStreamRequest,
       handleStreamUpdate,
+      completeDebugResponse,
       handleStreamComplete,
       handleStreamError,
+      appendDebugSseMessage,
+      updateDebugUpstreamRequest,
     ]
   )
 
   // Send non-streaming chat request
   const sendNonStreamingChat = useCallback(
-    async (messages: Message[]) => {
-      const payload = buildChatCompletionPayload(
-        messages,
-        config,
-        parameterEnabled
-      )
+    async (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
+      const payload = getChatPayload(messages, overridePayload)
+      const debugId = createPlaygroundDebugId()
+      startDebugRequest(payload, false)
 
       try {
-        const response = await sendChatCompletion(payload)
+        const result = await sendChatCompletion(payload, debugId)
+        if (result.upstreamRequest !== null) {
+          updateDebugUpstreamRequest(result.upstreamRequest)
+        }
+        const response = result.data
+        completeDebugResponse(response)
         const choice = response.choices?.[0]
         if (!choice) return
 
@@ -178,21 +322,31 @@ export function useChatHandler({
           }))
         )
       } catch (error: unknown) {
+        await fetchAndUpdateDebugUpstreamRequest(debugId)
         const err = error as {
           response?: {
             data?: { message?: string; error?: { code?: string } }
           }
           message?: string
         }
-        handleStreamError(
+        const errorMessage =
           err?.response?.data?.message ||
-            err?.message ||
-            ERROR_MESSAGES.API_REQUEST_ERROR,
-          err?.response?.data?.error?.code || undefined
-        )
+          err?.message ||
+          ERROR_MESSAGES.API_REQUEST_ERROR
+        const errorCode = err?.response?.data?.error?.code || undefined
+        completeDebugResponse({ error: errorMessage, errorCode })
+        handleStreamError(errorMessage, errorCode)
       }
     },
-    [config, parameterEnabled, onMessageUpdate, handleStreamError]
+    [
+      getChatPayload,
+      startDebugRequest,
+      completeDebugResponse,
+      onMessageUpdate,
+      handleStreamError,
+      updateDebugUpstreamRequest,
+      fetchAndUpdateDebugUpstreamRequest,
+    ]
   )
 
   const updateImageGenerationMessage = useCallback(
@@ -299,21 +453,25 @@ export function useChatHandler({
   }, [])
 
   const sendImageGenerationChat = useCallback(
-    async (messages: Message[]) => {
+    async (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
       imageAbortControllerRef.current?.abort()
 
       const abortController = new AbortController()
       imageAbortControllerRef.current = abortController
       setIsImageGenerating(true)
 
-      const payload = buildImageGenerationPayload(messages, config)
+      const payload = getImagePayload(messages, overridePayload)
+      const debugId = createPlaygroundDebugId()
       const startedAt = Date.now()
+      startDebugRequest(payload, false)
 
       try {
         const submitData = await sendImageGeneration(
           payload,
-          abortController.signal
+          abortController.signal,
+          debugId
         )
+        completeDebugResponse(submitData)
         const taskId = extractImageTaskId(submitData)
 
         if (taskId) {
@@ -323,6 +481,8 @@ export function useChatHandler({
             abortController.signal,
             startedAt
           )
+          await fetchAndUpdateDebugUpstreamRequest(debugId)
+          completeDebugResponse(taskResult)
           completeImageGenerationMessage(
             imageTaskResultToMarkdown(taskId, taskResult)
           )
@@ -337,6 +497,7 @@ export function useChatHandler({
         if (isAbortError(error)) {
           return
         }
+        await fetchAndUpdateDebugUpstreamRequest(debugId)
 
         const err = error as {
           response?: {
@@ -347,13 +508,14 @@ export function useChatHandler({
           }
           message?: string
         }
-        handleStreamError(
+        const errorMessage =
           err?.response?.data?.error?.message ||
-            err?.response?.data?.message ||
-            err?.message ||
-            ERROR_MESSAGES.API_REQUEST_ERROR,
-          err?.response?.data?.error?.code || undefined
-        )
+          err?.response?.data?.message ||
+          err?.message ||
+          ERROR_MESSAGES.API_REQUEST_ERROR
+        const errorCode = err?.response?.data?.error?.code || undefined
+        completeDebugResponse({ error: errorMessage, errorCode })
+        handleStreamError(errorMessage, errorCode)
       } finally {
         if (imageAbortControllerRef.current === abortController) {
           imageAbortControllerRef.current = null
@@ -362,7 +524,10 @@ export function useChatHandler({
       }
     },
     [
-      config,
+      getImagePayload,
+      startDebugRequest,
+      completeDebugResponse,
+      fetchAndUpdateDebugUpstreamRequest,
       updateImageGenerationMessage,
       pollImageGenerationTask,
       completeImageGenerationMessage,
@@ -373,21 +538,27 @@ export function useChatHandler({
 
   // Send chat request (stream or non-stream based on config)
   const sendChat = useCallback(
-    (messages: Message[]) => {
-      if (isImageGenerationModel(config.model)) {
-        sendImageGenerationChat(messages)
+    (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
+      const model = overridePayload
+        ? getPayloadModel(overridePayload)
+        : config.model
+      if (isImageGenerationModel(model)) {
+        sendImageGenerationChat(messages, overridePayload)
         return
       }
 
-      if (config.stream) {
-        sendStreamingChat(messages)
+      const payload = getChatPayload(messages, overridePayload)
+      if (getPayloadStream(payload)) {
+        sendStreamingChat(messages, payload)
       } else {
-        sendNonStreamingChat(messages)
+        sendNonStreamingChat(messages, payload)
       }
     },
     [
       config.model,
-      config.stream,
+      getChatPayload,
+      getPayloadModel,
+      getPayloadStream,
       sendImageGenerationChat,
       sendStreamingChat,
       sendNonStreamingChat,
@@ -399,6 +570,14 @@ export function useChatHandler({
     imageAbortControllerRef.current?.abort()
     setIsImageGenerating(false)
     stopStream()
+    onDebugUpdate((prev) => ({
+      ...prev,
+      response:
+        prev.isStreaming && prev.response === null
+          ? { status: 'stopped', response: streamResponseRef.current.trim() }
+          : prev.response,
+      isStreaming: false,
+    }))
     onMessageUpdate((prev) =>
       updateLastAssistantMessage(prev, (message) =>
         message.status === MESSAGE_STATUS.LOADING ||
@@ -407,7 +586,7 @@ export function useChatHandler({
           : message
       )
     )
-  }, [stopStream, onMessageUpdate])
+  }, [stopStream, onDebugUpdate, onMessageUpdate])
 
   return {
     sendChat,

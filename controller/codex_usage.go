@@ -108,6 +108,52 @@ func getAutoTeamAPIKey() string {
 	return apiKey
 }
 
+func callAutoTeamRedo(ctx context.Context, path string, requestBody []byte) (bool, string, int, any, error) {
+	req, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		getAutoTeamAPIURL()+path,
+		bytes.NewReader(requestBody),
+	)
+	if err != nil {
+		return false, "", 0, nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey := getAutoTeamAPIKey(); apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	client := &http.Client{Timeout: 10 * time.Minute}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, "", 0, nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
+	if err != nil {
+		return false, "", resp.StatusCode, nil, err
+	}
+
+	var payload any
+	if len(body) > 0 && common.Unmarshal(body, &payload) != nil {
+		payload = string(body)
+	}
+
+	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+	message := ""
+	if data, ok := payload.(map[string]interface{}); ok {
+		message = strings.TrimSpace(fmt.Sprint(data["message"]))
+		if message == "<nil>" {
+			message = ""
+		}
+	}
+	if !ok && message == "" {
+		message = fmt.Sprintf("AutoTeam status: %d", resp.StatusCode)
+	}
+	return ok, message, resp.StatusCode, payload, nil
+}
+
 func RedoChannelAutoTeamOAuth(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -152,59 +198,40 @@ func RedoChannelAutoTeamOAuth(c *gin.Context) {
 		return
 	}
 
+	if ch.Type == constant.ChannelTypeChatGPTImage {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			ok, message, statusCode, _, err := callAutoTeamRedo(ctx, path, requestBody)
+			if err != nil {
+				common.SysError("failed to call autoteam redo chatgpt: " + err.Error())
+				return
+			}
+			if !ok {
+				common.SysError(fmt.Sprintf("autoteam redo chatgpt failed: status=%d message=%s", statusCode, message))
+			}
+		}()
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"message": "ChatGPT redo task submitted",
+			"async":   true,
+		})
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		getAutoTeamAPIURL()+path,
-		bytes.NewReader(requestBody),
-	)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if apiKey := getAutoTeamAPIKey(); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
+	ok, message, statusCode, payload, err := callAutoTeamRedo(ctx, path, requestBody)
 	if err != nil {
 		common.SysError("failed to call autoteam redo oauth: " + err.Error())
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "调用 AutoTeam 重做 OAuth 失败，请检查服务状态"})
 		return
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
-	var payload any
-	if len(body) > 0 && common.Unmarshal(body, &payload) != nil {
-		payload = string(body)
-	}
-
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
-	message := ""
-	if data, ok := payload.(map[string]interface{}); ok {
-		message = strings.TrimSpace(fmt.Sprint(data["message"]))
-		if message == "<nil>" {
-			message = ""
-		}
-	}
-	if !ok && message == "" {
-		message = fmt.Sprintf("AutoTeam status: %d", resp.StatusCode)
-	}
 	c.JSON(http.StatusOK, gin.H{
 		"success":         ok,
 		"message":         message,
-		"upstream_status": resp.StatusCode,
+		"upstream_status": statusCode,
 		"data":            payload,
 	})
 }

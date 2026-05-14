@@ -2,12 +2,59 @@ package chatgptimg
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestNoRelayRetryErrorIncludesHTTPStatusInMessage(t *testing.T) {
+	err := noRelayRetry(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
+	if err == nil {
+		t.Fatal("expected no relay retry error")
+	}
+	if got := err.Error(); got != "HTTP 429: chatgpt web channel: upstream rate limited while polling image result" {
+		t.Fatalf("unexpected error message: %q", got)
+	}
+	var noRetry interface {
+		SkipRelayRetry() bool
+		RelayStatusCode() int
+	}
+	if !errors.As(err, &noRetry) {
+		t.Fatal("expected no relay retry interface")
+	}
+	if !noRetry.SkipRelayRetry() {
+		t.Fatal("expected relay retry to be skipped")
+	}
+	if got := noRetry.RelayStatusCode(); got != http.StatusTooManyRequests {
+		t.Fatalf("expected relay status 429, got %d", got)
+	}
+}
+
+func TestRelayStatusErrorDoesNotSkipRelayRetry(t *testing.T) {
+	err := relayStatusError(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
+	if err == nil {
+		t.Fatal("expected relay status error")
+	}
+	if got := err.Error(); got != "HTTP 429: chatgpt web channel: upstream rate limited while polling image result" {
+		t.Fatalf("unexpected error message: %q", got)
+	}
+	var retryControl interface {
+		SkipRelayRetry() bool
+		RelayStatusCode() int
+	}
+	if !errors.As(err, &retryControl) {
+		t.Fatal("expected retry control interface")
+	}
+	if retryControl.SkipRelayRetry() {
+		t.Fatal("expected relay retry to remain enabled")
+	}
+	if got := retryControl.RelayStatusCode(); got != http.StatusTooManyRequests {
+		t.Fatalf("expected relay status 429, got %d", got)
+	}
+}
 
 func TestParseImageSSEUntilConversationReadyReturnsAfterQuietPeriod(t *testing.T) {
 	stream := make(chan SSEEvent, 1)
@@ -65,6 +112,24 @@ func TestParseImageSSEDetectsUpstreamGenerationError(t *testing.T) {
 	}
 	if !containsImageGenerationUpstreamErrorText(result.Err.Error()) {
 		t.Fatalf("expected specific upstream error text, got %v", result.Err)
+	}
+}
+
+func TestParseImageSSECapturesAssistantTextWithoutImage(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"parts":["I cannot generate that image."]},"metadata":{"finish_details":{"type":"stop"}}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	result := ParseImageSSE(stream)
+	if result.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id, got %q", result.ConversationID)
+	}
+	if result.Content != "I cannot generate that image." {
+		t.Fatalf("expected assistant text to be captured, got %q", result.Content)
+	}
+	if len(result.FileIDs) != 0 || len(result.SedimentIDs) != 0 || result.ImageGenTaskID != "" {
+		t.Fatalf("expected no image refs/task id, got files=%#v sediments=%#v task=%q", result.FileIDs, result.SedimentIDs, result.ImageGenTaskID)
 	}
 }
 

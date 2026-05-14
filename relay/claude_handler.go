@@ -176,6 +176,7 @@ func ClaudeHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *typ
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
+		service.AppendChannelAffinityFinalRequestDebug(c, jsonData)
 
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))

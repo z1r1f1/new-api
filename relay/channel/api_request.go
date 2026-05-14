@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -295,6 +296,10 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
 	}
+	requestBody, _, err = capturePlaygroundUpstreamRequestBody(c, requestBody)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
@@ -325,6 +330,10 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	}
 	if common2.DebugEnabled {
 		println("fullRequestURL:", fullRequestURL)
+	}
+	requestBody, _, err = capturePlaygroundUpstreamRequestBody(c, requestBody)
+	if err != nil {
+		return nil, err
 	}
 	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
@@ -534,12 +543,22 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, err
 	}
+	requestBody, capturedBody, err := capturePlaygroundUpstreamRequestBody(c, requestBody)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
-	req.GetBody = func() (io.ReadCloser, error) {
-		return io.NopCloser(requestBody), nil
+	if capturedBody != nil {
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(capturedBody)), nil
+		}
+	} else {
+		req.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(requestBody), nil
+		}
 	}
 
 	err = a.BuildRequestHeader(c, req, info)
@@ -551,4 +570,16 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 		return nil, fmt.Errorf("do request failed: %w", err)
 	}
 	return resp, nil
+}
+
+func capturePlaygroundUpstreamRequestBody(c *gin.Context, requestBody io.Reader) (io.Reader, []byte, error) {
+	if requestBody == nil || !service.ShouldCapturePlaygroundUpstreamRequestDebug(c) {
+		return requestBody, nil, nil
+	}
+	body, err := io.ReadAll(requestBody)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read playground upstream request body failed: %w", err)
+	}
+	service.RecordPlaygroundUpstreamRequestDebug(c, body)
+	return bytes.NewReader(body), body, nil
 }

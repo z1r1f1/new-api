@@ -173,6 +173,7 @@ func TextHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
+		service.AppendChannelAffinityFinalRequestDebug(c, jsonData)
 
 		logger.LogDebug(c, fmt.Sprintf("text request body: %s", sanitizedRequestBodyForLog(jsonData)))
 

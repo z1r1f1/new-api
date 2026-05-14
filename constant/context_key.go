@@ -66,4 +66,10 @@ const (
 	// ContextKeyLanguage stores the user's language preference for i18n
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
+
+	// ContextKeyPlaygroundDebugId stores the per-request playground debug capture id.
+	ContextKeyPlaygroundDebugId ContextKey = "playground_debug_id"
+
+	// ContextKeyRelayInfo stores the request-scoped relay info after validation.
+	ContextKeyRelayInfo ContextKey = "relay_info"
 )

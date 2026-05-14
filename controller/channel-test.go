@@ -99,6 +99,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 
 	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
+	if shouldForceNonStreamChannelTest(channel, endpointType) {
+		isStream = false
+	}
 
 	requestPath := "/v1/chat/completions"
 
@@ -242,6 +245,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
+	// Use RelayInfo as the source of truth for stream handling. Some channel
+	// test request types intentionally ignore requested stream (embeddings,
+	// rerank, image generation, response compaction), so response validation
+	// must follow the actual generated request instead of the default flag.
+	isStream = info.IsStream
 
 	err = attachTestBillingRequestInput(info, request)
 	if err != nil {
@@ -661,8 +669,29 @@ func validateTestResponseBody(respBody []byte, isStream bool) error {
 	return nil
 }
 
+func parseChannelTestStreamQuery(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return true
+	}
+	parsed, err := strconv.ParseBool(raw)
+	if err != nil {
+		return true
+	}
+	return parsed
+}
+
 func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
-	return channel != nil && channel.Type == constant.ChannelTypeCodex
+	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
+		return false
+	}
+	return true
+}
+
+func shouldForceNonStreamChannelTest(channel *model.Channel, endpointType string) bool {
+	return channel != nil &&
+		channel.Type == constant.ChannelTypeChatGPTImage &&
+		constant.EndpointType(endpointType) == constant.EndpointTypeOpenAI
 }
 
 func shouldDeleteChannelForChatRequirementsFailure(err error) bool {
@@ -906,7 +935,7 @@ func TestChannel(c *gin.Context) {
 	//}()
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
-	isStream, _ := strconv.ParseBool(c.Query("stream"))
+	isStream := parseChannelTestStreamQuery(c.Query("stream"))
 	tik := time.Now()
 	result := testChannel(channel, testModel, endpointType, isStream)
 	if result.localErr != nil {

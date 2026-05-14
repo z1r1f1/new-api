@@ -19,8 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { api } from '@/lib/api'
 import { API_ENDPOINTS } from './constants'
 import type {
-  ChatCompletionRequest,
   ChatCompletionResponse,
+  PlaygroundRequestPayload,
   ImageGenerationRequest,
   ImageGenerationSubmitResponse,
   ImageGenerationTaskResponse,
@@ -28,16 +28,65 @@ import type {
   GroupOption,
 } from './types'
 
+const PLAYGROUND_DEBUG_ID_HEADER = 'X-Playground-Debug-Id'
+
+export interface PlaygroundAPIResult<T> {
+  data: T
+  upstreamRequest: unknown | null
+}
+
+export function createPlaygroundDebugId(): string {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+export function getPlaygroundDebugHeaders(
+  debugId?: string
+): Record<string, string> {
+  if (!debugId) {
+    return {}
+  }
+  return {
+    [PLAYGROUND_DEBUG_ID_HEADER]: debugId,
+  }
+}
+
+export async function getPlaygroundUpstreamRequest(
+  debugId?: string
+): Promise<unknown | null> {
+  if (!debugId) {
+    return null
+  }
+  const res = await api
+    .get(`/pg/debug/${encodeURIComponent(debugId)}`, {
+      disableDuplicate: true,
+      skipErrorHandler: true,
+    } as Record<string, unknown>)
+    .catch(() => null)
+  if (!res?.data?.success) {
+    return null
+  }
+  return res.data.data?.upstream_request ?? null
+}
+
 /**
  * Send chat completion request (non-streaming)
  */
 export async function sendChatCompletion(
-  payload: ChatCompletionRequest
-): Promise<ChatCompletionResponse> {
+  payload: PlaygroundRequestPayload,
+  debugId?: string
+): Promise<PlaygroundAPIResult<ChatCompletionResponse>> {
   const res = await api.post(API_ENDPOINTS.CHAT_COMPLETIONS, payload, {
+    headers: getPlaygroundDebugHeaders(debugId),
     skipErrorHandler: true,
   } as Record<string, unknown>)
-  return res.data
+  const upstreamRequest = await getPlaygroundUpstreamRequest(debugId)
+  return {
+    data: res.data,
+    upstreamRequest,
+  }
 }
 
 /**
@@ -45,9 +94,11 @@ export async function sendChatCompletion(
  */
 export async function sendImageGeneration(
   payload: ImageGenerationRequest,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  debugId?: string
 ): Promise<ImageGenerationSubmitResponse> {
   const res = await api.post(API_ENDPOINTS.IMAGE_GENERATIONS, payload, {
+    headers: getPlaygroundDebugHeaders(debugId),
     signal,
     skipErrorHandler: true,
   } as Record<string, unknown>)

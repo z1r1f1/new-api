@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useMemo, useEffect, useCallback, memo } from 'react'
+import { useState, useMemo, useCallback, memo } from 'react'
 import { Pencil, Plus, Trash2, GripVertical, ChevronDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
@@ -762,26 +762,28 @@ function GroupPricingTable({
   onChange,
 }: GroupPricingTableProps) {
   const { t } = useTranslation()
-  const [rows, setRows] = useState<GroupPricingRow[]>(() =>
-    buildGroupPricingRows(groupRatio, userUsableGroups)
+  const incomingSignature = useMemo(
+    () => sourceGroupPricingSignature(groupRatio, userUsableGroups),
+    [groupRatio, userUsableGroups]
   )
-
-  useEffect(() => {
-    const incomingSignature = sourceGroupPricingSignature(
-      groupRatio,
-      userUsableGroups
-    )
-    setRows((currentRows) => {
-      if (groupPricingSignature(currentRows) === incomingSignature) {
-        return currentRows
-      }
-      return buildGroupPricingRows(groupRatio, userUsableGroups)
-    })
+  const incomingRows = useMemo(() => {
+    return buildGroupPricingRows(groupRatio, userUsableGroups)
   }, [groupRatio, userUsableGroups])
+  const [draftRows, setDraftRows] = useState(() => ({
+    sourceSignature: incomingSignature,
+    rows: incomingRows,
+  }))
+  const rows =
+    draftRows.sourceSignature === incomingSignature
+      ? draftRows.rows
+      : incomingRows
 
   const emitRows = useCallback(
     (nextRows: GroupPricingRow[]) => {
-      setRows(nextRows)
+      setDraftRows({
+        sourceSignature: groupPricingSignature(nextRows),
+        rows: nextRows,
+      })
       const serialized = serializeGroupPricingRows(nextRows)
       onChange('GroupRatio', serialized.GroupRatio)
       onChange('UserUsableGroups', serialized.UserUsableGroups)
@@ -991,22 +993,43 @@ function SimpleGroupDialog({
   editData,
   type,
 }: SimpleGroupDialogProps) {
+  const contentKey = `${type ?? 'none'}:${editData?.name ?? ''}:${
+    editData?.value ?? ''
+  }`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {open && (
+        <SimpleGroupDialogContent
+          key={contentKey}
+          onOpenChange={onOpenChange}
+          onSave={onSave}
+          editData={editData}
+          type={type}
+        />
+      )}
+    </Dialog>
+  )
+}
+
+type SimpleGroupDialogContentProps = {
+  onOpenChange: (open: boolean) => void
+  onSave: (name: string, value: string) => void
+  editData: SimpleGroup | null
+  type: 'groupRatio' | 'topupGroupRatio' | null
+}
+
+function SimpleGroupDialogContent({
+  onOpenChange,
+  onSave,
+  editData,
+  type,
+}: SimpleGroupDialogContentProps) {
   const { t } = useTranslation()
-  const [name, setName] = useState('')
-  const [value, setValue] = useState('')
+  const [name, setName] = useState(editData?.name ?? '')
+  const [value, setValue] = useState(editData?.value ?? '')
 
   const title = type === 'groupRatio' ? t('group ratio') : t('top-up ratio')
-
-  useEffect(() => {
-    if (!open) {
-      setName('')
-      setValue('')
-      return
-    }
-
-    setName(editData?.name ?? '')
-    setValue(editData?.value ?? '')
-  }, [editData, open])
 
   const handleSave = () => {
     if (!name.trim() || !value.trim()) return
@@ -1016,52 +1039,50 @@ function SimpleGroupDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {editData
-              ? t('Edit {{title}}', { title })
-              : t('Add {{title}}', { title })}
-          </DialogTitle>
-          <DialogDescription>
-            {t('Configure the ratio for this group.')}
-          </DialogDescription>
-        </DialogHeader>
-        <div className='space-y-4 py-4'>
-          <div className='space-y-2'>
-            <Label>{t('Group name')}</Label>
-            <Input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={t('default')}
-              disabled={!!editData}
-            />
-          </div>
-          <div className='space-y-2'>
-            <Label>{t('Ratio')}</Label>
-            <Input
-              value={value}
-              onChange={(e) => {
-                const val = e.target.value
-                if (val === '' || !isNaN(parseFloat(val))) {
-                  setValue(val)
-                }
-              }}
-              placeholder='1.0'
-            />
-          </div>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>
+          {editData
+            ? t('Edit {{title}}', { title })
+            : t('Add {{title}}', { title })}
+        </DialogTitle>
+        <DialogDescription>
+          {t('Configure the ratio for this group.')}
+        </DialogDescription>
+      </DialogHeader>
+      <div className='space-y-4 py-4'>
+        <div className='space-y-2'>
+          <Label>{t('Group name')}</Label>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={t('default')}
+            disabled={!!editData}
+          />
         </div>
-        <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>
-            {t('Cancel')}
-          </Button>
-          <Button onClick={handleSave}>
-            {editData ? t('Update') : t('Add')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className='space-y-2'>
+          <Label>{t('Ratio')}</Label>
+          <Input
+            value={value}
+            onChange={(e) => {
+              const val = e.target.value
+              if (val === '' || !isNaN(parseFloat(val))) {
+                setValue(val)
+              }
+            }}
+            placeholder='1.0'
+          />
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant='outline' onClick={() => onOpenChange(false)}>
+          {t('Cancel')}
+        </Button>
+        <Button onClick={handleSave}>
+          {editData ? t('Update') : t('Add')}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   )
 }
 
@@ -1081,20 +1102,41 @@ function GroupOverrideDialog({
   editData,
   userGroup,
 }: GroupOverrideDialogProps) {
+  const contentKey = `${userGroup ?? ''}:${editData?.targetGroup ?? ''}:${
+    editData?.ratio ?? ''
+  }`
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      {open && (
+        <GroupOverrideDialogContent
+          key={contentKey}
+          onOpenChange={onOpenChange}
+          onSave={onSave}
+          editData={editData}
+          userGroup={userGroup}
+        />
+      )}
+    </Dialog>
+  )
+}
+
+type GroupOverrideDialogContentProps = {
+  onOpenChange: (open: boolean) => void
+  onSave: (targetGroup: string, ratio: number, oldTargetGroup?: string) => void
+  editData: GroupOverride | null
+  userGroup: string | null
+}
+
+function GroupOverrideDialogContent({
+  onOpenChange,
+  onSave,
+  editData,
+  userGroup,
+}: GroupOverrideDialogContentProps) {
   const { t } = useTranslation()
-  const [targetGroup, setTargetGroup] = useState('')
-  const [ratio, setRatio] = useState('')
-
-  useEffect(() => {
-    if (!open) {
-      setTargetGroup('')
-      setRatio('')
-      return
-    }
-
-    setTargetGroup(editData?.targetGroup ?? '')
-    setRatio(editData ? String(editData.ratio) : '')
-  }, [editData, open])
+  const [targetGroup, setTargetGroup] = useState(editData?.targetGroup ?? '')
+  const [ratio, setRatio] = useState(editData ? String(editData.ratio) : '')
 
   const handleSave = () => {
     if (!targetGroup.trim() || !ratio.trim()) return
@@ -1107,65 +1149,63 @@ function GroupOverrideDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {editData ? t('Edit ratio override') : t('Add ratio override')}
-          </DialogTitle>
-          <DialogDescription>
-            {userGroup
-              ? t(
-                  'Configure a custom ratio for "{{userGroup}}" users when using a specific token group.',
-                  { userGroup }
-                )
-              : t(
-                  'Configure a custom ratio for when users use a specific token group.'
-                )}
-          </DialogDescription>
-        </DialogHeader>
-        <div className='space-y-4 py-4'>
-          <div className='space-y-2'>
-            <Label>{t('Target group')}</Label>
-            <Input
-              value={targetGroup}
-              onChange={(e) => setTargetGroup(e.target.value)}
-              placeholder={t('edit_this')}
-              disabled={!!editData}
-            />
-            <p className='text-muted-foreground text-xs'>
-              {t('The token group that will have a custom ratio')}
-            </p>
-          </div>
-          <div className='space-y-2'>
-            <Label>{t('Ratio')}</Label>
-            <Input
-              value={ratio}
-              onChange={(e) => {
-                const val = e.target.value
-                if (val === '' || !isNaN(parseFloat(val))) {
-                  setRatio(val)
-                }
-              }}
-              placeholder='0.9'
-            />
-            <p className='text-muted-foreground text-xs'>
-              {t('Multiplier applied when {{userGroup}} uses {{targetGroup}}', {
-                userGroup: userGroup || t('this user group'),
-                targetGroup: targetGroup || t('this token group'),
-              })}
-            </p>
-          </div>
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>
+          {editData ? t('Edit ratio override') : t('Add ratio override')}
+        </DialogTitle>
+        <DialogDescription>
+          {userGroup
+            ? t(
+                'Configure a custom ratio for "{{userGroup}}" users when using a specific token group.',
+                { userGroup }
+              )
+            : t(
+                'Configure a custom ratio for when users use a specific token group.'
+              )}
+        </DialogDescription>
+      </DialogHeader>
+      <div className='space-y-4 py-4'>
+        <div className='space-y-2'>
+          <Label>{t('Target group')}</Label>
+          <Input
+            value={targetGroup}
+            onChange={(e) => setTargetGroup(e.target.value)}
+            placeholder={t('edit_this')}
+            disabled={!!editData}
+          />
+          <p className='text-muted-foreground text-xs'>
+            {t('The token group that will have a custom ratio')}
+          </p>
         </div>
-        <DialogFooter>
-          <Button variant='outline' onClick={() => onOpenChange(false)}>
-            {t('Cancel')}
-          </Button>
-          <Button onClick={handleSave}>
-            {editData ? t('Update') : t('Add')}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        <div className='space-y-2'>
+          <Label>{t('Ratio')}</Label>
+          <Input
+            value={ratio}
+            onChange={(e) => {
+              const val = e.target.value
+              if (val === '' || !isNaN(parseFloat(val))) {
+                setRatio(val)
+              }
+            }}
+            placeholder='0.9'
+          />
+          <p className='text-muted-foreground text-xs'>
+            {t('Multiplier applied when {{userGroup}} uses {{targetGroup}}', {
+              userGroup: userGroup || t('this user group'),
+              targetGroup: targetGroup || t('this token group'),
+            })}
+          </p>
+        </div>
+      </div>
+      <DialogFooter>
+        <Button variant='outline' onClick={() => onOpenChange(false)}>
+          {t('Cancel')}
+        </Button>
+        <Button onClick={handleSave}>
+          {editData ? t('Update') : t('Add')}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
   )
 }

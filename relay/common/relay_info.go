@@ -502,6 +502,8 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 		info.UserSetting = userSetting
 	}
 
+	common.SetContextKey(c, constant.ContextKeyRelayInfo, info)
+
 	return info
 }
 

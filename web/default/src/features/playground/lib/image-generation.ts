@@ -29,9 +29,37 @@ import type {
 import { getCurrentVersion } from './message-utils'
 
 const generatedImageMarkdownRegex =
-  /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/images\/generations\/[^)\s]+|https?:\/\/[^)\s]+)\)/g
+  /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/(?:public\/)?images\/generations\/[^)\s]+|https?:\/\/[^)\s]+)\)/g
+
+const rawGeneratedImageUrlRegex =
+  /(https?:\/\/[^)\s]+\/pg\/(?:public\/)?images\/generations\/[^)\s.,;，。；]+|\/pg\/(?:public\/)?images\/generations\/[^)\s.,;，。；]+)/g
 
 const generatedImageAltRegex = /^image[_\s-]*\d+$|^generated image\s+\d+$/i
+
+function normalizeGeneratedImageUrl(url: string): string {
+  const cleanUrl = String(url || '').replace(/[\r\n]/g, '')
+  if (
+    cleanUrl.startsWith('/pg/images/generations/') ||
+    cleanUrl.startsWith('/pg/public/images/generations/') ||
+    cleanUrl.startsWith('data:image/')
+  ) {
+    return cleanUrl
+  }
+
+  try {
+    const parsedUrl = new URL(cleanUrl)
+    if (
+      parsedUrl.pathname.startsWith('/pg/images/generations/') ||
+      parsedUrl.pathname.startsWith('/pg/public/images/generations/')
+    ) {
+      return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`
+    }
+  } catch {
+    /* keep the original URL */
+  }
+
+  return cleanUrl
+}
 
 export function isImageGenerationModel(model: string): boolean {
   const normalized = String(model || '')
@@ -170,10 +198,16 @@ export function getImageGenerationWaitMessage(
   )
   const dots = '.'.repeat((safeAttempt % 3) + 1)
   const progress = String(taskData?.progress || '').trim()
-  const progressLine =
-    progress && progress !== '1%' ? `Progress: ${progress}` : ''
+  const progressLine = progress ? `Progress: ${progress}` : ''
+  const status = String(taskData?.status || '').toLowerCase()
+  const isProcessing =
+    ['processing', 'in_progress', 'running'].includes(status) ||
+    (progress !== '' && progress !== '0%')
 
   let stage = 'Task submitted, waiting for image generation to start'
+  if (isProcessing) {
+    stage = 'Gateway is waiting for the upstream image result'
+  }
   if (elapsedSeconds >= 20) {
     stage = 'Image generation is running and may take 1-3 minutes'
   }
@@ -292,7 +326,7 @@ export function parseGeneratedImagesFromMarkdown(content: string): {
         const safeAlt = String(alt || '').trim()
         images.push({
           alt: safeAlt || `generated image ${images.length + 1}`,
-          url: String(url || '').replace(/[\r\n]/g, ''),
+          url: normalizeGeneratedImageUrl(url),
         })
 
         return safeAlt && !generatedImageAltRegex.test(safeAlt)
@@ -300,6 +334,14 @@ export function parseGeneratedImagesFromMarkdown(content: string): {
           : '\n'
       }
     )
+    .replace(rawGeneratedImageUrlRegex, (_match, url: string) => {
+      images.push({
+        alt: `generated image ${images.length + 1}`,
+        url: normalizeGeneratedImageUrl(url),
+      })
+
+      return '\n'
+    })
     .replace(/\n{3,}/g, '\n\n')
     .trim()
 

@@ -20,7 +20,11 @@ import { useCallback, useRef } from 'react'
 import { SSE } from 'sse.js'
 import { getCommonHeaders } from '@/lib/api'
 import { API_ENDPOINTS, ERROR_MESSAGES } from '../constants'
-import type { ChatCompletionRequest, ChatCompletionChunk } from '../types'
+import {
+  getPlaygroundDebugHeaders,
+  getPlaygroundUpstreamRequest,
+} from '../api'
+import type { ChatCompletionChunk, PlaygroundRequestPayload } from '../types'
 
 /**
  * Hook for handling streaming chat completion requests
@@ -31,13 +35,19 @@ export function useStreamRequest() {
 
   const sendStreamRequest = useCallback(
     (
-      payload: ChatCompletionRequest,
+      payload: PlaygroundRequestPayload,
       onUpdate: (type: 'reasoning' | 'content', chunk: string) => void,
       onComplete: () => void,
-      onError: (error: string, errorCode?: string) => void
+      onError: (error: string, errorCode?: string) => void,
+      onRawMessage?: (message: string) => void,
+      debugId?: string,
+      onUpstreamRequest?: (request: unknown) => void
     ) => {
       const source = new SSE(API_ENDPOINTS.CHAT_COMPLETIONS, {
-        headers: getCommonHeaders(),
+        headers: {
+          ...getCommonHeaders(),
+          ...getPlaygroundDebugHeaders(debugId),
+        },
         method: 'POST',
         payload: JSON.stringify(payload),
       })
@@ -57,7 +67,25 @@ export function useStreamRequest() {
         }
       }
 
+      let hasCapturedUpstreamRequest = false
+      const captureUpstreamRequest = async () => {
+        if (hasCapturedUpstreamRequest) {
+          return
+        }
+        const upstreamRequest = await getPlaygroundUpstreamRequest(debugId)
+        if (upstreamRequest !== null) {
+          hasCapturedUpstreamRequest = true
+          onUpstreamRequest?.(upstreamRequest)
+        }
+      }
+
+      source.addEventListener('open', () => {
+        void captureUpstreamRequest()
+      })
+
       source.addEventListener('message', (e: MessageEvent) => {
+        void captureUpstreamRequest()
+        onRawMessage?.(e.data)
         if (e.data === '[DONE]') {
           isStreamCompleteRef.current = true
           closeSource()
@@ -72,6 +100,9 @@ export function useStreamRequest() {
           if (delta) {
             if (delta.reasoning_content) {
               onUpdate('reasoning', delta.reasoning_content)
+            }
+            if (delta.reasoning) {
+              onUpdate('reasoning', delta.reasoning)
             }
             if (delta.content) {
               onUpdate('content', delta.content)

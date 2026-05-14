@@ -40,6 +40,12 @@ export const API_ENDPOINTS = {
   USER_GROUPS: '/api/user/self/groups',
 } as const
 
+export const DEBUG_TABS = {
+  PREVIEW: 'preview',
+  REQUEST: 'request',
+  RESPONSE: 'response',
+} as const
+
 // Default group
 export const DEFAULT_GROUP = 'auto' as const
 
@@ -70,6 +76,9 @@ export const STORAGE_KEYS = {
   CONFIG: 'playground_config',
   MESSAGES: 'playground_messages',
   PARAMETER_ENABLED: 'playground_parameter_enabled',
+  ACTIVE_SESSION_ID: 'playground_active_session_id',
+  SESSIONS: 'playground_sessions',
+  WORKBENCH: 'playground_workbench',
 } as const
 
 // Error messages

@@ -72,6 +72,7 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundTaskRouter.Use(middleware.SystemPerformanceCheck())
 	playgroundTaskRouter.Use(middleware.UserAuth())
 	{
+		playgroundTaskRouter.GET("/debug/:debug_id", controller.PlaygroundDebug)
 		playgroundTaskRouter.GET("/images/generations/:task_id", controller.PlaygroundImageGenerationTask)
 	}
 	playgroundImageContentRouter := router.Group("/pg")
@@ -80,6 +81,12 @@ func SetRelayRouter(router *gin.Engine) {
 	playgroundImageContentRouter.Use(middleware.TokenOrUserAuth())
 	{
 		playgroundImageContentRouter.GET("/images/generations/:task_id/image/:index", controller.PlaygroundImageGenerationContent)
+	}
+	playgroundPublicImageContentRouter := router.Group("/pg/public")
+	playgroundPublicImageContentRouter.Use(middleware.RouteTag("relay"))
+	playgroundPublicImageContentRouter.Use(middleware.SystemPerformanceCheck())
+	{
+		playgroundPublicImageContentRouter.GET("/images/generations/:task_id/image/:index", controller.PlaygroundImageGenerationPublicContent)
 	}
 	relayV1Router := router.Group("/v1")
 	relayV1Router.Use(middleware.RouteTag("relay"))

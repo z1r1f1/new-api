@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"path/filepath"
@@ -88,6 +89,8 @@ type chatResponse struct {
 	Usage          dto.Usage                      `json:"usage"`
 	ConversationID string                         `json:"conversation_id,omitempty"`
 }
+
+const chatImageGenerationInstruction = "System: The user is requesting image generation. Use ChatGPT image generation capability to actually create and return image(s). Do not only return JSON, parameters, or textual instructions."
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {}
 
@@ -294,7 +297,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 		}
 	}
 
-	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res, testMode)
+	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res, testMode, info, requestPublicBaseURLForImages(c, info))
 	if err != nil {
 		return nil, err
 	}
@@ -380,17 +383,18 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info, requestPublicBaseURLForImages(c, info)), nil
 	}
 	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt)
 	if err != nil {
 		return nil, err
 	}
 	content = materializePlaygroundInlineDataImages(content, info, usedPrompt, req.Model)
+	content = materializeChatGPTContentImageURLs(c.Request.Context(), client, content, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info))
 	textContent := content
 	hasInlineDataImage := chatContentHasInlineDataImage(content)
 	allowImagePoll := !hasInlineDataImage && shouldPollChatGeneratedImages(req, usedPrompt, textContent, hasImageGeneration)
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info)); err != nil {
 		return nil, err
 	} else if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
@@ -472,7 +476,9 @@ func buildChatPrompt(req chatRequest) string {
 		}
 		b.WriteString(content)
 	}
-	if req.ResponseFormat != nil {
+
+	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || chatTextRequestsImageGeneration(b.String())
+	if req.ResponseFormat != nil && !imageGenerationIntent {
 		switch req.ResponseFormat.Type {
 		case "json_object":
 			b.WriteString("\n\nSystem: Please respond with a valid JSON object only.")
@@ -481,6 +487,10 @@ func buildChatPrompt(req chatRequest) string {
 			b.WriteString("\n\nSystem: Please respond with valid JSON matching this JSON Schema: ")
 			b.Write(schemaBytes)
 		}
+	}
+	if imageGenerationIntent {
+		b.WriteString("\n\n")
+		b.WriteString(chatImageGenerationInstruction)
 	}
 	return strings.TrimSpace(b.String())
 }
@@ -558,7 +568,7 @@ func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest
 	return result.Content, result.ConversationID, started.Prompt, nil
 }
 
-func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool) (string, error) {
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) (string, error) {
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
 		return "", nil
@@ -613,7 +623,7 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	if len(fileRefs) == 0 {
 		return "", nil
 	}
-	return imageRefsToMarkdown(ctx, client, conversationID, fileRefs), nil
+	return imageRefsToMarkdown(ctx, client, conversationID, fileRefs, info, prompt, modelName, publicBaseURL), nil
 }
 
 func shouldPollChatGeneratedImages(req chatRequest, prompt, content string, hasImageGeneration bool) bool {
@@ -635,6 +645,22 @@ func chatTextRequestsImageGeneration(text string) bool {
 	for _, term := range chineseImageTerms {
 		if strings.Contains(text, term) {
 			return true
+		}
+	}
+	chineseImageNouns := []string{"图片", "图像", "照片", "相片", "插画", "画面", "海报", "头像", "壁纸"}
+	chineseActionTerms := []string{"生成", "创建", "创作", "画", "绘制", "制作", "设计", "做一张", "来一张", "出一张"}
+	hasChineseImageNoun := false
+	for _, term := range chineseImageNouns {
+		if strings.Contains(text, term) {
+			hasChineseImageNoun = true
+			break
+		}
+	}
+	if hasChineseImageNoun {
+		for _, term := range chineseActionTerms {
+			if strings.Contains(text, term) {
+				return true
+			}
 		}
 	}
 	imageTerms := []string{"image", "picture", "photo", "illustration", "drawing"}
@@ -672,19 +698,35 @@ func imageRefsFromToolMsgs(toolMsgs []ImageToolMsg) ([]string, bool) {
 	return dedupeStrings(fileRefs), hasFileRefs
 }
 
-func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID string, fileRefs []string) string {
+func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID string, fileRefs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) string {
+	refs := dedupeStrings(fileRefs)
+	if len(refs) == 0 {
+		return ""
+	}
+	publicURLs, ok := materializeImageRefsToPublicURLs(ctx, client, conversationID, refs, info, prompt, modelName, publicBaseURL)
+	if ok {
+		return imageURLsToMarkdown(publicURLs)
+	}
 	var b strings.Builder
-	for index, ref := range dedupeStrings(fileRefs) {
+	for index, ref := range refs {
 		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
 		if err != nil || strings.TrimSpace(signedURL) == "" {
 			continue
 		}
-		imageURL := signedURL
-		if imageBytes, contentType, fetchErr := client.FetchImage(ctx, signedURL, 20*1024*1024); fetchErr == nil && len(imageBytes) > 0 {
-			if contentType == "" {
-				contentType = http.DetectContentType(imageBytes)
-			}
-			imageURL = fmt.Sprintf("data:%s;base64,%s", contentType, base64.StdEncoding.EncodeToString(imageBytes))
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(fmt.Sprintf("![image_%d](%s)", index+1, signedURL))
+	}
+	return b.String()
+}
+
+func imageURLsToMarkdown(urls []string) string {
+	var b strings.Builder
+	for index, imageURL := range urls {
+		imageURL = strings.TrimSpace(imageURL)
+		if imageURL == "" {
+			continue
 		}
 		if b.Len() > 0 {
 			b.WriteByte('\n')
@@ -692,6 +734,352 @@ func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID str
 		b.WriteString(fmt.Sprintf("![image_%d](%s)", index+1, imageURL))
 	}
 	return b.String()
+}
+
+func chatContentHasChatGPTImageURL(content string) bool {
+	return len(extractChatGPTImageURLs(content)) > 0
+}
+
+func materializeChatGPTContentImageURLs(ctx context.Context, client *Client, content string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) string {
+	urls := extractChatGPTImageURLs(content)
+	if len(urls) == 0 || client == nil || info == nil || info.UserId <= 0 {
+		return content
+	}
+	data := make([]dto.ImageData, 0, len(urls))
+	replacements := make(map[string]string, len(urls))
+	for _, imageURL := range urls {
+		fetchURL := strings.ReplaceAll(strings.TrimSpace(imageURL), "&amp;", "&")
+		imageBytes, _, err := client.FetchImage(ctx, fetchURL, 20*1024*1024)
+		if err != nil || len(imageBytes) == 0 {
+			replacements[imageURL] = ""
+			continue
+		}
+		index := len(data)
+		data = append(data, dto.ImageData{B64Json: base64.StdEncoding.EncodeToString(imageBytes)})
+		replacements[imageURL] = publicPlaygroundImageURL(publicBaseURL, "__pending__", index)
+	}
+	if len(data) == 0 {
+		return replaceChatGPTImageURLs(content, replacements)
+	}
+	publicURLs, ok := createPublicPlaygroundImageTask(info, prompt, modelName, data, publicBaseURL)
+	if !ok || len(publicURLs) == 0 {
+		for original := range replacements {
+			replacements[original] = ""
+		}
+		return replaceChatGPTImageURLs(content, replacements)
+	}
+	for original, replacement := range replacements {
+		if replacement == "" {
+			continue
+		}
+		index := strings.LastIndex(replacement, "/")
+		if index < 0 {
+			continue
+		}
+		imageIndex, err := strconv.Atoi(replacement[index+1:])
+		if err != nil || imageIndex < 0 || imageIndex >= len(publicURLs) {
+			continue
+		}
+		replacements[original] = publicURLs[imageIndex]
+	}
+	return replaceChatGPTImageURLs(content, replacements)
+}
+
+func extractChatGPTImageURLs(content string) []string {
+	fields := strings.FieldsFunc(content, func(r rune) bool {
+		switch r {
+		case ' ', '\n', '\r', '\t', '(', ')', '[', ']', '<', '>', '"', '\'':
+			return true
+		default:
+			return false
+		}
+	})
+	out := make([]string, 0)
+	for _, field := range fields {
+		field = strings.TrimSpace(strings.TrimRight(field, ".,;"))
+		if isChatGPTImageURL(field) {
+			out = append(out, field)
+		}
+	}
+	return dedupeStrings(out)
+}
+
+func isChatGPTImageURL(rawURL string) bool {
+	rawURL = strings.ReplaceAll(strings.TrimSpace(rawURL), "&amp;", "&")
+	if rawURL == "" {
+		return false
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	path := parsed.EscapedPath()
+	if !strings.Contains(path, "/backend-api/estuary/content") &&
+		!strings.Contains(path, "/backend-api/conversation/") &&
+		!strings.Contains(path, "/backend-api/files/") {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	return host == "chatgpt.com" ||
+		strings.HasSuffix(host, ".chatgpt.com") ||
+		strings.HasPrefix(host, "127.0.0.1:") ||
+		strings.HasPrefix(host, "localhost:")
+}
+
+func replaceChatGPTImageURLs(content string, replacements map[string]string) string {
+	out := content
+	imageIndex := 1
+	for original, replacement := range replacements {
+		if strings.TrimSpace(replacement) == "" {
+			replacement = "[image unavailable]"
+		}
+		out = replaceChatGPTImageURLVariant(out, original, replacement, &imageIndex)
+		out = replaceChatGPTImageURLVariant(out, strings.ReplaceAll(original, "&", "&amp;"), replacement, &imageIndex)
+	}
+	return out
+}
+
+func replaceChatGPTImageURLVariant(content, original, replacement string, imageIndex *int) string {
+	original = strings.TrimSpace(original)
+	if original == "" || !strings.Contains(content, original) {
+		return content
+	}
+	var b strings.Builder
+	start := 0
+	for {
+		index := strings.Index(content[start:], original)
+		if index < 0 {
+			b.WriteString(content[start:])
+			break
+		}
+		index += start
+		end := index + len(original)
+		b.WriteString(content[start:index])
+		if replacement == "[image unavailable]" || isMarkdownDestination(content, index, end) {
+			b.WriteString(replacement)
+		} else {
+			b.WriteString(fmt.Sprintf("![image_%d](%s)", *imageIndex, replacement))
+			*imageIndex++
+		}
+		start = end
+	}
+	return b.String()
+}
+
+func isMarkdownDestination(content string, start, end int) bool {
+	return start >= 2 && content[start-2:start] == "](" && end < len(content) && content[end] == ')'
+}
+
+func materializeImageRefsToPublicURLs(ctx context.Context, client *Client, conversationID string, refs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) ([]string, bool) {
+	if client == nil || info == nil || info.UserId <= 0 || len(refs) == 0 {
+		return nil, false
+	}
+	data := make([]dto.ImageData, 0, len(refs))
+	for _, ref := range refs {
+		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
+		if err != nil || strings.TrimSpace(signedURL) == "" {
+			continue
+		}
+		imageBytes, _, err := client.FetchImage(ctx, signedURL, 20*1024*1024)
+		if err != nil || len(imageBytes) == 0 {
+			continue
+		}
+		data = append(data, dto.ImageData{B64Json: base64.StdEncoding.EncodeToString(imageBytes)})
+	}
+	if len(data) == 0 {
+		return nil, false
+	}
+	return createPublicPlaygroundImageTask(info, prompt, modelName, data, publicBaseURL)
+}
+
+func createPublicPlaygroundImageTask(info *relaycommon.RelayInfo, prompt, modelName string, data []dto.ImageData, publicBaseURL string) ([]string, bool) {
+	if info == nil || info.UserId <= 0 || len(data) == 0 {
+		return nil, false
+	}
+	taskID := model.GenerateTaskID()
+	now := time.Now().Unix()
+	group := strings.TrimSpace(info.UsingGroup)
+	if group == "" {
+		group = strings.TrimSpace(info.UserGroup)
+	}
+	channelID := 0
+	if info.ChannelMeta != nil {
+		channelID = info.ChannelMeta.ChannelId
+	}
+	task := &model.Task{
+		TaskID:     taskID,
+		UserId:     info.UserId,
+		Group:      group,
+		SubmitTime: now,
+		StartTime:  now,
+		FinishTime: now,
+		Status:     model.TaskStatusSuccess,
+		Progress:   "100%",
+		ChannelId:  channelID,
+		Platform:   constant.TaskPlatformPlaygroundImage,
+		Action:     constant.TaskActionGenerate,
+		Properties: model.Properties{
+			Input:             strings.TrimSpace(prompt),
+			UpstreamModelName: strings.TrimSpace(modelName),
+			OriginModelName:   strings.TrimSpace(modelName),
+		},
+		PrivateData: model.TaskPrivateData{
+			UpstreamTaskID: taskID,
+			ResultURL:      publicPlaygroundImageURL(publicBaseURL, taskID, 0),
+		},
+	}
+	task.SetData(dto.ImageResponse{
+		Created: now,
+		Data:    data,
+	})
+	if err := task.Insert(); err != nil {
+		return nil, false
+	}
+	urls := make([]string, 0, len(data))
+	for index := range data {
+		urls = append(urls, publicPlaygroundImageURL(publicBaseURL, taskID, index))
+	}
+	return urls, true
+}
+
+func publicPlaygroundImageURL(baseURL, taskID string, index int) string {
+	path := fmt.Sprintf("/pg/public/images/generations/%s/image/%d", url.PathEscape(strings.TrimSpace(taskID)), index)
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return path
+	}
+	return baseURL + path
+}
+
+func requestPublicBaseURLForImages(c *gin.Context, info *relaycommon.RelayInfo) string {
+	if info != nil && info.IsPlayground {
+		return ""
+	}
+	return requestPublicBaseURL(c)
+}
+
+func requestPublicBaseURL(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	forwarded := firstForwardedValue(c.GetHeader("Forwarded"))
+	host := forwardedHeaderParam(forwarded, "host")
+	if host == "" {
+		host = firstForwardedValue(c.GetHeader("X-Forwarded-Host"))
+	}
+	if host == "" {
+		host = strings.TrimSpace(c.Request.Host)
+	}
+	host = normalizeForwardedHost(host)
+	if host == "" {
+		return ""
+	}
+	if !hostHasPort(host) {
+		host = appendPortToHost(host, requestForwardedPort(c))
+	}
+
+	proto := forwardedHeaderParam(forwarded, "proto")
+	if proto == "" {
+		proto = firstForwardedValue(c.GetHeader("X-Forwarded-Proto"))
+	}
+	if proto == "" {
+		proto = firstForwardedValue(c.GetHeader("X-Forwarded-Scheme"))
+	}
+	if proto == "" {
+		if c.Request.TLS != nil {
+			proto = "https"
+		} else {
+			proto = "http"
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(proto)) + "://" + host
+}
+
+func forwardedHeaderParam(forwarded, key string) string {
+	forwarded = strings.TrimSpace(forwarded)
+	if forwarded == "" || key == "" {
+		return ""
+	}
+	key = strings.ToLower(strings.TrimSpace(key))
+	for _, part := range strings.Split(forwarded, ";") {
+		name, value, ok := strings.Cut(strings.TrimSpace(part), "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(name), key) {
+			continue
+		}
+		return strings.Trim(strings.TrimSpace(value), `"`)
+	}
+	return ""
+}
+
+func normalizeForwardedHost(host string) string {
+	host = strings.Trim(strings.TrimSpace(host), `"`)
+	if host == "" {
+		return ""
+	}
+	if strings.Contains(host, "://") {
+		if parsed, err := url.Parse(host); err == nil && parsed.Host != "" {
+			host = parsed.Host
+		}
+	}
+	if slash := strings.IndexByte(host, '/'); slash >= 0 {
+		host = host[:slash]
+	}
+	return strings.TrimSpace(host)
+}
+
+func requestForwardedPort(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	for _, header := range []string{"X-Forwarded-Port", "X-Real-Port", "X-Original-Port"} {
+		if port := normalizeForwardedPort(firstForwardedValue(c.GetHeader(header))); port != "" {
+			return port
+		}
+	}
+	return ""
+}
+
+func normalizeForwardedPort(port string) string {
+	port = strings.Trim(strings.TrimSpace(port), `"`)
+	if port == "" {
+		return ""
+	}
+	if n, err := strconv.Atoi(port); err != nil || n <= 0 || n > 65535 {
+		return ""
+	}
+	return port
+}
+
+func hostHasPort(host string) bool {
+	host = normalizeForwardedHost(host)
+	if host == "" {
+		return false
+	}
+	_, port, err := net.SplitHostPort(host)
+	return err == nil && port != ""
+}
+
+func appendPortToHost(host, port string) string {
+	host = normalizeForwardedHost(host)
+	port = normalizeForwardedPort(port)
+	if host == "" || port == "" || hostHasPort(host) {
+		return host
+	}
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func firstForwardedValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if comma := strings.Index(value, ","); comma >= 0 {
+		value = value[:comma]
+	}
+	return strings.TrimSpace(value)
 }
 
 func appendMarkdownBlock(content, markdown string) string {
@@ -887,9 +1275,9 @@ func chatModelForWeb(model string) string {
 	return model
 }
 
-func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string) *http.Response {
 	pr, pw := io.Pipe()
-	go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, pw)
+	go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw)
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -897,7 +1285,7 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 	}
 }
 
-func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, pw *io.PipeWriter) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, pw *io.PipeWriter) {
 	defer pw.Close()
 	id := buildTransientChatCompletionID()
 	created := time.Now().Unix()
@@ -908,6 +1296,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	writeChatStreamChunk(pw, id, created, model, "assistant", "", nil, nil)
 	state := &ChatSSEState{}
 	streamedContent := ""
+	bufferImageResponse := shouldPollChatGeneratedImages(req, prompt, "", false)
 	for ev := range stream {
 		delta, done, collectErr := CollectChatSSEEvent(ev, state)
 		if state.ConversationID != "" {
@@ -918,7 +1307,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 			return
 		}
 		if delta != "" {
-			if !state.HasInlineImage && !chatContentHasInlineDataImage(delta) && !chatContentHasInlineDataImage(state.Content) {
+			if !bufferImageResponse && !state.HasImageGeneration && !chatContentHasChatGPTImageURL(delta) && !chatContentHasChatGPTImageURL(state.Content) && !state.HasInlineImage && !chatContentHasInlineDataImage(delta) && !chatContentHasInlineDataImage(state.Content) {
 				streamedContent += delta
 				writeChatStreamChunk(pw, id, created, model, "", delta, nil, nil)
 			}
@@ -932,6 +1321,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		return
 	}
 	finalContent := materializePlaygroundInlineDataImages(state.Content, info, prompt, model)
+	finalContent = materializeChatGPTContentImageURLs(ctx, client, finalContent, info, prompt, model, publicBaseURL)
 	if finalContent != "" && finalContent != streamedContent {
 		delta := finalContent
 		if strings.HasPrefix(finalContent, streamedContent) {
@@ -943,7 +1333,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		}
 	}
 	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll); err != nil {
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {
@@ -1419,11 +1809,17 @@ func parsePlaygroundImageReference(ref string) (string, int, bool) {
 		path = parsed.Path
 	}
 
-	const prefix = "/pg/images/generations/"
-	if !strings.HasPrefix(path, prefix) {
+	var payloadPath string
+	for _, prefix := range []string{"/pg/images/generations/", "/pg/public/images/generations/"} {
+		if strings.HasPrefix(path, prefix) {
+			payloadPath = strings.TrimPrefix(path, prefix)
+			break
+		}
+	}
+	if payloadPath == "" {
 		return "", 0, false
 	}
-	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
+	parts := strings.Split(payloadPath, "/")
 	if len(parts) != 3 || parts[0] == "" || parts[1] != "image" {
 		return "", 0, false
 	}
@@ -1579,6 +1975,9 @@ attemptLoop:
 			}
 			excludedFileIDs := uploadedFileIDSet(activeRefs)
 			sseResult.FileIDs = filterExcludedFileIDs(sseResult.FileIDs, excludedFileIDs)
+			if err := imageSSETextWithoutImageError(sseResult); err != nil {
+				return nil, noRelayRetry(err, http.StatusUnprocessableEntity)
+			}
 			if len(sseResult.FileIDs) > 0 || len(sseResult.SedimentIDs) > 0 {
 				fileRefs = append(fileRefs, sseResult.FileIDs...)
 				for _, sid := range sseResult.SedimentIDs {
@@ -1649,7 +2048,7 @@ attemptLoop:
 						}
 						break
 					}
-					return nil, noRelayRetry(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
+					return nil, relayStatusError(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
 				}
 				return nil, noRelayRetry(errors.New("chatgpt web channel: poll failed"), http.StatusBadGateway)
 			}
@@ -1683,6 +2082,22 @@ attemptLoop:
 		return nil, errors.New("chatgpt web channel: no downloadable image url returned")
 	}
 	return result, nil
+}
+
+func imageSSETextWithoutImageError(result ImageSSEResult) error {
+	if len(result.FileIDs) > 0 || len(result.SedimentIDs) > 0 || strings.TrimSpace(result.ImageGenTaskID) != "" {
+		return nil
+	}
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		return nil
+	}
+	const maxLen = 300
+	runes := []rune(content)
+	if len(runes) > maxLen {
+		content = string(runes[:maxLen]) + "..."
+	}
+	return fmt.Errorf("chatgpt web channel: no image generated: %s", content)
 }
 
 func buildToolBaseline(mapping map[string]any) map[string]struct{} {
@@ -1739,26 +2154,32 @@ func uploadedFileIDSet(files []*UploadedFile) map[string]struct{} {
 	return out
 }
 
-func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult, testMode bool) (*generationResponse, error) {
+func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult, testMode bool, info *relaycommon.RelayInfo, publicBaseURL string) (*generationResponse, error) {
 	data := make([]dto.ImageData, 0, len(run.SignedURLs))
 	for _, signedURL := range run.SignedURLs {
 		if testMode {
 			data = append(data, dto.ImageData{Url: signedURL})
 			continue
 		}
-		imageBytes, contentType, err := client.FetchImage(ctx, signedURL, 20*1024*1024)
+		imageBytes, _, err := client.FetchImage(ctx, signedURL, 20*1024*1024)
 		if err != nil {
 			return nil, err
-		}
-		if contentType == "" {
-			contentType = http.DetectContentType(imageBytes)
 		}
 		b64 := base64.StdEncoding.EncodeToString(imageBytes)
 		item := dto.ImageData{B64Json: b64}
 		if req.ResponseFormat != "b64_json" {
-			item.Url = fmt.Sprintf("data:%s;base64,%s", contentType, b64)
+			item.Url = signedURL
 		}
 		data = append(data, item)
+	}
+	if !testMode && req.ResponseFormat != "b64_json" {
+		if publicURLs, ok := createPublicPlaygroundImageTask(info, req.Prompt, req.Model, data, publicBaseURL); ok {
+			for index := range data {
+				if index < len(publicURLs) {
+					data[index].Url = publicURLs[index]
+				}
+			}
+		}
 	}
 	return &generationResponse{
 		Created:        time.Now().Unix(),

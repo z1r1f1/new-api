@@ -127,7 +127,7 @@ export function ChannelTestDialog({
   const queryClient = useQueryClient()
   const { currentRow } = useChannels()
   const [endpointType, setEndpointType] = useState('auto')
-  const [isStreamTest, setIsStreamTest] = useState(false)
+  const [isStreamTest, setIsStreamTest] = useState(true)
   const [searchTerm, setSearchTerm] = useState('')
   const [testResults, setTestResults] = useState<Record<string, TestResult>>({})
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({})
@@ -142,7 +142,7 @@ export function ChannelTestDialog({
 
   const resetState = useCallback(() => {
     setEndpointType('auto')
-    setIsStreamTest(false)
+    setIsStreamTest(true)
     setSearchTerm('')
     setTestResults({})
     setRowSelection({})
@@ -161,9 +161,7 @@ export function ChannelTestDialog({
   const streamDisabled = STREAM_INCOMPATIBLE_ENDPOINTS.has(endpointType)
 
   useEffect(() => {
-    if (streamDisabled) {
-      setIsStreamTest(false)
-    }
+    setIsStreamTest(!streamDisabled)
   }, [streamDisabled])
 
   const modelsValue = currentRow?.models ?? ''
@@ -224,7 +222,7 @@ export function ChannelTestDialog({
           {
             testModel: model,
             endpointType: endpointType === 'auto' ? undefined : endpointType,
-            stream: isStreamTest || undefined,
+            stream: streamDisabled ? false : isStreamTest,
           },
           (success, responseTime, error, errorCode) => {
             updateTestResult(model, {
@@ -250,6 +248,7 @@ export function ChannelTestDialog({
       endpointType,
       isStreamTest,
       markModelTesting,
+      streamDisabled,
       queryClient,
       updateTestResult,
     ]

@@ -95,6 +95,9 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
   const redoSuccessMessage = isChatGPTWebChannel
     ? t('ChatGPT redo completed')
     : t('OAuth redo completed')
+  const redoQueuedMessage = isChatGPTWebChannel
+    ? t('ChatGPT redo task submitted')
+    : redoSuccessMessage
 
   const handleEdit = () => {
     setCurrentRow(channel)
@@ -151,7 +154,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
       if (!res.success) {
         throw new Error(res.message || redoFailureMessage)
       }
-      toast.success(res.message || redoSuccessMessage)
+      toast.success(res.async ? redoQueuedMessage : res.message || redoSuccessMessage)
       queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
     } catch (error) {
       toast.error(error instanceof Error ? error.message : redoFailureMessage)
@@ -348,10 +351,7 @@ export function DataTableRowActions({ row }: DataTableRowActionsProps) {
 
           {/* Delete */}
           <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault()
-              setDeleteConfirmOpen(true)
-            }}
+            onClick={() => setDeleteConfirmOpen(true)}
             className='text-destructive focus:text-destructive'
           >
             {t('Delete')}

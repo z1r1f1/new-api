@@ -427,15 +427,15 @@ export function ChannelAffinitySection(props: Props) {
               checked={logRequestPrefix}
               onCheckedChange={setLogRequestPrefix}
             />
-            <Label>{t('Print request prefix')}</Label>
+            <Label>{t('Print request debug summary')}</Label>
           </div>
           <p className='text-muted-foreground text-xs'>
             {t(
-              'When enabled, write a truncated request body prefix into channel affinity admin logs to debug upstream cache misses. It may contain prompt content; keep disabled unless troubleshooting.'
+              'When enabled, write safe request debug summaries into channel affinity admin logs to debug upstream cache misses. Only hashes, sizes, keys, and input item fingerprints are logged; raw prompt content and secrets are not logged.'
             )}
           </p>
           <div className='grid max-w-xs gap-1.5'>
-            <Label>{t('Request prefix length')}</Label>
+            <Label>{t('Request prefix fingerprint length')}</Label>
             <Input
               type='number'
               min={1}

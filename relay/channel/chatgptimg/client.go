@@ -931,6 +931,7 @@ type ImageSSEResult struct {
 	SedimentIDs    []string
 	FinishType     string
 	ImageGenTaskID string
+	Content        string
 	Err            error
 }
 
@@ -971,11 +972,15 @@ func imageGenerationUpstreamError() error {
 type noRelayRetryError struct {
 	err        error
 	statusCode int
+	skipRetry  bool
 }
 
 func (e *noRelayRetryError) Error() string {
 	if e == nil || e.err == nil {
 		return ""
+	}
+	if e.statusCode > 0 {
+		return fmt.Sprintf("HTTP %d: %s", e.statusCode, e.err.Error())
 	}
 	return e.err.Error()
 }
@@ -987,7 +992,9 @@ func (e *noRelayRetryError) Unwrap() error {
 	return e.err
 }
 
-func (e *noRelayRetryError) SkipRelayRetry() bool { return true }
+func (e *noRelayRetryError) SkipRelayRetry() bool {
+	return e != nil && e.skipRetry
+}
 
 func (e *noRelayRetryError) RelayStatusCode() int {
 	if e == nil || e.statusCode <= 0 {
@@ -997,6 +1004,13 @@ func (e *noRelayRetryError) RelayStatusCode() int {
 }
 
 func noRelayRetry(err error, statusCode int) error {
+	if err == nil {
+		return nil
+	}
+	return &noRelayRetryError{err: err, statusCode: statusCode, skipRetry: true}
+}
+
+func relayStatusError(err error, statusCode int) error {
 	if err == nil {
 		return nil
 	}
@@ -1458,11 +1472,13 @@ func collectImageSSEEvent(ev SSEEvent, result *ImageSSEResult, seenFile, seenSed
 						}
 					}
 				}
+				collectImageAssistantTextFromMessage(msg, result)
 				collectImageRefsFromMessage(msg, result, seenFile, seenSed)
 				return true
 			}
 		}
 		if msg, ok := obj["message"].(map[string]any); ok {
+			collectImageAssistantTextFromMessage(msg, result)
 			collectImageRefsFromMessage(msg, result, seenFile, seenSed)
 			return true
 		}
@@ -1470,6 +1486,17 @@ func collectImageSSEEvent(ev SSEEvent, result *ImageSSEResult, seenFile, seenSed
 
 	collectImageRefsFromBytes(ev.Data, result, seenFile, seenSed)
 	return true
+}
+
+func collectImageAssistantTextFromMessage(message map[string]any, result *ImageSSEResult) {
+	if result == nil || message == nil || isUserAuthoredMessage(message) {
+		return
+	}
+	text := strings.TrimSpace(extractMessageText(message))
+	if text == "" {
+		return
+	}
+	result.Content = text
 }
 
 func collectImageRefsFromMessage(message map[string]any, result *ImageSSEResult, seenFile, seenSed map[string]struct{}) {

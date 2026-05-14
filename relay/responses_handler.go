@@ -101,6 +101,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 				return newAPIErrorFromParamOverride(err)
 			}
 		}
+		service.AppendChannelAffinityFinalRequestDebug(c, jsonData)
 
 		if common.DebugEnabled {
 			println("requestBody: ", string(jsonData))
