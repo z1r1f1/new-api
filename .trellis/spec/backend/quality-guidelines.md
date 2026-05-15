@@ -138,6 +138,70 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### ChatGPT Web image requests and playground async image tasks
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to `relay/channel/chatgptimg/`, `relay/helper/valid_request.go` image parsing, or the default frontend playground image-generation flow.
+- This is a cross-layer contract: client request parsing -> provider adapter response format -> playground task polling -> frontend rendering.
+
+#### 2. Signatures
+
+- Parser: `helper.GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageRequest, error)`
+- Adapter: `(*chatgptimg.Adaptor).ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error)`
+- Playground poll API: `GET /pg/images/generations/:task_id`
+- Playground image content API: `GET /pg/images/generations/:task_id/image/:index`
+
+#### 3. Contracts
+
+- Multipart `/v1/images/edits` must preserve `response_format` from form fields; do not drop it while parsing `prompt`, `model`, `n`, `quality`, `size`, `image`, or `watermark`.
+- ChatGPT Web image requests default to `response_format=b64_json` when the client does not specify a format. Image clients such as Cherry Studio expect `b64_json` to be pure base64 media data, not a gateway URL.
+- Explicit `response_format` values must be preserved for normal image models. Exception: ChatGPT Web `gpt-image-2` / `chatgpt-image-2` (including model aliases mapped upstream to those names) must force `b64_json`, because downstream image-edit clients reuse the generated image bytes and fail when the gateway returns only a URL.
+- The ChatGPT Web `gpt-image-2` / `chatgpt-image-2` force-to-base64 rule must be enforced at both request normalization and response construction. A stale or overridden `response_format=url` must not cause `url` to be emitted for these models.
+- OpenAI-compatible image JSON must omit empty image fields. A base64 image item should serialize as `b64_json` without an empty `url` key, so clients do not choose the wrong representation for follow-up image edits.
+- Playground async image tasks persist task ids client-side while the assistant message is loading/streaming, and resume polling after reload if the same session/message is still pending.
+- Playground wait text is user-facing UI and must go through frontend i18n; do not display provider progress percentages as real progress unless the backend can prove they are meaningful.
+
+#### 4. Validation & Error Matrix
+
+- Multipart parse failure -> `failed to parse image edit form request: ...`
+- Missing/invalid task id on playground poll/content routes -> HTTP 400 with `error`
+- Missing task or inaccessible task -> HTTP 404 with `error`
+- Terminal failed task -> frontend displays `fail_reason` / upstream error from poll response.
+- Long-running non-terminal task timeout -> frontend displays a localized timeout plus last known status and task id.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: multipart edit form contains `response_format=b64_json`; parser stores it and ChatGPT Web response omits `url`.
+- Good: `gpt-image-2` request, or a mapped alias whose upstream model is `gpt-image-2`, contains `response_format=url`; ChatGPT Web overrides it to `b64_json` so follow-up image-to-image clients receive base64 media.
+- Good: `gpt-image-2` response payload contains `data[].b64_json` and no `data[].url` field, even if a stale request body or override tried to force `url`.
+- Base: image form/body omits `response_format`; ChatGPT Web image conversion defaults to `b64_json`.
+- Bad: edit response returns only a gateway URL to an image-model client expecting base64; clients can throw `Invalid data content. Content string is not a base64-encoded media.`
+
+#### 6. Tests Required
+
+- `relay/helper`: regression test that multipart image edits preserve `response_format`.
+- `relay/channel/chatgptimg`: regression tests that image generations/edits default to `b64_json` and explicit formats are preserved.
+- `web/default`: run `bun run typecheck` and `bun run lint` after changing playground state, i18n, or image markdown helpers.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+imageRequest.Prompt = formData.Get("prompt")
+imageRequest.Model = formData.Get("model")
+// response_format silently lost
+```
+
+Correct:
+
+```go
+imageRequest.Prompt = formData.Get("prompt")
+imageRequest.Model = formData.Get("model")
+imageRequest.ResponseFormat = formData.Get("response_format")
+```
+
 ### Channel affinity and stream completion
 
 Channel affinity cache entries represent a successfully usable channel for a

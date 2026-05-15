@@ -27,6 +27,10 @@ import type {
 import { buildImageGenerationPayload, isImageGenerationModel } from './image-generation'
 import { formatMessageForAPI, isValidMessage } from './message-utils'
 
+interface ChatPayloadOptions {
+  searchEnabled?: boolean
+}
+
 const omitWhenDefaultParameterKeys: Array<keyof ParameterEnabled> = [
   'temperature',
   'top_p',
@@ -64,7 +68,8 @@ function shouldIncludeParameter(
 export function buildChatCompletionPayload(
   messages: Message[],
   config: PlaygroundConfig,
-  parameterEnabled: ParameterEnabled
+  parameterEnabled: ParameterEnabled,
+  options: ChatPayloadOptions = {}
 ): ChatCompletionRequest {
   // Filter and format valid messages
   const processedMessages = messages
@@ -76,6 +81,12 @@ export function buildChatCompletionPayload(
     group: config.group,
     messages: processedMessages,
     stream: config.stream,
+  }
+
+  if (options.searchEnabled) {
+    payload.web_search_options = {
+      search_context_size: 'medium',
+    }
   }
 
   // Add enabled parameters
@@ -126,6 +137,7 @@ export function buildPlaygroundPreviewPayload(params: {
   parameterEnabled: ParameterEnabled
   customRequestMode: boolean
   customRequestBody: string
+  searchEnabled?: boolean
 }): { payload: PlaygroundRequestPayload | null; error: string | null } {
   if (params.customRequestMode) {
     return parseCustomRequestBody(params.customRequestBody)
@@ -142,7 +154,8 @@ export function buildPlaygroundPreviewPayload(params: {
     payload: buildChatCompletionPayload(
       params.messages,
       params.config,
-      params.parameterEnabled
+      params.parameterEnabled,
+      { searchEnabled: params.searchEnabled }
     ),
     error: null,
   }

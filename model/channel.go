@@ -344,6 +344,18 @@ func GetChannelsByTag(tag string, idSort bool, selectAll bool, sortOptions ...Ch
 	return channels, err
 }
 
+func ApplyChannelGroupFilter(query *gorm.DB, group string) *gorm.DB {
+	group = strings.TrimSpace(group)
+	if query == nil || group == "" || group == "null" {
+		return query
+	}
+	groupPattern := "%," + group + ",%"
+	if common.UsingMySQL {
+		return query.Where(`CONCAT(',', `+commonGroupCol+`, ',') LIKE ?`, groupPattern)
+	}
+	return query.Where(`(',' || `+commonGroupCol+` || ',') LIKE ?`, groupPattern)
+}
+
 func SearchChannels(keyword string, group string, model string, idSort bool, sortOptions ...ChannelSortOptions) ([]*Channel, error) {
 	var channels []*Channel
 	modelsCol := "`models`"
@@ -963,6 +975,9 @@ func (channel *Channel) GetOtherSettings() dto.ChannelOtherSettings {
 			channel.OtherSettings = "{}" // 清空设置以避免后续错误
 			_ = channel.Save()           // 保存修改
 		}
+	}
+	if channel.Type == constant.ChannelTypeCodex {
+		setting.AllowServiceTier = true
 	}
 	return setting
 }

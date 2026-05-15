@@ -378,6 +378,67 @@ func TestChannelAffinityInputDebugIncludesItemFingerprints(t *testing.T) {
 	require.NotContains(t, items[1], "output")
 }
 
+func TestChannelAffinityJSONDebugIncludesServiceTierValue(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","service_tier":"priority","input":"hello"}`)
+
+	debug := buildChannelAffinityJSONDebug(body)
+
+	require.Equal(t, true, debug["json_valid"])
+	require.Equal(t, "priority", debug["service_tier"])
+}
+
+func TestAppendChannelAffinityResponseDebugIncludesNestedServiceTierValue(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	oldLogRequestPrefix := setting.LogRequestPrefix
+	t.Cleanup(func() {
+		setting.LogRequestPrefix = oldLogRequestPrefix
+	})
+	setting.LogRequestPrefix = true
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Set(ginKeyChannelAffinityLogInfo, map[string]interface{}{
+		"channel_id": 935,
+		"model":      "gpt-5.5",
+	})
+
+	AppendChannelAffinityResponseDebug(ctx, []byte(`{"type":"response.completed","response":{"id":"resp_123","model":"gpt-5.5","service_tier":"priority"}}`))
+
+	anyInfo, ok := ctx.Get(ginKeyChannelAffinityLogInfo)
+	require.True(t, ok)
+	info, ok := anyInfo.(map[string]interface{})
+	require.True(t, ok)
+	debug, ok := info["response_debug"].(map[string]interface{})
+	require.True(t, ok)
+	response, ok := debug["response"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "priority", response["service_tier"])
+}
+
+func TestAppendChannelAffinityResponseDebugRecordsServiceTierWhenPrefixLoggingDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+	oldLogRequestPrefix := setting.LogRequestPrefix
+	t.Cleanup(func() {
+		setting.LogRequestPrefix = oldLogRequestPrefix
+	})
+	setting.LogRequestPrefix = false
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+
+	AppendChannelAffinityResponseDebug(ctx, []byte(`{"type":"response.completed","response":{"service_tier":"default"}}`))
+
+	serviceTier, ok := ctx.Get(ginKeyUpstreamResponseServiceTier)
+	require.True(t, ok)
+	require.Equal(t, "default", serviceTier)
+}
+
 func TestChannelAffinityInputDebugCapsItemFingerprints(t *testing.T) {
 	items := make([]string, 0, maxChannelAffinityInputItemFingerprints+10)
 	for i := 0; i < maxChannelAffinityInputItemFingerprints+10; i++ {

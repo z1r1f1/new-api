@@ -24,6 +24,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -153,12 +154,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	if converted.N <= 0 {
 		converted.N = 1
 	}
-	if converted.Model == "" && info != nil {
-		converted.Model = strings.TrimSpace(info.UpstreamModelName)
-	}
-	if converted.Model == "" {
-		converted.Model = ModelList[0]
-	}
+	normalizeGenerationRequestModelAndResponseFormat(&converted, info)
 	converted.ConversationID = extractConversationIDFromImageRequest(request)
 	converted.FallbackPrompt = extractStringExtraField(request, "fallback_prompt")
 	converted.FallbackReferenceImages = extractStringSliceExtraField(request, "fallback_reference_images")
@@ -169,6 +165,36 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 	}
 	converted.ReferenceImages = refs
 	return converted, nil
+}
+
+func normalizeGenerationRequestModelAndResponseFormat(req *generationRequest, info *relaycommon.RelayInfo) {
+	if req == nil {
+		return
+	}
+	upstreamModel := ""
+	if info != nil && info.ChannelMeta != nil {
+		upstreamModel = strings.TrimSpace(info.ChannelMeta.UpstreamModelName)
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = upstreamModel
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = ModelList[0]
+	}
+	if shouldForceB64JSONImageResponse(req.Model) || shouldForceB64JSONImageResponse(upstreamModel) {
+		req.ResponseFormat = "b64_json"
+	} else if strings.TrimSpace(req.ResponseFormat) == "" {
+		req.ResponseFormat = "b64_json"
+	}
+}
+
+func shouldForceB64JSONImageResponse(model string) bool {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "gpt-image-2", "chatgpt-image-2":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractConversationIDFromImageRequest(request dto.ImageRequest) string {
@@ -267,6 +293,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 	if err := common.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("chatgpt web channel: invalid image request json: %w", err)
 	}
+	normalizeGenerationRequestModelAndResponseFormat(&req, info)
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("chatgpt web channel: prompt is required")
 	}
@@ -953,12 +980,15 @@ func publicPlaygroundImageURL(baseURL, taskID string, index int) string {
 
 func requestPublicBaseURLForImages(c *gin.Context, info *relaycommon.RelayInfo) string {
 	if info != nil && info.IsPlayground {
-		return ""
+		return configuredPublicBaseURL()
 	}
 	return requestPublicBaseURL(c)
 }
 
 func requestPublicBaseURL(c *gin.Context) string {
+	if baseURL := configuredPublicBaseURL(); baseURL != "" {
+		return baseURL
+	}
 	if c == nil || c.Request == nil {
 		return ""
 	}
@@ -973,9 +1003,6 @@ func requestPublicBaseURL(c *gin.Context) string {
 	host = normalizeForwardedHost(host)
 	if host == "" {
 		return ""
-	}
-	if !hostHasPort(host) {
-		host = appendPortToHost(host, requestForwardedPort(c))
 	}
 
 	proto := forwardedHeaderParam(forwarded, "proto")
@@ -992,7 +1019,45 @@ func requestPublicBaseURL(c *gin.Context) string {
 			proto = "http"
 		}
 	}
-	return strings.ToLower(strings.TrimSpace(proto)) + "://" + host
+	proto = strings.ToLower(strings.TrimSpace(proto))
+	if !hostHasPort(host) {
+		port := requestForwardedPort(c)
+		if !isDefaultPortForProto(port, proto) {
+			host = appendPortToHost(host, port)
+		}
+	}
+	return proto + "://" + host
+}
+
+func configuredPublicBaseURL() string {
+	return normalizePublicBaseURL(system_setting.ServerAddress)
+}
+
+func normalizePublicBaseURL(raw string) string {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if scheme != "http" && scheme != "https" {
+		return ""
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "0.0.0.0" {
+		return ""
+	}
+	authority := parsed.Host
+	if port := normalizeForwardedPort(parsed.Port()); isDefaultPortForProto(port, scheme) {
+		authority = parsed.Hostname()
+		if strings.Contains(authority, ":") {
+			authority = "[" + strings.Trim(authority, "[]") + "]"
+		}
+	}
+	return scheme + "://" + authority
 }
 
 func forwardedHeaderParam(forwarded, key string) string {
@@ -1048,6 +1113,12 @@ func normalizeForwardedPort(port string) string {
 		return ""
 	}
 	return port
+}
+
+func isDefaultPortForProto(port, proto string) bool {
+	port = normalizeForwardedPort(port)
+	proto = strings.ToLower(strings.TrimSpace(proto))
+	return (proto == "http" && port == "80") || (proto == "https" && port == "443")
 }
 
 func hostHasPort(host string) bool {
@@ -2155,6 +2226,15 @@ func uploadedFileIDSet(files []*UploadedFile) map[string]struct{} {
 }
 
 func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult, testMode bool, info *relaycommon.RelayInfo, publicBaseURL string) (*generationResponse, error) {
+	responseFormat := strings.TrimSpace(req.ResponseFormat)
+	forceB64JSON := shouldForceB64JSONImageResponse(req.Model)
+	if !forceB64JSON && info != nil && info.ChannelMeta != nil {
+		forceB64JSON = shouldForceB64JSONImageResponse(info.ChannelMeta.UpstreamModelName)
+	}
+	if forceB64JSON {
+		responseFormat = "b64_json"
+	}
+
 	data := make([]dto.ImageData, 0, len(run.SignedURLs))
 	for _, signedURL := range run.SignedURLs {
 		if testMode {
@@ -2167,12 +2247,12 @@ func buildGenerationResponse(ctx context.Context, client *Client, req generation
 		}
 		b64 := base64.StdEncoding.EncodeToString(imageBytes)
 		item := dto.ImageData{B64Json: b64}
-		if req.ResponseFormat != "b64_json" {
+		if responseFormat != "b64_json" {
 			item.Url = signedURL
 		}
 		data = append(data, item)
 	}
-	if !testMode && req.ResponseFormat != "b64_json" {
+	if !testMode && responseFormat != "b64_json" {
 		if publicURLs, ok := createPublicPlaygroundImageTask(info, req.Prompt, req.Model, data, publicBaseURL); ok {
 			for index := range data {
 				if index < len(publicURLs) {

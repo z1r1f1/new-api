@@ -22,11 +22,12 @@ import (
 )
 
 const (
-	ginKeyChannelAffinityCacheKey   = "channel_affinity_cache_key"
-	ginKeyChannelAffinityTTLSeconds = "channel_affinity_ttl_seconds"
-	ginKeyChannelAffinityMeta       = "channel_affinity_meta"
-	ginKeyChannelAffinityLogInfo    = "channel_affinity_log_info"
-	ginKeyChannelAffinitySkipRetry  = "channel_affinity_skip_retry_on_failure"
+	ginKeyChannelAffinityCacheKey     = "channel_affinity_cache_key"
+	ginKeyChannelAffinityTTLSeconds   = "channel_affinity_ttl_seconds"
+	ginKeyChannelAffinityMeta         = "channel_affinity_meta"
+	ginKeyChannelAffinityLogInfo      = "channel_affinity_log_info"
+	ginKeyChannelAffinitySkipRetry    = "channel_affinity_skip_retry_on_failure"
+	ginKeyUpstreamResponseServiceTier = "upstream_response_service_tier"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -549,6 +550,7 @@ func buildChannelAffinityJSONDebug(body []byte) map[string]interface{} {
 	debug["top_level_keys"] = sortedRawMessageKeys(obj)
 
 	setStringFieldDebug(debug, obj, "model", "model")
+	setStringFieldDebug(debug, obj, "service_tier", "service_tier")
 	setHashedRawFieldDebug(debug, obj, "prompt_cache_key", "prompt_cache_key")
 	setHashedRawFieldDebug(debug, obj, "previous_response_id", "previous_response_id")
 	setHashedRawFieldDebug(debug, obj, "conversation", "conversation")
@@ -568,6 +570,92 @@ func buildChannelAffinityJSONDebug(body []byte) map[string]interface{} {
 	}
 	if raw, ok := obj["tools"]; ok {
 		debug["tools"] = summarizeChannelAffinityArray(raw)
+	}
+	return debug
+}
+
+func AppendChannelAffinityResponseDebug(c *gin.Context, body []byte) {
+	if c == nil || len(body) == 0 {
+		return
+	}
+	if serviceTier := extractUpstreamResponseServiceTier(body); serviceTier != "" {
+		c.Set(ginKeyUpstreamResponseServiceTier, serviceTier)
+	}
+	anyInfo, ok := c.Get(ginKeyChannelAffinityLogInfo)
+	if !ok {
+		return
+	}
+	info, ok := anyInfo.(map[string]interface{})
+	if !ok {
+		return
+	}
+	setting := operation_setting.GetChannelAffinitySetting()
+	if setting == nil || !setting.LogRequestPrefix {
+		return
+	}
+	debug := buildChannelAffinityResponseDebug(body)
+	if len(debug) == 0 {
+		return
+	}
+	info["response_debug"] = debug
+	c.Set(ginKeyChannelAffinityLogInfo, info)
+	logChannelAffinityDebug("channel affinity response debug", info, debug)
+}
+
+func extractUpstreamResponseServiceTier(body []byte) string {
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(body, &obj); err != nil {
+		return ""
+	}
+	if raw, ok := obj["service_tier"]; ok {
+		var value string
+		if err := common.Unmarshal(raw, &value); err == nil {
+			return strings.TrimSpace(value)
+		}
+	}
+	if raw, ok := obj["response"]; ok {
+		var response map[string]json.RawMessage
+		if err := common.Unmarshal(raw, &response); err != nil {
+			return ""
+		}
+		rawServiceTier, ok := response["service_tier"]
+		if !ok {
+			return ""
+		}
+		var value string
+		if err := common.Unmarshal(rawServiceTier, &value); err == nil {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func buildChannelAffinityResponseDebug(body []byte) map[string]interface{} {
+	debug := make(map[string]interface{})
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(body, &obj); err != nil {
+		debug["json_valid"] = false
+		return debug
+	}
+	debug["json_valid"] = true
+	debug["top_level_keys"] = sortedRawMessageKeys(obj)
+	setStringFieldDebug(debug, obj, "type", "type")
+	setStringFieldDebug(debug, obj, "service_tier", "service_tier")
+
+	if raw, ok := obj["response"]; ok {
+		var responseObj map[string]json.RawMessage
+		response := map[string]interface{}{
+			"json_type": common.GetJsonType(raw),
+			"sha1":      common.Sha1(raw),
+			"bytes":     len(raw),
+		}
+		if err := common.Unmarshal(raw, &responseObj); err == nil {
+			response["top_level_keys"] = sortedRawMessageKeys(responseObj)
+			setStringFieldDebug(response, responseObj, "service_tier", "service_tier")
+			setStringFieldDebug(response, responseObj, "model", "model")
+			setHashedRawFieldDebug(response, responseObj, "id", "id")
+		}
+		debug["response"] = response
 	}
 	return debug
 }

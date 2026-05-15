@@ -26,7 +26,17 @@ import type {
   Message,
   PlaygroundConfig,
 } from '../types'
+import {
+  dedupeImageReferenceUrls,
+  normalizeImageReferenceUrl,
+  parseImageReferencesFromText,
+} from './image-references'
 import { getCurrentVersion } from './message-utils'
+
+type TranslateFunction = (
+  key: string,
+  options?: Record<string, unknown>
+) => string
 
 const generatedImageMarkdownRegex =
   /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/(?:public\/)?images\/generations\/[^)\s]+|https?:\/\/[^)\s]+)\)/g
@@ -36,8 +46,10 @@ const rawGeneratedImageUrlRegex =
 
 const generatedImageAltRegex = /^image[_\s-]*\d+$|^generated image\s+\d+$/i
 
+const maxReferenceImages = 4
+
 function normalizeGeneratedImageUrl(url: string): string {
-  const cleanUrl = String(url || '').replace(/[\r\n]/g, '')
+  const cleanUrl = normalizeImageReferenceUrl(url)
   if (
     cleanUrl.startsWith('/pg/images/generations/') ||
     cleanUrl.startsWith('/pg/public/images/generations/') ||
@@ -52,7 +64,7 @@ function normalizeGeneratedImageUrl(url: string): string {
       parsedUrl.pathname.startsWith('/pg/images/generations/') ||
       parsedUrl.pathname.startsWith('/pg/public/images/generations/')
     ) {
-      return `${parsedUrl.pathname}${parsedUrl.search}${parsedUrl.hash}`
+      return cleanUrl
     }
   } catch {
     /* keep the original URL */
@@ -117,22 +129,42 @@ function sanitizeJsonImagePayload(
   return sanitizedPayload
 }
 
-function getLastUserMessage(messages: Message[]): Message | null {
+function getLastUserMessageIndex(messages: Message[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index]
-    if (message?.from === MESSAGE_ROLES.USER) {
-      return message
+    if (messages[index]?.from === MESSAGE_ROLES.USER) {
+      return index
     }
   }
 
-  return null
+  return -1
+}
+
+function createImageInputField(imageUrls: string[]): string | string[] | null {
+  if (imageUrls.length === 0) return null
+  if (imageUrls.length === 1) return imageUrls[0]
+  return imageUrls
+}
+
+function collectPriorImageReferences(
+  messages: Message[],
+  beforeIndex: number
+): string[] {
+  const imageUrls = messages
+    .slice(0, Math.max(0, beforeIndex))
+    .flatMap((message) =>
+      parseImageReferencesFromText(getCurrentVersion(message).content).imageUrls
+    )
+
+  return dedupeImageReferenceUrls(imageUrls).slice(-maxReferenceImages)
 }
 
 export function buildImageGenerationPayload(
   messages: Message[],
   config: PlaygroundConfig
 ): ImageGenerationRequest {
-  const lastUserMessage = getLastUserMessage(messages)
+  const lastUserMessageIndex = getLastUserMessageIndex(messages)
+  const lastUserMessage =
+    lastUserMessageIndex >= 0 ? messages[lastUserMessageIndex] : null
   const rawPrompt = lastUserMessage
     ? getCurrentVersion(lastUserMessage).content.trim()
     : ''
@@ -148,11 +180,27 @@ export function buildImageGenerationPayload(
     }
   }
 
-  return {
+  const parsedPrompt = parseImageReferencesFromText(rawPrompt)
+  const prompt = parsedPrompt.text || 'Generate an image'
+  const imageInput = createImageInputField(parsedPrompt.imageUrls)
+  const referenceImages = collectPriorImageReferences(
+    messages,
+    lastUserMessageIndex >= 0 ? lastUserMessageIndex : messages.length
+  )
+  const payload: ImageGenerationRequest = {
     model: config.model,
     group: config.group,
-    prompt: rawPrompt || 'Generate an image',
+    prompt,
   }
+
+  if (imageInput) {
+    payload.image = imageInput
+  }
+  if (referenceImages.length > 0) {
+    payload.reference_images = referenceImages
+  }
+
+  return payload
 }
 
 export function extractImageTaskId(
@@ -189,7 +237,8 @@ export function getImageGenerationWaitMessage(
   taskId: string,
   taskData: ImageGenerationTaskResponse | ImageGenerationSubmitResponse | null,
   attempt: number,
-  startedAt: number
+  startedAt: number,
+  translate?: TranslateFunction
 ): string {
   const safeAttempt = Math.max(0, attempt)
   const elapsedSeconds = Math.max(
@@ -197,35 +246,16 @@ export function getImageGenerationWaitMessage(
     Math.floor((Date.now() - startedAt) / 1000)
   )
   const dots = '.'.repeat((safeAttempt % 3) + 1)
-  const progress = String(taskData?.progress || '').trim()
-  const progressLine = progress ? `Progress: ${progress}` : ''
-  const status = String(taskData?.status || '').toLowerCase()
-  const isProcessing =
-    ['processing', 'in_progress', 'running'].includes(status) ||
-    (progress !== '' && progress !== '0%')
-
-  let stage = 'Task submitted, waiting for image generation to start'
-  if (isProcessing) {
-    stage = 'Gateway is waiting for the upstream image result'
-  }
-  if (elapsedSeconds >= 20) {
-    stage = 'Image generation is running and may take 1-3 minutes'
-  }
-  if (elapsedSeconds >= 90) {
-    stage = 'Still waiting for the upstream image result'
-  }
-  if (elapsedSeconds >= 240) {
-    stage = 'Continuing to wait for the upstream task to finish'
-  }
+  const t = translate ?? ((key: string) => key)
+  void taskData
 
   return [
-    `Generating image${dots}`,
+    `${t('Generating image')}${dots}`,
     '',
-    `Status: ${stage}`,
-    `Elapsed: ${formatElapsed(elapsedSeconds)}`,
-    progressLine,
+    t('This generation may take 2–3 minutes. Please wait patiently.'),
+    t('Elapsed: {{elapsed}}', { elapsed: formatElapsed(elapsedSeconds) }),
     '',
-    `Task ID: \`${taskId}\``,
+    `${t('Task ID:')} \`${taskId}\``,
   ]
     .filter(Boolean)
     .join('\n')
@@ -275,8 +305,10 @@ export function imageResponseToMarkdown(
 
 export function imageTaskResultToMarkdown(
   taskId: string,
-  taskResult: ImageGenerationTaskResponse
+  taskResult: ImageGenerationTaskResponse,
+  translate?: TranslateFunction
 ): string {
+  const t = translate ?? ((key: string) => key)
   const items = getImageItems(taskResult)
 
   const markdown = items
@@ -288,7 +320,8 @@ export function imageTaskResultToMarkdown(
         ? `**Revised prompt ${index + 1}:** ${item.revised_prompt}\n\n`
         : ''
 
-      return `${revisedPrompt}![generated image ${index + 1}](${buildImageTaskContentUrl(taskId, index)})`
+      const url = item?.url || buildImageTaskContentUrl(taskId, index)
+      return `${revisedPrompt}![generated image ${index + 1}](${url})`
     })
     .filter(Boolean)
     .join('\n\n')
@@ -299,7 +332,9 @@ export function imageTaskResultToMarkdown(
 
   return (
     imageResponseToMarkdown(taskResult) ||
-    'Image generation completed, but the response did not include displayable image data.'
+    t(
+      'Image generation completed, but the response did not include displayable image data.'
+    )
   )
 }
 

@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
   createPlaygroundDebugId,
@@ -37,16 +38,20 @@ import {
   isImageGenerationModel,
   isSuccessfulImageTaskStatus,
   isTerminalImageTaskStatus,
+  loadPendingImageTasks,
+  removePendingImageTask,
   updateAssistantMessageWithError,
   updateLastAssistantMessage,
   processStreamingContent,
   finalizeMessage,
+  upsertPendingImageTask,
 } from '../lib'
 import type {
   ImageGenerationRequest,
   ImageGenerationSubmitResponse,
   ImageGenerationTaskResponse,
   Message,
+  PendingImageGenerationTask,
   PlaygroundConfig,
   ParameterEnabled,
   PlaygroundDebugData,
@@ -58,9 +63,90 @@ import { useStreamRequest } from './use-stream-request'
 interface UseChatHandlerOptions {
   config: PlaygroundConfig
   parameterEnabled: ParameterEnabled
+  messages: Message[]
+  activeSessionId: string
   onMessageUpdate: (updater: (prev: Message[]) => Message[]) => void
-  onDebugUpdate: (updater: (prev: PlaygroundDebugData) => PlaygroundDebugData) => void
+  onDebugUpdate: (
+    updater: (prev: PlaygroundDebugData) => PlaygroundDebugData
+  ) => void
   onDebugTabChange: (tab: PlaygroundDebugTab) => void
+  searchEnabled?: boolean
+}
+
+function getLastAssistantMessageKey(messages: Message[]): string {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (message.from === 'assistant') {
+      return message.key
+    }
+  }
+
+  return ''
+}
+
+function updateAssistantMessageByKey(
+  messages: Message[],
+  messageKey: string,
+  updater: (message: Message) => Message
+): Message[] {
+  if (!messageKey) {
+    return updateLastAssistantMessage(messages, updater)
+  }
+
+  let updated = false
+  const nextMessages = messages.map((message) => {
+    if (message.key !== messageKey) return message
+    updated = true
+    return updater(message)
+  })
+
+  return updated ? nextMessages : updateLastAssistantMessage(messages, updater)
+}
+
+function isPendingImageAssistantMessage(message: Message | undefined): boolean {
+  return (
+    message?.from === 'assistant' &&
+    (message.status === 'loading' || message.status === 'streaming')
+  )
+}
+
+function readImageErrorMessage(error: unknown, fallback: string): string {
+  const err = error as {
+    response?: {
+      data?: {
+        message?: string
+        error?: { code?: string; message?: string }
+      }
+    }
+    message?: string
+  }
+
+  return (
+    err?.response?.data?.error?.message ||
+    err?.response?.data?.message ||
+    err?.message ||
+    fallback
+  )
+}
+
+function readImageErrorCode(error: unknown): string | undefined {
+  const err = error as {
+    response?: {
+      data?: {
+        error?: { code?: string }
+      }
+    }
+  }
+
+  return err?.response?.data?.error?.code || undefined
+}
+
+function applyErrorToAssistantMessage(
+  message: Message,
+  errorMessage: string,
+  errorCode?: string
+): Message {
+  return updateAssistantMessageWithError([message], errorMessage, errorCode)[0]
 }
 
 /**
@@ -69,14 +155,27 @@ interface UseChatHandlerOptions {
 export function useChatHandler({
   config,
   parameterEnabled,
+  messages: currentMessages,
+  activeSessionId,
   onMessageUpdate,
   onDebugUpdate,
   onDebugTabChange,
+  searchEnabled = false,
 }: UseChatHandlerOptions) {
+  const { t } = useTranslation()
   const { sendStreamRequest, stopStream, isStreaming } = useStreamRequest()
   const [isImageGenerating, setIsImageGenerating] = useState(false)
   const imageAbortControllerRef = useRef<AbortController | null>(null)
+  const currentImageTaskRef = useRef<{
+    taskId: string
+    messageKey: string
+  } | null>(null)
+  const currentMessagesRef = useRef(currentMessages)
   const streamResponseRef = useRef('')
+
+  useEffect(() => {
+    currentMessagesRef.current = currentMessages
+  }, [currentMessages])
 
   const getPayloadModel = useCallback(
     (payload: PlaygroundRequestPayload) => {
@@ -98,10 +197,12 @@ export function useChatHandler({
     (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
       return (
         overridePayload ||
-        buildChatCompletionPayload(messages, config, parameterEnabled)
+        buildChatCompletionPayload(messages, config, parameterEnabled, {
+          searchEnabled,
+        })
       )
     },
-    [config, parameterEnabled]
+    [config, parameterEnabled, searchEnabled]
   )
 
   const getImagePayload = useCallback(
@@ -252,6 +353,18 @@ export function useChatHandler({
     [onMessageUpdate]
   )
 
+  const handleImageGenerationError = useCallback(
+    (messageKey: string, error: string, errorCode?: string) => {
+      toast.error(error)
+      onMessageUpdate((prev) =>
+        updateAssistantMessageByKey(prev, messageKey, (message) =>
+          applyErrorToAssistantMessage(message, error, errorCode)
+        )
+      )
+    },
+    [onMessageUpdate]
+  )
+
   // Send streaming chat request
   const sendStreamingChat = useCallback(
     (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
@@ -351,13 +464,17 @@ export function useChatHandler({
 
   const updateImageGenerationMessage = useCallback(
     (
+      messageKey: string,
       taskId: string,
-      taskData: ImageGenerationTaskResponse | ImageGenerationSubmitResponse,
+      taskData:
+        | ImageGenerationTaskResponse
+        | ImageGenerationSubmitResponse
+        | null,
       attempt: number,
       startedAt: number
     ) => {
       onMessageUpdate((prev) =>
-        updateLastAssistantMessage(prev, (message) => ({
+        updateAssistantMessageByKey(prev, messageKey, (message) => ({
           ...message,
           versions: [
             {
@@ -366,7 +483,8 @@ export function useChatHandler({
                 taskId,
                 taskData,
                 attempt,
-                startedAt
+                startedAt,
+                t
               ),
             },
           ],
@@ -374,13 +492,13 @@ export function useChatHandler({
         }))
       )
     },
-    [onMessageUpdate]
+    [onMessageUpdate, t]
   )
 
   const completeImageGenerationMessage = useCallback(
-    (content: string) => {
+    (messageKey: string, content: string) => {
       onMessageUpdate((prev) =>
-        updateLastAssistantMessage(prev, (message) => ({
+        updateAssistantMessageByKey(prev, messageKey, (message) => ({
           ...finalizeMessage({
             ...message,
             versions: [
@@ -417,17 +535,29 @@ export function useChatHandler({
   }, [])
 
   const pollImageGenerationTask = useCallback(
-    async (taskId: string, signal: AbortSignal, startedAt: number) => {
+    async (
+      taskId: string,
+      signal: AbortSignal,
+      startedAt: number,
+      messageKey: string
+    ) => {
       const maxAttempts = 240
+      let lastTaskData: ImageGenerationTaskResponse | null = null
 
       for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        await sleep(5000, signal)
-
         const taskData = await getImageGenerationTask(taskId, signal)
+        lastTaskData = taskData
         const status = String(taskData.status || '').toLowerCase()
 
         if (!isTerminalImageTaskStatus(status)) {
-          updateImageGenerationMessage(taskId, taskData, attempt, startedAt)
+          updateImageGenerationMessage(
+            messageKey,
+            taskId,
+            taskData,
+            attempt,
+            startedAt
+          )
+          await sleep(5000, signal)
           continue
         }
 
@@ -438,9 +568,20 @@ export function useChatHandler({
         throw new Error(getImageGenerationFailureMessage(taskData))
       }
 
-      throw new Error(ERROR_MESSAGES.IMAGE_GENERATION_TIMEOUT)
+      if (lastTaskData) {
+        const failureMessage = getImageGenerationFailureMessage(lastTaskData)
+        if (failureMessage !== ERROR_MESSAGES.IMAGE_GENERATION_FAILED) {
+          throw new Error(failureMessage)
+        }
+      }
+
+      const lastStatus = String(
+        lastTaskData?.raw_status || lastTaskData?.status || ''
+      ).trim()
+      const suffix = lastStatus ? ` (${lastStatus}, ${taskId})` : ` (${taskId})`
+      throw new Error(`${t(ERROR_MESSAGES.IMAGE_GENERATION_TIMEOUT)}${suffix}`)
     },
-    [sleep, updateImageGenerationMessage]
+    [sleep, t, updateImageGenerationMessage]
   )
 
   const isAbortError = useCallback((error: unknown) => {
@@ -452,8 +593,109 @@ export function useChatHandler({
     )
   }, [])
 
+  useEffect(() => {
+    const pendingTask = loadPendingImageTasks().find(
+      (task) => task.sessionId === activeSessionId
+    )
+    if (!pendingTask) return
+
+    const pendingMessage = currentMessagesRef.current.find(
+      (message) => message.key === pendingTask.messageKey
+    )
+    if (!isPendingImageAssistantMessage(pendingMessage)) {
+      removePendingImageTask(pendingTask.taskId)
+      return
+    }
+    if (currentImageTaskRef.current?.taskId === pendingTask.taskId) {
+      return
+    }
+
+    imageAbortControllerRef.current?.abort()
+
+    const abortController = new AbortController()
+    imageAbortControllerRef.current = abortController
+    currentImageTaskRef.current = {
+      taskId: pendingTask.taskId,
+      messageKey: pendingTask.messageKey,
+    }
+    setIsImageGenerating(true)
+    updateImageGenerationMessage(
+      pendingTask.messageKey,
+      pendingTask.taskId,
+      null,
+      0,
+      pendingTask.startedAt
+    )
+
+    void (async (task: PendingImageGenerationTask) => {
+      try {
+        const taskResult = await pollImageGenerationTask(
+          task.taskId,
+          abortController.signal,
+          task.startedAt,
+          task.messageKey
+        )
+        if (task.debugId) {
+          await fetchAndUpdateDebugUpstreamRequest(task.debugId)
+        }
+        completeDebugResponse(taskResult)
+        removePendingImageTask(task.taskId)
+        currentImageTaskRef.current = null
+        completeImageGenerationMessage(
+          task.messageKey,
+          imageTaskResultToMarkdown(task.taskId, taskResult, t)
+        )
+      } catch (error: unknown) {
+        if (isAbortError(error)) {
+          return
+        }
+        if (task.debugId) {
+          await fetchAndUpdateDebugUpstreamRequest(task.debugId)
+        }
+        removePendingImageTask(task.taskId)
+        currentImageTaskRef.current = null
+        const errorMessage = readImageErrorMessage(
+          error,
+          t(ERROR_MESSAGES.API_REQUEST_ERROR)
+        )
+        const errorCode = readImageErrorCode(error)
+        completeDebugResponse({ error: errorMessage, errorCode })
+        handleImageGenerationError(task.messageKey, errorMessage, errorCode)
+      } finally {
+        if (imageAbortControllerRef.current === abortController) {
+          imageAbortControllerRef.current = null
+        }
+        setIsImageGenerating(false)
+      }
+    })(pendingTask)
+
+    return () => {
+      if (imageAbortControllerRef.current === abortController) {
+        abortController.abort()
+        imageAbortControllerRef.current = null
+      }
+      if (currentImageTaskRef.current?.taskId === pendingTask.taskId) {
+        currentImageTaskRef.current = null
+      }
+      setIsImageGenerating(false)
+    }
+  }, [
+    activeSessionId,
+    completeDebugResponse,
+    completeImageGenerationMessage,
+    fetchAndUpdateDebugUpstreamRequest,
+    handleImageGenerationError,
+    isAbortError,
+    pollImageGenerationTask,
+    t,
+    updateImageGenerationMessage,
+  ])
+
   const sendImageGenerationChat = useCallback(
     async (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
+      if (currentImageTaskRef.current?.taskId) {
+        removePendingImageTask(currentImageTaskRef.current.taskId)
+      }
       imageAbortControllerRef.current?.abort()
 
       const abortController = new AbortController()
@@ -463,6 +705,7 @@ export function useChatHandler({
       const payload = getImagePayload(messages, overridePayload)
       const debugId = createPlaygroundDebugId()
       const startedAt = Date.now()
+      const messageKey = getLastAssistantMessageKey(messages)
       startDebugRequest(payload, false)
 
       try {
@@ -475,23 +718,45 @@ export function useChatHandler({
         const taskId = extractImageTaskId(submitData)
 
         if (taskId) {
-          updateImageGenerationMessage(taskId, submitData, -1, startedAt)
+          currentImageTaskRef.current = { taskId, messageKey }
+          upsertPendingImageTask({
+            taskId,
+            messageKey,
+            sessionId: activeSessionId,
+            debugId,
+            startedAt,
+            updatedAt: new Date().toISOString(),
+          })
+          updateImageGenerationMessage(
+            messageKey,
+            taskId,
+            submitData,
+            -1,
+            startedAt
+          )
           const taskResult = await pollImageGenerationTask(
             taskId,
             abortController.signal,
-            startedAt
+            startedAt,
+            messageKey
           )
           await fetchAndUpdateDebugUpstreamRequest(debugId)
           completeDebugResponse(taskResult)
+          removePendingImageTask(taskId)
+          currentImageTaskRef.current = null
           completeImageGenerationMessage(
-            imageTaskResultToMarkdown(taskId, taskResult)
+            messageKey,
+            imageTaskResultToMarkdown(taskId, taskResult, t)
           )
           return
         }
 
         completeImageGenerationMessage(
+          messageKey,
           imageResponseToMarkdown(submitData) ||
-            'Image generation completed, but the response did not include displayable image data.'
+            t(
+              'Image generation completed, but the response did not include displayable image data.'
+            )
         )
       } catch (error: unknown) {
         if (isAbortError(error)) {
@@ -499,23 +764,17 @@ export function useChatHandler({
         }
         await fetchAndUpdateDebugUpstreamRequest(debugId)
 
-        const err = error as {
-          response?: {
-            data?: {
-              message?: string
-              error?: { code?: string; message?: string }
-            }
-          }
-          message?: string
+        if (currentImageTaskRef.current?.taskId) {
+          removePendingImageTask(currentImageTaskRef.current.taskId)
+          currentImageTaskRef.current = null
         }
-        const errorMessage =
-          err?.response?.data?.error?.message ||
-          err?.response?.data?.message ||
-          err?.message ||
-          ERROR_MESSAGES.API_REQUEST_ERROR
-        const errorCode = err?.response?.data?.error?.code || undefined
+        const errorMessage = readImageErrorMessage(
+          error,
+          t(ERROR_MESSAGES.API_REQUEST_ERROR)
+        )
+        const errorCode = readImageErrorCode(error)
         completeDebugResponse({ error: errorMessage, errorCode })
-        handleStreamError(errorMessage, errorCode)
+        handleImageGenerationError(messageKey, errorMessage, errorCode)
       } finally {
         if (imageAbortControllerRef.current === abortController) {
           imageAbortControllerRef.current = null
@@ -524,6 +783,7 @@ export function useChatHandler({
       }
     },
     [
+      activeSessionId,
       getImagePayload,
       startDebugRequest,
       completeDebugResponse,
@@ -532,7 +792,8 @@ export function useChatHandler({
       pollImageGenerationTask,
       completeImageGenerationMessage,
       isAbortError,
-      handleStreamError,
+      handleImageGenerationError,
+      t,
     ]
   )
 
@@ -567,6 +828,10 @@ export function useChatHandler({
 
   // Stop generation
   const stopGeneration = useCallback(() => {
+    if (currentImageTaskRef.current?.taskId) {
+      removePendingImageTask(currentImageTaskRef.current.taskId)
+      currentImageTaskRef.current = null
+    }
     imageAbortControllerRef.current?.abort()
     setIsImageGenerating(false)
     stopStream()

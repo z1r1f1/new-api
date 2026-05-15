@@ -37,6 +37,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { WORKSPACE_IDS } from '@/components/layout/lib/workspace-registry'
 import { type SidebarData } from '@/components/layout/types'
+import { ROLE } from '@/lib/roles'
 
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
@@ -119,6 +120,7 @@ export function useSidebarData(): SidebarData {
       {
         id: 'admin',
         title: t('Admin'),
+        requiredRole: ROLE.ADMIN,
         items: [
           {
             title: t('Channels'),
@@ -149,6 +151,7 @@ export function useSidebarData(): SidebarData {
             title: t('System Settings'),
             url: '/system-settings/site',
             activeUrls: ['/system-settings'],
+            requiredRole: ROLE.SUPER_ADMIN,
             icon: Settings,
           },
         ],

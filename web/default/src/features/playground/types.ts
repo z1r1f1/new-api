@@ -66,6 +66,7 @@ export interface PlaygroundWorkbenchState {
   showDebugPanel: boolean
   customRequestMode: boolean
   customRequestBody: string
+  searchEnabled: boolean
 }
 
 export interface PlaygroundSession {
@@ -76,6 +77,15 @@ export interface PlaygroundSession {
   updatedAt: string
 }
 
+export interface PendingImageGenerationTask {
+  taskId: string
+  messageKey: string
+  sessionId: string
+  debugId?: string
+  startedAt: number
+  updatedAt: string
+}
+
 export interface PlaygroundImportData {
   config?: Partial<PlaygroundConfig>
   inputs?: Partial<PlaygroundConfig>
@@ -83,6 +93,7 @@ export interface PlaygroundImportData {
   customRequestMode?: boolean
   customRequestBody?: string
   showDebugPanel?: boolean
+  searchEnabled?: boolean
   messages?: Message[]
   sessions?: PlaygroundSession[]
   activeSessionId?: string
@@ -112,6 +123,9 @@ export interface ChatCompletionRequest {
   group?: string
   messages: ChatCompletionMessage[]
   stream: boolean
+  web_search_options?: {
+    search_context_size?: 'low' | 'medium' | 'high'
+  }
   temperature?: number
   top_p?: number
   max_tokens?: number

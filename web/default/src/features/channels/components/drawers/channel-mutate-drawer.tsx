@@ -53,9 +53,11 @@ import {
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { getLobeIcon } from '@/lib/lobe-icon'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { useHiddenClickUnlock } from '@/hooks/use-hidden-click-unlock'
+import { useAuthStore } from '@/stores/auth-store'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -144,6 +146,8 @@ import {
   hasModelConfigChanged,
   findMissingModelsInMapping,
   validateModelMappingJson,
+  isCodexChannelType,
+  supportsServiceTierPassthrough,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -299,6 +303,7 @@ export function ChannelMutateDrawer({
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const { setOpen } = useChannels()
+  const userRole = useAuthStore((state) => state.auth.user?.role)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [customModel, setCustomModel] = useState('')
   const [isFetchingModels, setIsFetchingModels] = useState(false)
@@ -328,6 +333,7 @@ export function ChannelMutateDrawer({
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
+  const isSuperAdmin = (userRole ?? 0) >= ROLE.SUPER_ADMIN
 
   // Fetch channel details if editing
   const { data: channelData } = useQuery({
@@ -683,6 +689,10 @@ export function ChannelMutateDrawer({
       if (!currentOther || currentOther === '') {
         form.setValue('other', 'v2.1')
       }
+    }
+
+    if (isCodexChannelType(currentType)) {
+      form.setValue('allow_service_tier', true)
     }
   }, [currentType, isEditing, form])
 
@@ -1996,7 +2006,7 @@ export function ChannelMutateDrawer({
                             )}
                           </div>
                         </FormDescription>
-                        {isEditing && (
+                        {isEditing && isSuperAdmin && (
                           <div className='mt-4 space-y-3 rounded-lg border border-dashed p-4'>
                             <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
                               <div>
@@ -2266,7 +2276,8 @@ export function ChannelMutateDrawer({
                               <Plus className='mr-2 h-4 w-4' />
                               {t('Fill All Models')}
                             </Button>
-                            {MODEL_FETCHABLE_TYPES.has(currentType) && (
+                            {MODEL_FETCHABLE_TYPES.has(currentType) &&
+                              (isEditing || isSuperAdmin) && (
                               <Button
                                 type='button'
                                 variant='outline'
@@ -2910,7 +2921,7 @@ export function ChannelMutateDrawer({
                       title={t('Channel Extra Settings')}
                       icon={<Settings className='h-4 w-4' />}
                     />
-                    {(currentType === 1 || currentType === 14) && (
+                    {supportsServiceTierPassthrough(currentType) && (
                       <div className='space-y-3 rounded-lg border p-4'>
                         <SubHeading
                           title={t('Field passthrough controls')}
@@ -2933,7 +2944,12 @@ export function ChannelMutateDrawer({
                                 </div>
                                 <FormControl>
                                   <Switch
-                                    checked={field.value}
+                                    checked={
+                                      isCodexChannelType(currentType)
+                                        ? true
+                                        : field.value
+                                    }
+                                    disabled={isCodexChannelType(currentType)}
                                     onCheckedChange={field.onChange}
                                   />
                                 </FormControl>

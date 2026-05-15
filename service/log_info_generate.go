@@ -73,13 +73,132 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
+	appendServiceTierInfo(ctx, adminInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
 	appendParamOverrideInfo(relayInfo, other)
+	appendFastServiceTierInfo(ctx, relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+func appendServiceTierInfo(ctx *gin.Context, adminInfo map[string]interface{}, other map[string]interface{}) {
+	if other == nil {
+		return
+	}
+	if responseServiceTier := getContextStringValue(ctx, ginKeyUpstreamResponseServiceTier); responseServiceTier != "" {
+		other["response_service_tier"] = responseServiceTier
+	} else if responseServiceTier := extractChannelAffinityResponseServiceTier(adminInfo); responseServiceTier != "" {
+		other["response_service_tier"] = responseServiceTier
+	}
+	if requestServiceTier := extractChannelAffinityRequestServiceTier(adminInfo); requestServiceTier != "" {
+		other["request_service_tier"] = requestServiceTier
+	}
+}
+
+func getContextStringValue(ctx *gin.Context, key string) string {
+	if ctx == nil {
+		return ""
+	}
+	value, ok := ctx.Get(key)
+	if !ok {
+		return ""
+	}
+	str, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(str)
+}
+
+func extractChannelAffinityResponseServiceTier(adminInfo map[string]interface{}) string {
+	channelAffinity := getMapValue(adminInfo, "channel_affinity")
+	responseDebug := getMapValue(channelAffinity, "response_debug")
+	if responseDebug == nil {
+		return ""
+	}
+	if value := getStringValue(responseDebug, "service_tier"); value != "" {
+		return value
+	}
+	response := getMapValue(responseDebug, "response")
+	return getStringValue(response, "service_tier")
+}
+
+func extractChannelAffinityRequestServiceTier(adminInfo map[string]interface{}) string {
+	channelAffinity := getMapValue(adminInfo, "channel_affinity")
+	if value := getStringValue(getMapValue(channelAffinity, "final_request_debug"), "service_tier"); value != "" {
+		return value
+	}
+	return getStringValue(getMapValue(channelAffinity, "request_debug"), "service_tier")
+}
+
+func getMapValue(source map[string]interface{}, key string) map[string]interface{} {
+	if source == nil {
+		return nil
+	}
+	value, ok := source[key]
+	if !ok {
+		return nil
+	}
+	result, _ := value.(map[string]interface{})
+	return result
+}
+
+func getStringValue(source map[string]interface{}, key string) string {
+	if source == nil {
+		return ""
+	}
+	value, ok := source[key].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
+func appendFastServiceTierInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
+	if other == nil {
+		return
+	}
+	other["fast_service_tier"] = hasFastServiceTier(ctx, relayInfo)
+}
+
+func hasFastServiceTier(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
+	if relayInfo != nil && relayInfo.BillingRequestInput != nil && len(relayInfo.BillingRequestInput.Body) > 0 {
+		return hasFastServiceTierInBody(relayInfo.BillingRequestInput.Body)
+	}
+	if ctx == nil || ctx.Request == nil {
+		return false
+	}
+	contentType := strings.ToLower(strings.TrimSpace(ctx.Request.Header.Get("Content-Type")))
+	if !strings.HasPrefix(contentType, "application/json") {
+		return false
+	}
+	storage, err := common.GetBodyStorage(ctx)
+	if err != nil {
+		return false
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return false
+	}
+	return hasFastServiceTierInBody(body)
+}
+
+func hasFastServiceTierInBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var data map[string]interface{}
+	if err := common.Unmarshal(body, &data); err != nil {
+		return false
+	}
+	value, ok := data["service_tier"].(string)
+	if !ok {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(value), "fast")
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

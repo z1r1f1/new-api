@@ -28,7 +28,9 @@ import {
   WifiOff,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { ROLE } from '@/lib/roles'
 import { cn } from '@/lib/utils'
+import { useAuthStore } from '@/stores/auth-store'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 
@@ -103,6 +105,8 @@ export function DeploymentAccessGuard({
 }: DeploymentAccessGuardProps) {
   const { t } = useTranslation()
   const navigate = useNavigate()
+  const userRole = useAuthStore((state) => state.auth.user?.role)
+  const isSuperAdmin = (userRole ?? 0) >= ROLE.SUPER_ADMIN
 
   const handleGoToSettings = () => {
     navigate({
@@ -157,10 +161,12 @@ export function DeploymentAccessGuard({
               )}
             </AlertDescription>
           </Alert>
-          <Button onClick={handleGoToSettings} className='w-full'>
-            <Settings className='mr-2 h-4 w-4' />
-            {t('Go to settings')}
-          </Button>
+          {isSuperAdmin && (
+            <Button onClick={handleGoToSettings} className='w-full'>
+              <Settings className='mr-2 h-4 w-4' />
+              {t('Go to settings')}
+            </Button>
+          )}
         </div>
       </div>
     )
@@ -188,10 +194,12 @@ export function DeploymentAccessGuard({
             <Button variant='outline' onClick={onRetry} className='flex-1'>
               {t('Retry')}
             </Button>
-            <Button onClick={handleGoToSettings} className='flex-1'>
-              <Settings className='mr-2 h-4 w-4' />
-              {t('Go to settings')}
-            </Button>
+            {isSuperAdmin && (
+              <Button onClick={handleGoToSettings} className='flex-1'>
+                <Settings className='mr-2 h-4 w-4' />
+                {t('Go to settings')}
+              </Button>
+            )}
           </div>
         </div>
       </div>

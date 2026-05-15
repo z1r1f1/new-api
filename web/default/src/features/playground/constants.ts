@@ -80,6 +80,7 @@ export const STORAGE_KEYS = {
   ACTIVE_SESSION_ID: 'playground_active_session_id',
   SESSIONS: 'playground_sessions',
   WORKBENCH: 'playground_workbench',
+  PENDING_IMAGE_TASKS: 'playground_pending_image_tasks',
 } as const
 
 // Error messages

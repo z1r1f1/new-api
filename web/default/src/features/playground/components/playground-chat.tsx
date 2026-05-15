@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -81,6 +82,7 @@ export function PlaygroundChat({
   onCancelEdit,
   onSaveEditAndSubmit,
 }: PlaygroundChatProps) {
+  const { t } = useTranslation()
   const [editText, setEditText] = useState('')
   const [originalText, setOriginalText] = useState('')
 
@@ -239,7 +241,7 @@ export function PlaygroundChat({
                                     <div className='flex items-center gap-2 py-2'>
                                       <Loader />
                                       <Shimmer className='text-sm' duration={1}>
-                                        Responding...
+                                        {t('Responding...')}
                                       </Shimmer>
                                     </div>
                                   )}

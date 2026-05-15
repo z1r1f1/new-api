@@ -3,6 +3,7 @@ package chatgptimg
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -149,7 +152,7 @@ func TestParsePlaygroundImageReference(t *testing.T) {
 		{name: "relative", ref: "/pg/images/generations/task_abc/image/2", wantTask: "task_abc", wantIndex: 2, wantOK: true},
 		{name: "absolute", ref: "https://example.com/pg/images/generations/task_xyz/image/0", wantTask: "task_xyz", wantIndex: 0, wantOK: true},
 		{name: "public relative", ref: "/pg/public/images/generations/task_public/image/1", wantTask: "task_public", wantIndex: 1, wantOK: true},
-		{name: "public absolute", ref: "http://151.145.66.232/pg/public/images/generations/task_ip/image/0", wantTask: "task_ip", wantIndex: 0, wantOK: true},
+		{name: "public absolute", ref: "https://pazom.xyz/pg/public/images/generations/task_domain/image/0", wantTask: "task_domain", wantIndex: 0, wantOK: true},
 		{name: "invalid", ref: "https://example.com/not-an-image", wantOK: false},
 	}
 
@@ -164,35 +167,84 @@ func TestParsePlaygroundImageReference(t *testing.T) {
 }
 
 func TestRequestPublicBaseURLAddsForwardedPortWhenHostHasNoPort(t *testing.T) {
-	c := newChatGPTImgTestContext("http://151.145.66.232/v1/images/generations", map[string]string{
-		"X-Forwarded-Host":  "151.145.66.232",
+	c := newChatGPTImgTestContext("http://legacy.example.com/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "legacy.example.com",
 		"X-Forwarded-Proto": "http",
 		"X-Forwarded-Port":  "8999",
 	})
 
-	if got := requestPublicBaseURL(c); got != "http://151.145.66.232:8999" {
+	if got := requestPublicBaseURL(c); got != "http://legacy.example.com:8999" {
 		t.Fatalf("unexpected public base URL: %q", got)
 	}
 }
 
 func TestRequestPublicBaseURLDoesNotDuplicateExistingPort(t *testing.T) {
-	c := newChatGPTImgTestContext("http://151.145.66.232/v1/images/generations", map[string]string{
-		"X-Forwarded-Host":  "151.145.66.232:8999",
+	c := newChatGPTImgTestContext("http://legacy.example.com/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "legacy.example.com:8999",
 		"X-Forwarded-Proto": "http",
 		"X-Forwarded-Port":  "80",
 	})
 
-	if got := requestPublicBaseURL(c); got != "http://151.145.66.232:8999" {
+	if got := requestPublicBaseURL(c); got != "http://legacy.example.com:8999" {
 		t.Fatalf("unexpected public base URL: %q", got)
 	}
 }
 
 func TestRequestPublicBaseURLUsesRFCForwardedHost(t *testing.T) {
 	c := newChatGPTImgTestContext("http://internal.local/v1/images/generations", map[string]string{
-		"Forwarded": "for=127.0.0.1;proto=http;host=151.145.66.232:8999",
+		"Forwarded": "for=127.0.0.1;proto=http;host=legacy.example.com:8999",
 	})
 
-	if got := requestPublicBaseURL(c); got != "http://151.145.66.232:8999" {
+	if got := requestPublicBaseURL(c); got != "http://legacy.example.com:8999" {
+		t.Fatalf("unexpected public base URL: %q", got)
+	}
+}
+
+func TestRequestPublicBaseURLPrefersConfiguredServerAddress(t *testing.T) {
+	oldServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://pazom.xyz/"
+	t.Cleanup(func() { system_setting.ServerAddress = oldServerAddress })
+
+	c := newChatGPTImgTestContext("http://legacy.example.com/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "legacy.example.com:8999",
+		"X-Forwarded-Proto": "http",
+		"X-Forwarded-Port":  "8999",
+	})
+
+	if got := requestPublicBaseURL(c); got != "https://pazom.xyz" {
+		t.Fatalf("unexpected public base URL: %q", got)
+	}
+}
+
+func TestRequestPublicBaseURLForImagesUsesConfiguredServerAddressInPlayground(t *testing.T) {
+	oldServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = "https://pazom.xyz/"
+	t.Cleanup(func() { system_setting.ServerAddress = oldServerAddress })
+
+	c := newChatGPTImgTestContext("http://legacy.example.com/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "legacy.example.com:8999",
+		"X-Forwarded-Proto": "http",
+		"X-Forwarded-Port":  "8999",
+	})
+
+	got := requestPublicBaseURLForImages(c, &relaycommon.RelayInfo{IsPlayground: true})
+	if got != "https://pazom.xyz" {
+		t.Fatalf("unexpected playground public base URL: %q", got)
+	}
+}
+
+func TestRequestPublicBaseURLOmitsDefaultHTTPSPort(t *testing.T) {
+	oldServerAddress := system_setting.ServerAddress
+	system_setting.ServerAddress = ""
+	t.Cleanup(func() { system_setting.ServerAddress = oldServerAddress })
+
+	c := newChatGPTImgTestContext("https://pazom.xyz/v1/images/generations", map[string]string{
+		"X-Forwarded-Host":  "pazom.xyz",
+		"X-Forwarded-Proto": "https",
+		"X-Forwarded-Port":  "443",
+	})
+
+	if got := requestPublicBaseURL(c); got != "https://pazom.xyz" {
 		t.Fatalf("unexpected public base URL: %q", got)
 	}
 }
@@ -243,6 +295,161 @@ func TestConvertImageRequestCarriesConversationID(t *testing.T) {
 	}
 	if len(got.FallbackReferenceImages) != 1 || got.FallbackReferenceImages[0] != "data:image/png;base64,abc" {
 		t.Fatalf("unexpected fallback reference images: %#v", got.FallbackReferenceImages)
+	}
+}
+
+func TestConvertImageRequestDefaultsImageEditsToB64JSON(t *testing.T) {
+	converted, err := (&Adaptor{}).ConvertImageRequest(
+		nil,
+		&relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits},
+		dto.ImageRequest{
+			Model:  "chatgpt-image-2",
+			Prompt: "edit this image",
+		},
+	)
+	if err != nil {
+		t.Fatalf("ConvertImageRequest returned error: %v", err)
+	}
+	got, ok := converted.(generationRequest)
+	if !ok {
+		t.Fatalf("expected generationRequest, got %T", converted)
+	}
+	if got.ResponseFormat != "b64_json" {
+		t.Fatalf("expected image edits default response_format b64_json, got %q", got.ResponseFormat)
+	}
+}
+
+func TestConvertImageRequestDefaultsImageGenerationsToB64JSON(t *testing.T) {
+	converted, err := (&Adaptor{}).ConvertImageRequest(
+		nil,
+		&relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesGenerations},
+		dto.ImageRequest{
+			Model:  "chatgpt-image-2",
+			Prompt: "draw an image",
+		},
+	)
+	if err != nil {
+		t.Fatalf("ConvertImageRequest returned error: %v", err)
+	}
+	got, ok := converted.(generationRequest)
+	if !ok {
+		t.Fatalf("expected generationRequest, got %T", converted)
+	}
+	if got.ResponseFormat != "b64_json" {
+		t.Fatalf("expected image generations default response_format b64_json, got %q", got.ResponseFormat)
+	}
+}
+
+func TestConvertImageRequestKeepsExplicitImageEditsResponseFormat(t *testing.T) {
+	converted, err := (&Adaptor{}).ConvertImageRequest(
+		nil,
+		&relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesEdits},
+		dto.ImageRequest{
+			Model:          "other-image-model",
+			Prompt:         "edit this image",
+			ResponseFormat: "url",
+		},
+	)
+	if err != nil {
+		t.Fatalf("ConvertImageRequest returned error: %v", err)
+	}
+	got, ok := converted.(generationRequest)
+	if !ok {
+		t.Fatalf("expected generationRequest, got %T", converted)
+	}
+	if got.ResponseFormat != "url" {
+		t.Fatalf("expected explicit response_format url to be preserved, got %q", got.ResponseFormat)
+	}
+}
+
+func TestConvertImageRequestForcesGPTImage2ToB64JSON(t *testing.T) {
+	for _, modelName := range []string{"gpt-image-2", "chatgpt-image-2"} {
+		t.Run(modelName, func(t *testing.T) {
+			converted, err := (&Adaptor{}).ConvertImageRequest(
+				nil,
+				&relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeImagesGenerations},
+				dto.ImageRequest{
+					Model:          modelName,
+					Prompt:         "draw an image",
+					ResponseFormat: "url",
+				},
+			)
+			if err != nil {
+				t.Fatalf("ConvertImageRequest returned error: %v", err)
+			}
+			got, ok := converted.(generationRequest)
+			if !ok {
+				t.Fatalf("expected generationRequest, got %T", converted)
+			}
+			if got.ResponseFormat != "b64_json" {
+				t.Fatalf("expected %s to force response_format b64_json, got %q", modelName, got.ResponseFormat)
+			}
+		})
+	}
+}
+
+func TestNormalizeGenerationRequestForcesPassThroughGPTImage2ToB64JSON(t *testing.T) {
+	req := generationRequest{
+		Model:          "gpt-image-2",
+		Prompt:         "draw an image",
+		ResponseFormat: "url",
+	}
+
+	normalizeGenerationRequestModelAndResponseFormat(&req, nil)
+
+	if req.ResponseFormat != "b64_json" {
+		t.Fatalf("expected pass-through gpt-image-2 response_format b64_json, got %q", req.ResponseFormat)
+	}
+}
+
+func TestNormalizeGenerationRequestUsesUpstreamModelForB64JSONForce(t *testing.T) {
+	req := generationRequest{
+		Prompt:         "draw an image",
+		ResponseFormat: "url",
+	}
+
+	normalizeGenerationRequestModelAndResponseFormat(&req, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-image-2",
+		},
+	})
+
+	if req.Model != "gpt-image-2" {
+		t.Fatalf("expected upstream model to populate request model, got %q", req.Model)
+	}
+	if req.ResponseFormat != "b64_json" {
+		t.Fatalf("expected upstream gpt-image-2 response_format b64_json, got %q", req.ResponseFormat)
+	}
+}
+
+func TestNormalizeGenerationRequestUsesMappedUpstreamModelForB64JSONForce(t *testing.T) {
+	req := generationRequest{
+		Model:          "customer-facing-image-alias",
+		Prompt:         "draw an image",
+		ResponseFormat: "url",
+	}
+
+	normalizeGenerationRequestModelAndResponseFormat(&req, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-image-2",
+		},
+	})
+
+	if req.ResponseFormat != "b64_json" {
+		t.Fatalf("expected mapped upstream gpt-image-2 response_format b64_json, got %q", req.ResponseFormat)
+	}
+}
+
+func TestNormalizeGenerationRequestDefaultsWithNilChannelMeta(t *testing.T) {
+	req := generationRequest{Prompt: "draw an image"}
+
+	normalizeGenerationRequestModelAndResponseFormat(&req, &relaycommon.RelayInfo{})
+
+	if req.Model != ModelList[0] {
+		t.Fatalf("expected default model %q, got %q", ModelList[0], req.Model)
+	}
+	if req.ResponseFormat != "b64_json" {
+		t.Fatalf("expected default response_format b64_json, got %q", req.ResponseFormat)
 	}
 }
 
@@ -300,6 +507,97 @@ func TestBuildGenerationResponseUsesSignedURLForURLField(t *testing.T) {
 	}
 	if resp.Data[0].B64Json == "" {
 		t.Fatal("expected b64_json to be populated")
+	}
+}
+
+func TestBuildGenerationResponseB64JSONOmitsURL(t *testing.T) {
+	imageBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/image.png" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(imageBytes)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+	resp, err := buildGenerationResponse(context.Background(), client, generationRequest{
+		ResponseFormat: "b64_json",
+	}, &imageRunResult{
+		ConversationID: "conv-1",
+		SignedURLs:     []string{server.URL + "/image.png"},
+	}, false, nil, "")
+	if err != nil {
+		t.Fatalf("buildGenerationResponse returned error: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected one image item, got %#v", resp.Data)
+	}
+	if resp.Data[0].Url != "" {
+		t.Fatalf("expected b64_json response to omit url, got %q", resp.Data[0].Url)
+	}
+	if resp.Data[0].B64Json == "" {
+		t.Fatal("expected b64_json to be populated")
+	}
+}
+
+func TestBuildGenerationResponseGPTImage2ForcesB64JSONEvenWhenRequestFormatURL(t *testing.T) {
+	imageBytes := []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/image.png" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(imageBytes)
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+	resp, err := buildGenerationResponse(context.Background(), client, generationRequest{
+		Model:          "gpt-image-2",
+		Prompt:         "draw an image",
+		ResponseFormat: "url",
+	}, &imageRunResult{
+		ConversationID: "conv-1",
+		SignedURLs:     []string{server.URL + "/image.png"},
+	}, false, nil, "")
+	if err != nil {
+		t.Fatalf("buildGenerationResponse returned error: %v", err)
+	}
+	if len(resp.Data) != 1 {
+		t.Fatalf("expected one image item, got %#v", resp.Data)
+	}
+	if resp.Data[0].Url != "" {
+		t.Fatalf("expected gpt-image-2 response to omit url even when request format is url, got %q", resp.Data[0].Url)
+	}
+	if resp.Data[0].B64Json != base64.StdEncoding.EncodeToString(imageBytes) {
+		t.Fatalf("expected base64 image bytes, got %q", resp.Data[0].B64Json)
+	}
+}
+
+func TestBuildGenerationResponseB64JSONMarshalOmitsURLField(t *testing.T) {
+	resp := generationResponse{
+		Data: []dto.ImageData{{
+			B64Json: base64.StdEncoding.EncodeToString([]byte("image")),
+		}},
+	}
+
+	payload, err := common.Marshal(resp)
+	if err != nil {
+		t.Fatalf("marshal response: %v", err)
+	}
+	if strings.Contains(string(payload), `"url"`) {
+		t.Fatalf("expected b64_json payload to omit url field, got %s", payload)
+	}
+	if !strings.Contains(string(payload), `"b64_json"`) {
+		t.Fatalf("expected b64_json field, got %s", payload)
 	}
 }
 

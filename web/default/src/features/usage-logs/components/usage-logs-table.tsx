@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
@@ -26,6 +26,8 @@ import {
   getFacetedRowModel,
   getFacetedUniqueValues,
   getPaginationRowModel,
+  type OnChangeFn,
+  type VisibilityState,
   useReactTable,
 } from '@tanstack/react-table'
 import { useMediaQuery } from '@/hooks'
@@ -50,8 +52,82 @@ const logTypeRowTint: Record<number, string> = {
   [LOG_TYPE_ENUM.REFUND]: 'bg-blue-50/30 dark:bg-blue-950/15',
 }
 
+const USAGE_LOGS_COLUMN_VISIBILITY_STORAGE_KEY_PREFIX =
+  'usage-logs-column-visibility'
+
 interface UsageLogsTableProps {
   logCategory: LogCategory
+}
+
+type StoredColumnVisibilityState = {
+  logCategory: LogCategory
+  visibility: VisibilityState
+}
+
+function getDefaultColumnVisibility(logCategory: LogCategory): VisibilityState {
+  if (logCategory === 'common') {
+    return {
+      response_service_tier: false,
+    }
+  }
+
+  return {}
+}
+
+function getColumnVisibilityStorageKey(logCategory: LogCategory): string {
+  return `${USAGE_LOGS_COLUMN_VISIBILITY_STORAGE_KEY_PREFIX}:${logCategory}`
+}
+
+function isVisibilityState(value: unknown): value is VisibilityState {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false
+  }
+
+  return Object.values(value).every((item) => typeof item === 'boolean')
+}
+
+function readColumnVisibility(logCategory: LogCategory): VisibilityState {
+  const defaultVisibility = getDefaultColumnVisibility(logCategory)
+
+  if (typeof window === 'undefined') {
+    return defaultVisibility
+  }
+
+  const saved = window.localStorage.getItem(
+    getColumnVisibilityStorageKey(logCategory)
+  )
+
+  if (!saved) {
+    return defaultVisibility
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(saved)
+    if (!isVisibilityState(parsed)) {
+      return defaultVisibility
+    }
+
+    return {
+      ...defaultVisibility,
+      ...parsed,
+    }
+  } catch {
+    return defaultVisibility
+  }
+}
+
+function writeColumnVisibility(
+  logCategory: LogCategory,
+  visibility: VisibilityState
+): void {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  window.localStorage.setItem(
+    getColumnVisibilityStorageKey(logCategory),
+    JSON.stringify(visibility)
+  )
 }
 
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
@@ -132,17 +208,65 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const logs = data?.items || []
   const columns = useColumnsByCategory(logCategory, isAdmin)
   const isLoadingData = isLoading || (isFetching && !data)
+  const [columnVisibilityState, setColumnVisibilityState] =
+    useState<StoredColumnVisibilityState>(() => ({
+      logCategory,
+      visibility: readColumnVisibility(logCategory),
+    }))
+  const columnVisibility =
+    columnVisibilityState.logCategory === logCategory
+      ? columnVisibilityState.visibility
+      : readColumnVisibility(logCategory)
+
+  useEffect(() => {
+    if (columnVisibilityState.logCategory === logCategory) {
+      return
+    }
+
+    setColumnVisibilityState({
+      logCategory,
+      visibility: readColumnVisibility(logCategory),
+    })
+  }, [columnVisibilityState.logCategory, logCategory])
+
+  useEffect(() => {
+    if (columnVisibilityState.logCategory !== logCategory) {
+      return
+    }
+
+    writeColumnVisibility(logCategory, columnVisibilityState.visibility)
+  }, [columnVisibilityState, logCategory])
+
+  const handleColumnVisibilityChange: OnChangeFn<VisibilityState> = (
+    updater
+  ) => {
+    setColumnVisibilityState((prev) => {
+      const currentVisibility =
+        prev.logCategory === logCategory
+          ? prev.visibility
+          : readColumnVisibility(logCategory)
+      const nextVisibility =
+        typeof updater === 'function' ? updater(currentVisibility) : updater
+
+      return {
+        logCategory,
+        visibility: nextVisibility,
+      }
+    })
+  }
 
   const table = useReactTable({
     data: logs as Record<string, unknown>[],
     columns: columns as ColumnDef<Record<string, unknown>>[],
     state: {
       columnFilters,
+      columnVisibility,
       pagination,
     },
     enableRowSelection: false,
     onPaginationChange,
     onColumnFiltersChange,
+    onColumnVisibilityChange: handleColumnVisibilityChange,
     getCoreRowModel: getCoreRowModel(),
     manualFiltering: true,
     getPaginationRowModel: getPaginationRowModel(),

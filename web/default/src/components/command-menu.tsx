@@ -23,6 +23,8 @@ import { useTranslation } from 'react-i18next'
 import { useSearch } from '@/context/search-provider'
 import { useTheme } from '@/context/theme-provider'
 import { useSidebarData } from '@/hooks/use-sidebar-data'
+import { useSidebarConfig } from '@/hooks/use-sidebar-config'
+import { useAuthStore } from '@/stores/auth-store'
 import {
   Command,
   CommandDialog,
@@ -34,6 +36,7 @@ import {
   CommandSeparator,
 } from '@/components/ui/command'
 import { getNavGroupsForPath } from './layout/lib/workspace-registry'
+import { filterNavGroupsByRole } from './layout/lib/role-filter'
 import { ScrollArea } from './ui/scroll-area'
 
 export function CommandMenu() {
@@ -43,9 +46,15 @@ export function CommandMenu() {
   const { open, setOpen } = useSearch()
   const { pathname } = useLocation()
   const sidebarData = useSidebarData()
+  const userRole = useAuthStore((state) => state.auth.user?.role)
 
   // 根据当前路径从工作区注册表获取对应的侧边栏配置
-  const navGroups = getNavGroupsForPath(pathname, t) || sidebarData.navGroups
+  const allNavGroups = getNavGroupsForPath(pathname, t) || sidebarData.navGroups
+  const configFilteredNavGroups = useSidebarConfig(allNavGroups)
+  const navGroups = React.useMemo(
+    () => filterNavGroupsByRole(configFilteredNavGroups, userRole),
+    [configFilteredNavGroups, userRole]
+  )
 
   const runCommand = React.useCallback(
     (command: () => unknown) => {

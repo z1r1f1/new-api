@@ -20,11 +20,11 @@ import { useMemo } from 'react'
 import { useLocation } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
-import { ROLE } from '@/lib/roles'
 import { useLayout } from '@/context/layout-provider'
 import { useSidebarConfig } from '@/hooks/use-sidebar-config'
 import { useSidebarData } from '@/hooks/use-sidebar-data'
 import { Sidebar, SidebarContent, SidebarRail } from '@/components/ui/sidebar'
+import { filterNavGroupsByRole } from '../lib/role-filter'
 import { getNavGroupsForPath } from '../lib/workspace-registry'
 import { NavGroup } from './nav-group'
 
@@ -49,16 +49,8 @@ export function AppSidebar() {
   // Filter sidebar navigation items based on backend configuration
   const configFilteredNavGroups = useSidebarConfig(allNavGroups)
 
-  // Filter navigation groups based on user role
-  // Non-Admin users cannot see Admin navigation group
   const currentNavGroups = useMemo(() => {
-    const isAdmin = userRole && userRole >= ROLE.ADMIN
-    return configFilteredNavGroups.filter((group) => {
-      if (group.id === 'admin') {
-        return isAdmin
-      }
-      return true
-    })
+    return filterNavGroupsByRole(configFilteredNavGroups, userRole)
   }, [configFilteredNavGroups, userRole])
 
   return (

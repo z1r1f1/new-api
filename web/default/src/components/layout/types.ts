@@ -36,6 +36,7 @@ type BaseNavItem = {
   title: string
   badge?: string
   icon?: React.ElementType
+  requiredRole?: number
   activeUrls?: (LinkProps['to'] | (string & {}))[]
   configUrls?: (LinkProps['to'] | (string & {}))[]
 }
@@ -78,6 +79,7 @@ export type NavItem = NavCollapsible | NavLink | NavChatPresets
 export type NavGroup = {
   id?: string
   title: string
+  requiredRole?: number
   items: NavItem[]
 }
 

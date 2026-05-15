@@ -44,7 +44,7 @@ export function ProfileDropdown() {
   const [open, setOpen] = useDialogState()
   const user = useAuthStore((state) => state.auth.user)
   const { displayName, roleLabel } = useUserDisplay(user)
-  const isSuperAdmin = user?.role === ROLE.SUPER_ADMIN
+  const isSuperAdmin = (user?.role ?? 0) >= ROLE.SUPER_ADMIN
   const avatarName = user?.username || displayName
   const avatarFallback = getUserAvatarFallback(avatarName)
   const avatarFallbackStyle = useMemo(

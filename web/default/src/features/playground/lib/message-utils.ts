@@ -24,6 +24,10 @@ import type {
   ChatCompletionMessage,
   ContentPart,
 } from '../types'
+import {
+  parseImageReferencesFromText,
+  toAbsoluteImageReferenceUrl,
+} from './image-references'
 
 /**
  * Create a new message version
@@ -131,9 +135,17 @@ export function getTextContent(content: string | ContentPart[]): string {
  */
 export function formatMessageForAPI(message: Message): ChatCompletionMessage {
   const currentVersion = getCurrentVersion(message)
+  const parsedContent =
+    message.from === MESSAGE_ROLES.USER
+      ? parseImageReferencesFromText(currentVersion.content)
+      : { text: currentVersion.content, imageUrls: [] }
+
   return {
     role: message.from,
-    content: currentVersion.content,
+    content: buildMessageContent(
+      parsedContent.text,
+      parsedContent.imageUrls.map(toAbsoluteImageReferenceUrl)
+    ),
   }
 }
 
@@ -313,7 +325,10 @@ export function finalizeMessage(
  * Sanitize messages loaded from storage
  * Converts stuck loading/streaming messages to stable state
  */
-export function sanitizeMessagesOnLoad(messages: Message[]): Message[] {
+export function sanitizeMessagesOnLoad(
+  messages: Message[],
+  preserveLoadingMessageKeys: string[] = []
+): Message[] {
   let targetIndex = -1
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]
@@ -328,6 +343,8 @@ export function sanitizeMessagesOnLoad(messages: Message[]): Message[] {
   }
 
   if (targetIndex === -1) return messages
+  const pendingKeys = new Set(preserveLoadingMessageKeys)
+  if (pendingKeys.has(messages[targetIndex].key)) return messages
 
   const finalized = finalizeMessage(messages[targetIndex])
   const hasContent = finalized.versions?.[0]?.content?.trim()

@@ -130,6 +130,7 @@ func GetAllChannels(c *gin.Context) {
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	statusParam := c.Query("status")
 	codexAccount := c.Query("codex_account")
+	group := c.Query("group")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
 	statusFilter := parseStatusFilter(statusParam)
 	// type filter
@@ -179,6 +180,7 @@ func GetAllChannels(c *gin.Context) {
 		total, _ = model.CountAllTags()
 	} else {
 		baseQuery := model.DB.Model(&model.Channel{})
+		baseQuery = model.ApplyChannelGroupFilter(baseQuery, group)
 		if typeFilter >= 0 {
 			baseQuery = baseQuery.Where("type = ?", typeFilter)
 		}
@@ -204,6 +206,7 @@ func GetAllChannels(c *gin.Context) {
 	}
 
 	countQuery := model.DB.Model(&model.Channel{})
+	countQuery = model.ApplyChannelGroupFilter(countQuery, group)
 	countQuery = applyCodexAccountChannelQuery(countQuery, codexAccount)
 	if statusFilter == common.ChannelStatusEnabled {
 		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
@@ -564,6 +567,15 @@ func validateChannel(channel *model.Channel, isAdd bool) error {
 	return nil
 }
 
+func ensureCodexServiceTierPassthrough(channel *model.Channel) {
+	if channel == nil || channel.Type != constant.ChannelTypeCodex {
+		return
+	}
+	settings := channel.GetOtherSettings()
+	settings.AllowServiceTier = true
+	channel.SetOtherSettings(settings)
+}
+
 func RefreshCodexChannelCredential(c *gin.Context) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
@@ -695,6 +707,7 @@ func AddChannel(c *gin.Context) {
 		return
 	}
 
+	ensureCodexServiceTierPassthrough(addChannelRequest.Channel)
 	addChannelRequest.Channel.CreatedTime = common.GetTimestamp()
 	keys := make([]string, 0)
 	switch addChannelRequest.Mode {
@@ -1318,6 +1331,7 @@ func UpdateChannel(c *gin.Context) {
 			// 覆盖模式：直接使用新密钥（默认行为，不需要特殊处理）
 		}
 	}
+	ensureCodexServiceTierPassthrough(&channel.Channel)
 	err = channel.Update()
 	if err != nil {
 		common.ApiError(c, err)

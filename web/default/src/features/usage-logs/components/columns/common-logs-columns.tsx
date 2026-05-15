@@ -514,6 +514,35 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
     },
 
     {
+      id: 'response_service_tier',
+      accessorFn: (row) => parseLogOther(row.other)?.response_service_tier ?? '',
+      header: ({ column }) => (
+        <DataTableColumnHeader column={column} title={t('Service Tier')} />
+      ),
+      cell: ({ row }) => {
+        const log = row.original
+        if (!isDisplayableLogType(log.type)) return null
+
+        const other = parseLogOther(log.other)
+        const responseServiceTier = other?.response_service_tier?.trim()
+        const label = responseServiceTier || t('Unknown')
+        const isPriority = responseServiceTier === 'priority'
+        const isFast = responseServiceTier === 'fast'
+
+        return (
+          <StatusBadge
+            label={label}
+            variant={isPriority || isFast ? 'success' : 'neutral'}
+            size='sm'
+            copyable={!!responseServiceTier}
+          />
+        )
+      },
+      meta: { label: t('Service Tier'), mobileHidden: true },
+      size: 110,
+    },
+
+    {
       accessorKey: 'use_time',
       header: ({ column }) => (
         <DataTableColumnHeader column={column} title={t('Timing')} />

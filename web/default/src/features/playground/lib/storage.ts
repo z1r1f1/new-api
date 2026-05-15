@@ -20,6 +20,7 @@ import { STORAGE_KEYS } from '../constants'
 import type {
   Message,
   ParameterEnabled,
+  PendingImageGenerationTask,
   PlaygroundConfig,
   PlaygroundImportData,
   PlaygroundSession,
@@ -32,6 +33,7 @@ const defaultWorkbenchState: PlaygroundWorkbenchState = {
   showDebugPanel: false,
   customRequestMode: false,
   customRequestBody: '',
+  searchEnabled: false,
 }
 
 export interface PlaygroundSessionState {
@@ -67,11 +69,16 @@ export function buildSessionTitle(messages: Message[]): string {
   return content.length > 28 ? `${content.slice(0, 28)}...` : content
 }
 
+function loadPendingImageMessageKeys(): string[] {
+  return loadPendingImageTasks().map((task) => task.messageKey)
+}
+
 function normalizeSession(value: unknown): PlaygroundSession | null {
   if (!isRecord(value)) return null
 
+  const pendingMessageKeys = loadPendingImageMessageKeys()
   const messages = Array.isArray(value.messages)
-    ? sanitizeMessagesOnLoad(value.messages as Message[])
+    ? sanitizeMessagesOnLoad(value.messages as Message[], pendingMessageKeys)
     : []
   const now = new Date().toISOString()
   const id =
@@ -145,9 +152,7 @@ function normalizeConfig(value: unknown): Partial<PlaygroundConfig> {
   return result
 }
 
-function normalizeParameterEnabled(
-  value: unknown
-): Partial<ParameterEnabled> {
+function normalizeParameterEnabled(value: unknown): Partial<ParameterEnabled> {
   if (!isRecord(value)) return {}
   const result: Partial<ParameterEnabled> = {}
   const keys: Array<keyof ParameterEnabled> = [
@@ -168,7 +173,9 @@ function normalizeParameterEnabled(
   return result
 }
 
-function normalizeWorkbenchState(value: unknown): Partial<PlaygroundWorkbenchState> {
+function normalizeWorkbenchState(
+  value: unknown
+): Partial<PlaygroundWorkbenchState> {
   if (!isRecord(value)) return {}
   const result: Partial<PlaygroundWorkbenchState> = {}
 
@@ -184,8 +191,43 @@ function normalizeWorkbenchState(value: unknown): Partial<PlaygroundWorkbenchSta
   if (typeof value.customRequestBody === 'string') {
     result.customRequestBody = value.customRequestBody
   }
+  if (typeof value.searchEnabled === 'boolean') {
+    result.searchEnabled = value.searchEnabled
+  }
 
   return result
+}
+
+function normalizePendingImageTask(
+  value: unknown
+): PendingImageGenerationTask | null {
+  if (!isRecord(value)) return null
+
+  const taskId = typeof value.taskId === 'string' ? value.taskId.trim() : ''
+  const messageKey =
+    typeof value.messageKey === 'string' ? value.messageKey.trim() : ''
+  const sessionId =
+    typeof value.sessionId === 'string' ? value.sessionId.trim() : ''
+  const startedAt =
+    typeof value.startedAt === 'number' && Number.isFinite(value.startedAt)
+      ? value.startedAt
+      : 0
+
+  if (!taskId || !messageKey || !sessionId || startedAt <= 0) {
+    return null
+  }
+
+  return {
+    taskId,
+    messageKey,
+    sessionId,
+    debugId: typeof value.debugId === 'string' ? value.debugId.trim() : '',
+    startedAt,
+    updatedAt:
+      typeof value.updatedAt === 'string' && value.updatedAt
+        ? value.updatedAt
+        : new Date().toISOString(),
+  }
 }
 
 /**
@@ -343,6 +385,60 @@ export function createPlaygroundSession(): PlaygroundSession {
   return createSession()
 }
 
+export function loadPendingImageTasks(): PendingImageGenerationTask[] {
+  try {
+    const saved = parseJSON(
+      localStorage.getItem(STORAGE_KEYS.PENDING_IMAGE_TASKS)
+    )
+    if (!Array.isArray(saved)) {
+      return []
+    }
+    return saved
+      .map(normalizePendingImageTask)
+      .filter((task): task is PendingImageGenerationTask => task !== null)
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to load pending playground image tasks:', error)
+  }
+  return []
+}
+
+export function savePendingImageTasks(
+  tasks: PendingImageGenerationTask[]
+): void {
+  try {
+    localStorage.setItem(
+      STORAGE_KEYS.PENDING_IMAGE_TASKS,
+      JSON.stringify(tasks)
+    )
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error('Failed to save pending playground image tasks:', error)
+  }
+}
+
+export function upsertPendingImageTask(task: PendingImageGenerationTask): void {
+  const tasks = loadPendingImageTasks().filter(
+    (item) => item.taskId !== task.taskId
+  )
+  savePendingImageTasks([
+    ...tasks,
+    {
+      ...task,
+      updatedAt: new Date().toISOString(),
+    },
+  ])
+}
+
+export function removePendingImageTask(taskId: string): void {
+  const trimmedTaskId = taskId.trim()
+  if (!trimmedTaskId) return
+
+  savePendingImageTasks(
+    loadPendingImageTasks().filter((task) => task.taskId !== trimmedTaskId)
+  )
+}
+
 /**
  * Load messages from localStorage
  */
@@ -360,7 +456,10 @@ export function loadMessages(): Message[] | null {
         localStorage.removeItem(STORAGE_KEYS.MESSAGES)
         return null
       }
-      const sanitized = sanitizeMessagesOnLoad(messages as Message[])
+      const sanitized = sanitizeMessagesOnLoad(
+        messages as Message[],
+        loadPendingImageMessageKeys()
+      )
       // Persist sanitized result to avoid re-sanitizing legacy shapes on subsequent loads
       saveMessages(sanitized)
       return sanitized
@@ -395,6 +494,7 @@ export function clearPlaygroundData(): void {
     localStorage.removeItem(STORAGE_KEYS.SESSIONS)
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID)
     localStorage.removeItem(STORAGE_KEYS.WORKBENCH)
+    localStorage.removeItem(STORAGE_KEYS.PENDING_IMAGE_TASKS)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear playground data:', error)
@@ -415,6 +515,7 @@ export function exportPlaygroundData(params: {
     customRequestMode: params.workbenchState.customRequestMode,
     customRequestBody: params.workbenchState.customRequestBody,
     showDebugPanel: params.workbenchState.showDebugPanel,
+    searchEnabled: params.workbenchState.searchEnabled,
     messages: params.messages,
     sessions: params.sessions,
     activeSessionId: params.activeSessionId,
@@ -431,7 +532,9 @@ export function exportPlaygroundData(params: {
   URL.revokeObjectURL(link.href)
 }
 
-export function importPlaygroundData(file: File): Promise<PlaygroundImportData> {
+export function importPlaygroundData(
+  file: File
+): Promise<PlaygroundImportData> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => {

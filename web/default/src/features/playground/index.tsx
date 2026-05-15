@@ -18,7 +18,14 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Bug, MessageSquare, Pencil, Plus, Settings2, Trash2 } from 'lucide-react'
+import {
+  Bug,
+  MessageSquare,
+  Pencil,
+  Plus,
+  Settings2,
+  Trash2,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -38,7 +45,11 @@ import { PlaygroundChat } from './components/playground-chat'
 import { PlaygroundDebugPanel } from './components/playground-debug-panel'
 import { PlaygroundInput } from './components/playground-input'
 import { PlaygroundSettingsPanel } from './components/playground-settings-panel'
-import { DEFAULT_CONFIG, DEFAULT_GROUP, DEFAULT_PARAMETER_ENABLED } from './constants'
+import {
+  DEFAULT_CONFIG,
+  DEFAULT_GROUP,
+  DEFAULT_PARAMETER_ENABLED,
+} from './constants'
 import { usePlaygroundState, useChatHandler } from './hooks'
 import {
   buildPlaygroundPreviewPayload,
@@ -57,6 +68,7 @@ const defaultWorkbenchState: PlaygroundWorkbenchState = {
   showDebugPanel: false,
   customRequestMode: false,
   customRequestBody: '',
+  searchEnabled: false,
 }
 
 export function Playground() {
@@ -98,16 +110,21 @@ export function Playground() {
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
     config,
     parameterEnabled,
+    messages,
+    activeSessionId,
     onMessageUpdate: updateMessages,
     onDebugUpdate: setDebugData,
     onDebugTabChange: setActiveDebugTab,
+    searchEnabled: workbenchState.searchEnabled,
   })
 
   // Edit dialog state
   const [editingMessageKey, setEditingMessageKey] = useState<string | null>(
     null
   )
-  const activeSession = sessions.find((session) => session.id === activeSessionId)
+  const activeSession = sessions.find(
+    (session) => session.id === activeSessionId
+  )
   const [sessionTitleDraft, setSessionTitleDraft] = useState({
     sessionId: activeSessionId,
     title: activeSession?.title || '',
@@ -165,6 +182,7 @@ export function Playground() {
         parameterEnabled,
         customRequestMode: workbenchState.customRequestMode,
         customRequestBody: workbenchState.customRequestBody,
+        searchEnabled: workbenchState.searchEnabled,
       }),
     [
       messages,
@@ -172,6 +190,7 @@ export function Playground() {
       parameterEnabled,
       workbenchState.customRequestMode,
       workbenchState.customRequestBody,
+      workbenchState.searchEnabled,
     ]
   )
 
@@ -291,7 +310,15 @@ export function Playground() {
       activeSessionId,
     })
     toast.success(t('Playground configuration exported'))
-  }, [config, parameterEnabled, workbenchState, messages, sessions, activeSessionId, t])
+  }, [
+    config,
+    parameterEnabled,
+    workbenchState,
+    messages,
+    sessions,
+    activeSessionId,
+    t,
+  ])
 
   const handleImport = useCallback(
     async (file: File) => {
@@ -311,6 +338,9 @@ export function Playground() {
         }
         if (typeof imported.showDebugPanel === 'boolean') {
           importedWorkbenchState.showDebugPanel = imported.showDebugPanel
+        }
+        if (typeof imported.searchEnabled === 'boolean') {
+          importedWorkbenchState.searchEnabled = imported.searchEnabled
         }
         replaceWorkbenchState(importedWorkbenchState)
         if (imported.sessions?.length) {
@@ -541,6 +571,10 @@ export function Playground() {
             onGroupChange={(value) => updateConfig('group', value)}
             onModelChange={(value) => updateConfig('model', value)}
             onStop={stopGeneration}
+            searchEnabled={workbenchState.searchEnabled}
+            onSearchEnabledChange={(value) =>
+              updateWorkbenchState('searchEnabled', value)
+            }
             onSubmit={handleSendMessage}
             showModelControls
           />
@@ -556,7 +590,10 @@ export function Playground() {
       <div className='fixed right-4 bottom-4 z-40 flex flex-col gap-2 xl:hidden'>
         <Button
           size='icon'
-          className={cn('rounded-full shadow-lg', mobileSettingsOpen && 'hidden')}
+          className={cn(
+            'rounded-full shadow-lg',
+            mobileSettingsOpen && 'hidden'
+          )}
           onClick={() => setMobileSettingsOpen(true)}
           aria-label={t('Settings')}
         >

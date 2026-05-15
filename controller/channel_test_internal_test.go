@@ -15,6 +15,46 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetAllChannelsFiltersByGroupWithoutKeyword(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	require.NoError(t, db.Create(&model.Channel{
+		Name:   "vip-only",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-vip",
+		Models: "gpt-4o",
+		Group:  "vip",
+		Status: common.ChannelStatusEnabled,
+	}).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Name:   "default-only",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-default",
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest("GET", "/api/channel?group=vip&p=1&page_size=20", nil)
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, 200, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []model.Channel `json:"items"`
+			Total int             `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Equal(t, 1, response.Data.Total)
+	require.Len(t, response.Data.Items, 1)
+	require.Equal(t, "vip-only", response.Data.Items[0].Name)
+}
+
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{

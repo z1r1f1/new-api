@@ -16,7 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
+import type { FileUIPart } from 'ai'
 import {
   PaperclipIcon,
   FileIcon,
@@ -42,10 +43,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import {
   PromptInput,
+  PromptInputAttachment,
+  PromptInputAttachments,
   PromptInputButton,
   PromptInputFooter,
+  PromptInputHeader,
   PromptInputTextarea,
   PromptInputTools,
+  usePromptInputAttachments,
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
@@ -65,6 +70,8 @@ interface PlaygroundInputProps {
   groupValue: string
   onGroupChange: (value: string) => void
   showModelControls?: boolean
+  searchEnabled?: boolean
+  onSearchEnabledChange?: (value: boolean) => void
 }
 
 const suggestions = [
@@ -75,6 +82,287 @@ const suggestions = [
   { icon: GraduationCapIcon, text: 'Get advice', color: '#76d0eb' },
   { icon: null, text: 'More' },
 ]
+
+const maxTextAttachmentChars = 200_000
+
+function isImageAttachment(file: FileUIPart): boolean {
+  return Boolean(file.url && file.mediaType?.startsWith('image/'))
+}
+
+function isTextAttachment(file: FileUIPart): boolean {
+  const mediaType = String(file.mediaType || '').toLowerCase()
+  const filename = String(file.filename || '').toLowerCase()
+
+  return (
+    mediaType.startsWith('text/') ||
+    mediaType.includes('json') ||
+    mediaType.includes('xml') ||
+    filename.endsWith('.md') ||
+    filename.endsWith('.csv') ||
+    filename.endsWith('.log') ||
+    filename.endsWith('.txt')
+  )
+}
+
+function decodeDataUrlText(url: string): string {
+  const commaIndex = url.indexOf(',')
+  if (!url.startsWith('data:') || commaIndex < 0) return ''
+
+  const metadata = url.slice(0, commaIndex)
+  const payload = url.slice(commaIndex + 1)
+  if (!metadata.includes(';base64')) {
+    return decodeURIComponent(payload)
+  }
+
+  const binary = globalThis.atob(payload)
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
+function buildAttachmentContent(text: string, files: FileUIPart[]): string {
+  const contentParts = [text.trim()].filter(Boolean)
+
+  files.forEach((file, index) => {
+    const filename = file.filename || `attachment-${index + 1}`
+    if (isImageAttachment(file)) {
+      contentParts.push(`![${filename}](${file.url})`)
+      return
+    }
+
+    if (file.url && isTextAttachment(file)) {
+      const decoded = decodeDataUrlText(file.url).slice(
+        0,
+        maxTextAttachmentChars
+      )
+      const suffix =
+        decoded.length >= maxTextAttachmentChars
+          ? '\n\n[Attachment truncated]'
+          : ''
+      contentParts.push(
+        `Attached file: ${filename}\n\n\`\`\`\n${decoded}${suffix}\n\`\`\``
+      )
+      return
+    }
+
+    contentParts.push(`Attached file: ${filename}`)
+  })
+
+  return contentParts.join('\n\n')
+}
+
+function canvasToPngFile(canvas: HTMLCanvasElement, filename: string) {
+  return new Promise<File>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        reject(new Error('Canvas capture failed'))
+        return
+      }
+      resolve(new File([blob], filename, { type: 'image/png' }))
+    }, 'image/png')
+  })
+}
+
+async function captureMediaStreamFrame(
+  stream: MediaStream,
+  filename: string
+): Promise<File> {
+  const video = document.createElement('video')
+  video.muted = true
+  video.playsInline = true
+  video.srcObject = stream
+
+  try {
+    await video.play()
+    if (!video.videoWidth || !video.videoHeight) {
+      await new Promise<void>((resolve) => {
+        video.onloadedmetadata = () => resolve()
+      })
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth || 1280
+    canvas.height = video.videoHeight || 720
+    const context = canvas.getContext('2d')
+    if (!context) {
+      throw new Error('Canvas is not available')
+    }
+    context.drawImage(video, 0, 0, canvas.width, canvas.height)
+    return await canvasToPngFile(canvas, filename)
+  } finally {
+    stream.getTracks().forEach((track) => track.stop())
+    video.srcObject = null
+  }
+}
+
+function HiddenAttachmentInputs() {
+  const attachments = usePromptInputAttachments()
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const imageInputRef = useRef<HTMLInputElement | null>(null)
+
+  const addSelectedFiles = useCallback(
+    (files: FileList | null) => {
+      if (files?.length) {
+        attachments.add(files)
+      }
+    },
+    [attachments]
+  )
+
+  return (
+    <>
+      <input
+        ref={fileInputRef}
+        className='hidden'
+        multiple
+        type='file'
+        onChange={(event) => {
+          addSelectedFiles(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      <input
+        ref={imageInputRef}
+        accept='image/*'
+        className='hidden'
+        multiple
+        type='file'
+        onChange={(event) => {
+          addSelectedFiles(event.target.files)
+          event.target.value = ''
+        }}
+      />
+      <AttachmentMenuItems
+        onUploadFile={() => fileInputRef.current?.click()}
+        onUploadPhoto={() => imageInputRef.current?.click()}
+      />
+    </>
+  )
+}
+
+function AttachmentMenuItems(props: {
+  onUploadFile: () => void
+  onUploadPhoto: () => void
+}) {
+  const { t } = useTranslation()
+  const attachments = usePromptInputAttachments()
+
+  const captureScreenshot = async () => {
+    const captureDisplayMedia = navigator.mediaDevices?.getDisplayMedia
+    if (!captureDisplayMedia) {
+      toast.error(t('Screen capture is not supported by this browser.'))
+      return
+    }
+
+    try {
+      const stream = await captureDisplayMedia.call(navigator.mediaDevices, {
+        video: true,
+      })
+      const file = await captureMediaStreamFrame(stream, 'screenshot.png')
+      attachments.add([file])
+      toast.success(t('Screenshot attached'))
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t('Failed to capture screenshot')
+      )
+    }
+  }
+
+  const capturePhoto = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      toast.error(t('Camera capture is not supported by this browser.'))
+      return
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+      const file = await captureMediaStreamFrame(stream, 'camera-photo.png')
+      attachments.add([file])
+      toast.success(t('Photo attached'))
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to take photo')
+      )
+    }
+  }
+
+  return (
+    <>
+      <DropdownMenuItem onClick={props.onUploadFile}>
+        <FileIcon className='mr-2' size={16} />
+        {t('Upload file')}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={props.onUploadPhoto}>
+        <ImageIcon className='mr-2' size={16} />
+        {t('Upload photo')}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void captureScreenshot()}>
+        <ScreenShareIcon className='mr-2' size={16} />
+        {t('Take screenshot')}
+      </DropdownMenuItem>
+      <DropdownMenuItem onClick={() => void capturePhoto()}>
+        <CameraIcon className='mr-2' size={16} />
+        {t('Take photo')}
+      </DropdownMenuItem>
+    </>
+  )
+}
+
+function PlaygroundSubmitButton(props: {
+  disabled?: boolean
+  isGenerating?: boolean
+  onStop?: () => void
+  text: string
+}) {
+  const { t } = useTranslation()
+  const attachments = usePromptInputAttachments()
+
+  if (props.isGenerating && props.onStop) {
+    return (
+      <PromptInputButton
+        className='text-foreground font-medium'
+        onClick={props.onStop}
+        variant='secondary'
+      >
+        <SquareIcon className='fill-current' size={16} />
+        <span className='hidden sm:inline'>{t('Stop')}</span>
+        <span className='sr-only sm:hidden'>{t('Stop')}</span>
+      </PromptInputButton>
+    )
+  }
+
+  return (
+    <PromptInputButton
+      className='text-foreground font-medium'
+      disabled={
+        props.disabled || (!props.text.trim() && attachments.files.length === 0)
+      }
+      type='submit'
+      variant='secondary'
+    >
+      <SendIcon size={16} />
+      <span className='hidden sm:inline'>{t('Send')}</span>
+      <span className='sr-only sm:hidden'>{t('Send')}</span>
+    </PromptInputButton>
+  )
+}
+
+function PlaygroundAttachmentPreview() {
+  const attachments = usePromptInputAttachments()
+
+  if (attachments.files.length === 0) {
+    return null
+  }
+
+  return (
+    <PromptInputHeader className='px-2 pt-2'>
+      <PromptInputAttachments>
+        {(attachment) => <PromptInputAttachment data={attachment} />}
+      </PromptInputAttachments>
+    </PromptInputHeader>
+  )
+}
 
 export function PlaygroundInput({
   onSubmit,
@@ -89,6 +377,8 @@ export function PlaygroundInput({
   groupValue,
   onGroupChange,
   showModelControls = true,
+  searchEnabled = false,
+  onSearchEnabledChange,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
@@ -98,24 +388,44 @@ export function PlaygroundInput({
   const isGroupSelectDisabled = disabled || groups.length === 0
 
   const handleSubmit = (message: PromptInputMessage) => {
-    if (!message.text?.trim() || disabled) return
-    onSubmit(message.text)
-    setText('')
-  }
+    if (disabled) return
 
-  const handleFileAction = (action: string) => {
-    toast.info(t('Feature in development'), {
-      description: action,
-    })
+    let content: string
+    try {
+      content = buildAttachmentContent(message.text || '', message.files || [])
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : t('Failed to read attachment')
+      )
+      return
+    }
+    if (!content.trim()) return
+
+    onSubmit(content)
+    setText('')
   }
 
   const handleSuggestionClick = (suggestion: string) => {
     onSubmit(suggestion)
   }
 
+  const handleSearchToggle = () => {
+    const nextValue = !searchEnabled
+    onSearchEnabledChange?.(nextValue)
+    toast.success(t(nextValue ? 'Web search enabled' : 'Web search disabled'))
+  }
+
   return (
     <div className='grid shrink-0 gap-4 px-1 md:pb-4'>
-      <PromptInput groupClassName='rounded-xl' onSubmit={handleSubmit}>
+      <PromptInput
+        groupClassName='rounded-xl'
+        globalDrop
+        maxFileSize={20 * 1024 * 1024}
+        multiple
+        onError={(error) => toast.error(error.message)}
+        onSubmit={handleSubmit}
+      >
+        <PlaygroundAttachmentPreview />
         <PromptInputTextarea
           autoComplete='off'
           autoCorrect='off'
@@ -145,38 +455,15 @@ export function PlaygroundInput({
                 <span className='sr-only sm:hidden'>{t('Attach')}</span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align='start'>
-                <DropdownMenuItem
-                  onClick={() => handleFileAction('upload-file')}
-                >
-                  <FileIcon className='mr-2' size={16} />
-                  {t('Upload file')}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => handleFileAction('upload-photo')}
-                >
-                  <ImageIcon className='mr-2' size={16} />
-                  {t('Upload photo')}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => handleFileAction('take-screenshot')}
-                >
-                  <ScreenShareIcon className='mr-2' size={16} />
-                  {t('Take screenshot')}
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => handleFileAction('take-photo')}
-                >
-                  <CameraIcon className='mr-2' size={16} />
-                  {t('Take photo')}
-                </DropdownMenuItem>
+                <HiddenAttachmentInputs />
               </DropdownMenuContent>
             </DropdownMenu>
 
             <PromptInputButton
               className='border font-medium'
               disabled={disabled}
-              onClick={() => toast.info(t('Search feature in development'))}
-              variant='outline'
+              onClick={handleSearchToggle}
+              variant={searchEnabled ? 'secondary' : 'outline'}
             >
               <GlobeIcon size={16} />
               <span className='hidden sm:inline'>{t('Search')}</span>
@@ -197,28 +484,12 @@ export function PlaygroundInput({
               />
             )}
 
-            {isGenerating && onStop ? (
-              <PromptInputButton
-                className='text-foreground font-medium'
-                onClick={onStop}
-                variant='secondary'
-              >
-                <SquareIcon className='fill-current' size={16} />
-                <span className='hidden sm:inline'>{t('Stop')}</span>
-                <span className='sr-only sm:hidden'>{t('Stop')}</span>
-              </PromptInputButton>
-            ) : (
-              <PromptInputButton
-                className='text-foreground font-medium'
-                disabled={disabled || !text.trim()}
-                type='submit'
-                variant='secondary'
-              >
-                <SendIcon size={16} />
-                <span className='hidden sm:inline'>{t('Send')}</span>
-                <span className='sr-only sm:hidden'>{t('Send')}</span>
-              </PromptInputButton>
-            )}
+            <PlaygroundSubmitButton
+              disabled={disabled}
+              isGenerating={isGenerating}
+              onStop={onStop}
+              text={text}
+            />
           </div>
         </PromptInputFooter>
       </PromptInput>

@@ -199,6 +199,16 @@ export const STATIC_I18N_KEYS = [
   // Models section-registry nav (dynamic titleKey)
   'Grok',
 
+  // Playground image generation
+  'Generating image',
+  'This generation may take 2–3 minutes. Please wait patiently.',
+  'Elapsed: {{elapsed}}',
+  'Task ID:',
+  'Image generation completed, but the response did not include displayable image data.',
+  'Responding...',
+  'Image generation task timed out',
+  'Image generation failed',
+
   // Channel Affinity section
   'Channel Affinity',
   'Configure channel affinity (sticky routing) rules',
