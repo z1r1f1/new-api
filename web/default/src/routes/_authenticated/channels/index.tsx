@@ -31,6 +31,7 @@ const channelsSearchSchema = z.object({
   group: z.array(z.string()).optional().catch([]),
   codexAccount: z.array(z.string()).optional().catch([]),
   model: z.string().optional().catch(''),
+  statusCode: z.string().optional().catch(''),
 })
 
 export const Route = createFileRoute('/_authenticated/channels/')({

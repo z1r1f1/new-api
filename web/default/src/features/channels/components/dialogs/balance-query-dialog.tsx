@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { Loader2, RefreshCw, DollarSign } from 'lucide-react'
+import { Loader2, RefreshCw, DollarSign, ImageIcon } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { formatCurrencyFromUSD } from '@/lib/currency'
@@ -34,6 +34,7 @@ import {
 } from '@/components/ui/dialog'
 import { getCodexUsage, updateChannelBalance } from '../../api'
 import { channelsQueryKeys } from '../../lib'
+import type { ChannelBalanceResponse } from '../../types'
 import { useChannels } from '../channels-provider'
 import {
   CodexUsageDialog,
@@ -44,6 +45,8 @@ type BalanceQueryDialogProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
+
+type ChatGPTImageQuotaData = NonNullable<ChannelBalanceResponse['data']>
 
 export function BalanceQueryDialog({
   open,
@@ -59,8 +62,11 @@ export function BalanceQueryDialog({
   )
   const [codexUsageResponse, setCodexUsageResponse] =
     useState<CodexUsageDialogData | null>(null)
+  const [imageQuotaData, setImageQuotaData] =
+    useState<ChatGPTImageQuotaData | null>(null)
 
   const isCodex = currentRow?.type === 57
+  const isChatGPTWeb = currentRow?.type === 58
 
   const handleQueryCodexUsage = async () => {
     const row = currentRow
@@ -100,7 +106,19 @@ export function BalanceQueryDialog({
 
         setBalance(newBalance)
         setBalanceUpdatedTime(now)
-        toast.success(t('Balance updated successfully'))
+        setImageQuotaData(response.data ?? null)
+        if (isChatGPTWeb) {
+          toast.success(
+            t('Image quota updated: {{quota}}', {
+              quota: formatImageQuota(
+                response.data?.image_quota_remaining ?? newBalance,
+                response.data?.image_quota_total
+              ),
+            })
+          )
+        } else {
+          toast.success(t('Balance updated successfully'))
+        }
 
         // Update currentRow immediately with new balance and timestamp
         setCurrentRow({
@@ -129,6 +147,7 @@ export function BalanceQueryDialog({
     setBalance(null)
     setBalanceUpdatedTime(null)
     setCodexUsageResponse(null)
+    setImageQuotaData(null)
     onOpenChange(false)
   }
 
@@ -140,8 +159,43 @@ export function BalanceQueryDialog({
     })
 
   const formatDate = (timestamp: number) => {
-    if (!timestamp) return 'Never'
+    if (!timestamp) return t('Never')
     return formatTimestampToDate(timestamp)
+  }
+
+  const formatImageCount = (value: number | null | undefined) => {
+    if (value == null || Number.isNaN(value)) return '-'
+    return String(Math.max(0, Math.trunc(value)))
+  }
+
+  const formatImageQuota = (
+    remaining: number | null | undefined,
+    total: number | null | undefined
+  ) => {
+    const remainingText = formatImageCount(remaining)
+    if (remainingText === '-') return remainingText
+    if (total == null || total <= 0 || Number.isNaN(total)) {
+      return remainingText
+    }
+    return `${remainingText}/${formatImageCount(total)}`
+  }
+
+  let currentValueDisplay = formatBalance(currentRow.balance)
+  if (balance !== null) {
+    currentValueDisplay = formatBalance(balance)
+  }
+  if (isChatGPTWeb) {
+    currentValueDisplay = formatImageQuota(
+      imageQuotaData?.image_quota_remaining ?? balance ?? currentRow.balance,
+      imageQuotaData?.image_quota_total
+    )
+  }
+
+  let updateButtonText = t('Update Balance')
+  if (isQuerying) {
+    updateButtonText = t('Querying...')
+  } else if (isChatGPTWeb) {
+    updateButtonText = t('Update Image Quota')
   }
 
   if (isCodex) {
@@ -164,7 +218,9 @@ export function BalanceQueryDialog({
     <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{t('Query Balance')}</DialogTitle>
+          <DialogTitle>
+            {isChatGPTWeb ? t('Query Image Quota') : t('Query Balance')}
+          </DialogTitle>
           <DialogDescription>
             {t('Update balance for:')} <strong>{currentRow.name}</strong>
           </DialogDescription>
@@ -174,14 +230,16 @@ export function BalanceQueryDialog({
           {/* Current Balance Display */}
           <div className='bg-muted/50 rounded-lg border p-4'>
             <div className='text-muted-foreground mb-2 flex items-center gap-2 text-sm'>
-              <DollarSign className='h-4 w-4' />
-              <span>{t('Current Balance')}</span>
+              {isChatGPTWeb ? (
+                <ImageIcon className='h-4 w-4' />
+              ) : (
+                <DollarSign className='h-4 w-4' />
+              )}
+              <span>
+                {isChatGPTWeb ? t('Current Image Quota') : t('Current Balance')}
+              </span>
             </div>
-            <div className='text-2xl font-bold'>
-              {balance !== null
-                ? formatBalance(balance)
-                : formatBalance(currentRow.balance)}
-            </div>
+            <div className='text-2xl font-bold'>{currentValueDisplay}</div>
             <div className='text-muted-foreground mt-2 text-xs'>
               {t('Last updated:')}{' '}
               {formatDate(
@@ -189,6 +247,37 @@ export function BalanceQueryDialog({
               )}
             </div>
           </div>
+
+          {isChatGPTWeb && (
+            <div className='bg-muted/30 space-y-2 rounded-lg border p-4 text-sm'>
+              <div className='flex items-center justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Default model')}
+                </span>
+                <span className='text-right font-medium'>
+                  {imageQuotaData?.default_model_slug || '-'}
+                </span>
+              </div>
+              <div className='flex items-center justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Image quota reset time')}
+                </span>
+                <span className='text-right font-medium'>
+                  {formatDate(imageQuotaData?.image_quota_reset_at ?? 0)}
+                </span>
+              </div>
+              <div className='flex items-start justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Blocked features')}
+                </span>
+                <span className='text-right font-medium break-all'>
+                  {imageQuotaData?.blocked_features?.length
+                    ? imageQuotaData.blocked_features.join(', ')
+                    : t('None')}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Balance Update Button */}
           <Button
@@ -198,7 +287,7 @@ export function BalanceQueryDialog({
           >
             {isQuerying && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
             {!isQuerying && <RefreshCw className='mr-2 h-4 w-4' />}
-            {isQuerying ? t('Querying...') : t('Update Balance')}
+            {updateButtonText}
           </Button>
         </div>
 

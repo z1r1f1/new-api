@@ -154,6 +154,13 @@ export interface ChannelBalanceResponse {
   message?: string
   balance?: number
   currency?: string
+  data?: {
+    image_quota_remaining?: number
+    image_quota_total?: number
+    image_quota_reset_at?: number
+    default_model_slug?: string
+    blocked_features?: string[]
+  }
 }
 
 export interface FetchModelsResponse {
@@ -229,6 +236,7 @@ export interface GetChannelsParams {
   type?: number
   group?: string
   codex_account?: string
+  status_code?: string
   id_sort?: boolean
   tag_mode?: boolean
   sort_by?: ChannelSortBy
@@ -242,6 +250,7 @@ export interface SearchChannelsParams {
   status?: string
   type?: number
   codex_account?: string
+  status_code?: string
   id_sort?: boolean
   tag_mode?: boolean
   sort_by?: ChannelSortBy

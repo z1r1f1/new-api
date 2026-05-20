@@ -271,6 +271,19 @@ export async function handleCopyChannel(
 /**
  * Update channel balance
  */
+function formatImageQuotaUpdate(
+  response: Awaited<ReturnType<typeof updateChannelBalance>>
+): string {
+  const remaining =
+    response.data?.image_quota_remaining ?? response.balance ?? 0
+  const total = response.data?.image_quota_total ?? 0
+  const remainingText = String(Math.max(0, Math.trunc(remaining)))
+  if (total > 0) {
+    return `${remainingText}/${Math.trunc(total)}`
+  }
+  return remainingText
+}
+
 export async function handleUpdateChannelBalance(
   id: number,
   queryClient?: QueryClient,
@@ -280,15 +293,23 @@ export async function handleUpdateChannelBalance(
     const response = await updateChannelBalance(id)
     if (response.success && response.balance !== undefined) {
       const balance = response.balance
-      toast.success(
-        i18next.t('Balance updated: {{balance}}', {
-          balance: formatCurrencyFromUSD(balance, {
-            digitsLarge: 2,
-            digitsSmall: 4,
-            abbreviate: false,
-          }),
-        })
-      )
+      if (response.currency === 'images') {
+        toast.success(
+          i18next.t('Image quota updated: {{quota}}', {
+            quota: formatImageQuotaUpdate(response),
+          })
+        )
+      } else {
+        toast.success(
+          i18next.t('Balance updated: {{balance}}', {
+            balance: formatCurrencyFromUSD(balance, {
+              digitsLarge: 2,
+              digitsSmall: 4,
+              abbreviate: false,
+            }),
+          })
+        )
+      }
       queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
       onSuccess?.(balance)
     } else {

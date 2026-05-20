@@ -2214,10 +2214,15 @@ func uploadedFileIDSet(files []*UploadedFile) map[string]struct{} {
 	}
 	out := make(map[string]struct{}, len(files))
 	for _, file := range files {
-		if file == nil || strings.TrimSpace(file.FileID) == "" {
+		if file == nil {
 			continue
 		}
-		out[strings.TrimSpace(file.FileID)] = struct{}{}
+		if fileID := strings.TrimSpace(file.FileID); fileID != "" {
+			out[fileID] = struct{}{}
+		}
+		if libraryFileID := strings.TrimSpace(file.LibraryFileID); libraryFileID != "" {
+			out[libraryFileID] = struct{}{}
+		}
 	}
 	if len(out) == 0 {
 		return nil

@@ -4505,6 +4505,17 @@
     "Failed to take photo": "Не удалось сделать фото",
     "Failed to read attachment": "Не удалось прочитать вложение",
     "Web search enabled": "Веб-поиск включен",
-    "Web search disabled": "Веб-поиск отключен"
+    "Web search disabled": "Веб-поиск отключен",
+    "Blocked features": "Заблокированные функции",
+    "Current Image Quota": "Текущая квота изображений",
+    "Default model": "Модель по умолчанию",
+    "Filter by response code...": "Фильтр по коду ответа...",
+    "Image quota remaining:": "Остаток квоты изображений:",
+    "Image quota reset time": "Время сброса квоты изображений",
+    "Image quota updated: {{quota}}": "Квота изображений обновлена: {{quota}}",
+    "Query Image Quota": "Запросить квоту изображений",
+    "Update Image Quota": "Обновить квоту изображений",
+    "Updating...": "Обновление...",
+    "images": "изображений"
   }
 }

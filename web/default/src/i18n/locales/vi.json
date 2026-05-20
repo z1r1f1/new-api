@@ -4505,6 +4505,17 @@
     "Failed to take photo": "Không thể chụp ảnh",
     "Failed to read attachment": "Không thể đọc tệp đính kèm",
     "Web search enabled": "Đã bật tìm kiếm web",
-    "Web search disabled": "Đã tắt tìm kiếm web"
+    "Web search disabled": "Đã tắt tìm kiếm web",
+    "Blocked features": "Tính năng bị chặn",
+    "Current Image Quota": "Hạn mức ảnh hiện tại",
+    "Default model": "Mô hình mặc định",
+    "Filter by response code...": "Lọc theo mã phản hồi...",
+    "Image quota remaining:": "Hạn mức ảnh còn lại:",
+    "Image quota reset time": "Thời gian đặt lại hạn mức ảnh",
+    "Image quota updated: {{quota}}": "Đã cập nhật hạn mức ảnh: {{quota}}",
+    "Query Image Quota": "Truy vấn hạn mức ảnh",
+    "Update Image Quota": "Cập nhật hạn mức ảnh",
+    "Updating...": "Đang cập nhật...",
+    "images": "ảnh"
   }
 }

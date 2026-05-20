@@ -4505,6 +4505,17 @@
     "Failed to take photo": "写真の撮影に失敗しました",
     "Failed to read attachment": "添付ファイルの読み取りに失敗しました",
     "Web search enabled": "Web検索を有効にしました",
-    "Web search disabled": "Web検索を無効にしました"
+    "Web search disabled": "Web検索を無効にしました",
+    "Blocked features": "ブロックされた機能",
+    "Current Image Quota": "現在の画像クォータ",
+    "Default model": "デフォルトモデル",
+    "Filter by response code...": "レスポンスコードで絞り込み...",
+    "Image quota remaining:": "画像クォータ残量:",
+    "Image quota reset time": "画像クォータのリセット時刻",
+    "Image quota updated: {{quota}}": "画像クォータを更新しました: {{quota}}",
+    "Query Image Quota": "画像クォータを照会",
+    "Update Image Quota": "画像クォータを更新",
+    "Updating...": "更新中...",
+    "images": "枚"
   }
 }

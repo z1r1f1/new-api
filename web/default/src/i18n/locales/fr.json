@@ -4505,6 +4505,17 @@
     "Failed to take photo": "Échec de la prise de photo",
     "Failed to read attachment": "Échec de la lecture de la pièce jointe",
     "Web search enabled": "Recherche web activée",
-    "Web search disabled": "Recherche web désactivée"
+    "Web search disabled": "Recherche web désactivée",
+    "Blocked features": "Fonctionnalités bloquées",
+    "Current Image Quota": "Quota d’images actuel",
+    "Default model": "Modèle par défaut",
+    "Filter by response code...": "Filtrer par code de réponse...",
+    "Image quota remaining:": "Quota d’images restant :",
+    "Image quota reset time": "Heure de réinitialisation du quota d’images",
+    "Image quota updated: {{quota}}": "Quota d’images mis à jour : {{quota}}",
+    "Query Image Quota": "Interroger le quota d’images",
+    "Update Image Quota": "Mettre à jour le quota d’images",
+    "Updating...": "Mise à jour...",
+    "images": "image(s)"
   }
 }

@@ -4505,6 +4505,17 @@
     "Failed to take photo": "Failed to take photo",
     "Failed to read attachment": "Failed to read attachment",
     "Web search enabled": "Web search enabled",
-    "Web search disabled": "Web search disabled"
+    "Web search disabled": "Web search disabled",
+    "Blocked features": "Blocked features",
+    "Current Image Quota": "Current Image Quota",
+    "Default model": "Default model",
+    "Filter by response code...": "Filter by response code...",
+    "Image quota remaining:": "Image quota remaining:",
+    "Image quota reset time": "Image quota reset time",
+    "Image quota updated: {{quota}}": "Image quota updated: {{quota}}",
+    "Query Image Quota": "Query Image Quota",
+    "Update Image Quota": "Update Image Quota",
+    "Updating...": "Updating...",
+    "images": "images"
   }
 }

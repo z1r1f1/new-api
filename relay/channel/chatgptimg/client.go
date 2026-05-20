@@ -357,6 +357,164 @@ func (e *UpstreamError) IsUnauthorized() bool {
 	return e != nil && (e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden)
 }
 
+type ImageQuotaInfo struct {
+	DefaultModelSlug    string   `json:"default_model_slug,omitempty"`
+	ImageQuotaRemaining int      `json:"image_quota_remaining"`
+	ImageQuotaTotal     int      `json:"image_quota_total"`
+	ImageQuotaResetAt   int64    `json:"image_quota_reset_at,omitempty"`
+	BlockedFeatures     []string `json:"blocked_features,omitempty"`
+}
+
+type conversationInitQuotaResp struct {
+	BlockedFeatures  flexStringList `json:"blocked_features"`
+	DefaultModelSlug string         `json:"default_model_slug"`
+	LimitsProgress   []struct {
+		FeatureName string `json:"feature_name"`
+		Remaining   *int   `json:"remaining"`
+		ResetAfter  string `json:"reset_after"`
+		MaxValue    *int   `json:"max_value"`
+		Cap         *int   `json:"cap"`
+		Total       *int   `json:"total"`
+		Limit       *int   `json:"limit"`
+		Used        *int   `json:"used"`
+		UsedValue   *int   `json:"used_value"`
+		Consumed    *int   `json:"consumed"`
+	} `json:"limits_progress"`
+}
+
+type flexStringList []string
+
+func (l *flexStringList) UnmarshalJSON(data []byte) error {
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" || trimmed == "null" {
+		*l = nil
+		return nil
+	}
+
+	var list []string
+	if err := common.Unmarshal(data, &list); err == nil {
+		*l = list
+		return nil
+	}
+
+	var single string
+	if err := common.Unmarshal(data, &single); err != nil {
+		return err
+	}
+	if strings.TrimSpace(single) == "" {
+		*l = nil
+		return nil
+	}
+	*l = []string{single}
+	return nil
+}
+
+func (l flexStringList) Slice() []string {
+	if len(l) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(l))
+	for _, item := range l {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (c *Client) ProbeImageQuota(ctx context.Context) (*ImageQuotaInfo, error) {
+	_ = c.Bootstrap(ctx)
+
+	payload := map[string]any{
+		"gizmo_id":                nil,
+		"requested_default_model": nil,
+		"conversation_id":         nil,
+		"timezone_offset_min":     -480,
+		"system_hints":            []string{"picture_v2"},
+	}
+	body, err := common.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt web channel: marshal image quota probe failed: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/conversation/init", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	c.commonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+
+	res, err := c.hc.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("chatgpt web channel: conversation/init request failed: %w", err)
+	}
+	defer res.Body.Close()
+
+	buf, _ := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	if res.StatusCode >= 400 {
+		return nil, &UpstreamError{Status: res.StatusCode, Message: "conversation/init failed", Body: string(buf)}
+	}
+
+	var quotaResp conversationInitQuotaResp
+	if err := common.Unmarshal(buf, &quotaResp); err != nil {
+		return nil, fmt.Errorf("chatgpt web channel: decode image quota probe failed: %w", err)
+	}
+
+	out := &ImageQuotaInfo{
+		DefaultModelSlug:    strings.TrimSpace(quotaResp.DefaultModelSlug),
+		ImageQuotaRemaining: -1,
+		ImageQuotaTotal:     -1,
+		BlockedFeatures:     quotaResp.BlockedFeatures.Slice(),
+	}
+	for _, item := range quotaResp.LimitsProgress {
+		if !isImageQuotaFeature(item.FeatureName) {
+			continue
+		}
+		if item.Remaining != nil && (out.ImageQuotaRemaining < 0 || *item.Remaining < out.ImageQuotaRemaining) {
+			out.ImageQuotaRemaining = *item.Remaining
+		}
+		if maxV := firstInt(item.MaxValue, item.Cap, item.Total, item.Limit); maxV != nil && *maxV > out.ImageQuotaTotal {
+			out.ImageQuotaTotal = *maxV
+		}
+		if out.ImageQuotaTotal < 0 && item.Remaining != nil {
+			if usedV := firstInt(item.Used, item.UsedValue, item.Consumed); usedV != nil {
+				out.ImageQuotaTotal = *item.Remaining + *usedV
+			}
+		}
+		if item.ResetAfter != "" {
+			if resetAt, parseErr := time.Parse(time.RFC3339, item.ResetAfter); parseErr == nil {
+				ts := resetAt.Unix()
+				if out.ImageQuotaResetAt == 0 || ts < out.ImageQuotaResetAt {
+					out.ImageQuotaResetAt = ts
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func isImageQuotaFeature(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "image_gen", "image_generation", "image_edit", "img_gen":
+		return true
+	}
+	return strings.Contains(n, "image_gen") || strings.Contains(n, "img_gen")
+}
+
+func firstInt(ps ...*int) *int {
+	for _, p := range ps {
+		if p != nil {
+			return p
+		}
+	}
+	return nil
+}
+
 type ChatRequirementsResp struct {
 	Token       string `json:"token"`
 	Persona     string `json:"persona"`
@@ -1719,6 +1877,72 @@ const (
 	PollStatusImageError  PollStatus = "image_error"
 )
 
+func (c *Client) LibraryImageIDs(ctx context.Context, convID string, excludedFileIDs map[string]struct{}) ([]string, error) {
+	convID = strings.TrimSpace(convID)
+	if convID == "" {
+		return nil, errors.New("conv_id required")
+	}
+	body := map[string]any{"limit": 20, "cursor": nil}
+	payload, err := common.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal file library request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/files/library", bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	c.commonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	res, err := c.hc.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, _ := io.ReadAll(res.Body)
+	if res.StatusCode >= 400 {
+		return nil, &UpstreamError{Status: res.StatusCode, Message: "files library failed", Body: string(raw)}
+	}
+	var out struct {
+		Items []struct {
+			FileID              string `json:"file_id"`
+			MimeType            string `json:"mime_type"`
+			LibraryFileCategory string `json:"library_file_category"`
+			State               string `json:"state"`
+			OriginationThreadID string `json:"origination_thread_id"`
+		} `json:"items"`
+	}
+	if err := common.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("decode files library: %w", err)
+	}
+	ids := make([]string, 0, len(out.Items))
+	seen := map[string]struct{}{}
+	for _, item := range out.Items {
+		fid := strings.TrimSpace(item.FileID)
+		if fid == "" || item.OriginationThreadID != convID {
+			continue
+		}
+		if item.State != "" && !strings.EqualFold(item.State, "ready") {
+			continue
+		}
+		if item.LibraryFileCategory != "" && !strings.EqualFold(item.LibraryFileCategory, "image") {
+			continue
+		}
+		if item.MimeType != "" && !strings.HasPrefix(strings.ToLower(item.MimeType), "image/") {
+			continue
+		}
+		if _, skip := excludedFileIDs[fid]; skip {
+			continue
+		}
+		if _, ok := seen[fid]; ok {
+			continue
+		}
+		seen[fid] = struct{}{}
+		ids = append(ids, fid)
+	}
+	return ids, nil
+}
+
 func (c *Client) PollConversationForImages(ctx context.Context, convID string, opt PollOpts) (PollStatus, []string, []string) {
 	if opt.MaxWait == 0 {
 		opt.MaxWait = 300 * time.Second
@@ -1742,6 +1966,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 	var firstAnyRefTs time.Time
 	var lastBroadSed []string
 	var consecutive429 int
+	var pollCount int
 
 	for time.Now().Before(deadline) {
 		select {
@@ -1763,6 +1988,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 			continue
 		}
 		consecutive429 = 0
+		pollCount++
 		if mappingContainsImageGenerationError(mapping) {
 			return PollStatusImageError, nil, nil
 		}
@@ -1771,6 +1997,11 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		mappingSedimentIDs = filterExcludedFileIDs(mappingSedimentIDs, excludedSediments)
 		if len(mappingFileIDs) > 0 {
 			return PollStatusIMG2, mappingFileIDs, mappingSedimentIDs
+		}
+		if pollCount == 1 || pollCount%6 == 0 {
+			if libraryFileIDs, err := c.LibraryImageIDs(ctx, convID, excludedFiles); err == nil && len(libraryFileIDs) > 0 {
+				return PollStatusIMG2, libraryFileIDs, mappingSedimentIDs
+			}
 		}
 		if len(mappingSedimentIDs) > 0 {
 			lastBroadSed = mappingSedimentIDs
@@ -1913,16 +2144,30 @@ func (c *Client) GetConversationHead(ctx context.Context, convID string) (string
 }
 
 func (c *Client) ImageDownloadURL(ctx context.Context, convID, fileRef string) (string, error) {
-	var apiURL string
 	if strings.HasPrefix(fileRef, "sed:") {
 		if convID == "" {
 			return "", errors.New("conv_id required for sediment")
 		}
 		fid := strings.TrimPrefix(fileRef, "sed:")
-		apiURL = fmt.Sprintf("%s/backend-api/conversation/%s/attachment/%s/download", c.opts.BaseURL, url.PathEscape(convID), url.PathEscape(fid))
-	} else {
-		apiURL = fmt.Sprintf("%s/backend-api/files/%s/download", c.opts.BaseURL, url.PathEscape(fileRef))
+		apiURL := fmt.Sprintf("%s/backend-api/conversation/%s/attachment/%s/download", c.opts.BaseURL, url.PathEscape(convID), url.PathEscape(fid))
+		return c.fetchImageDownloadURL(ctx, apiURL)
 	}
+
+	escapedRef := url.PathEscape(fileRef)
+	apiURL := fmt.Sprintf("%s/backend-api/files/%s/download", c.opts.BaseURL, escapedRef)
+	downloadURL, err := c.fetchImageDownloadURL(ctx, apiURL)
+	if err == nil {
+		return downloadURL, nil
+	}
+	legacyURL := fmt.Sprintf("%s/backend-api/files/download/%s", c.opts.BaseURL, escapedRef)
+	legacyDownloadURL, legacyErr := c.fetchImageDownloadURL(ctx, legacyURL)
+	if legacyErr == nil {
+		return legacyDownloadURL, nil
+	}
+	return "", err
+}
+
+func (c *Client) fetchImageDownloadURL(ctx context.Context, apiURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return "", err
@@ -1986,14 +2231,15 @@ func (c *Client) FetchImage(ctx context.Context, signedURL string, maxBytes int6
 }
 
 type UploadedFile struct {
-	FileID      string `json:"file_id"`
-	FileName    string `json:"file_name"`
-	FileSize    int    `json:"file_size"`
-	MimeType    string `json:"mime_type"`
-	UseCase     string `json:"use_case"`
-	Width       int    `json:"width,omitempty"`
-	Height      int    `json:"height,omitempty"`
-	DownloadURL string `json:"download_url"`
+	FileID        string `json:"file_id"`
+	LibraryFileID string `json:"library_file_id,omitempty"`
+	FileName      string `json:"file_name"`
+	FileSize      int    `json:"file_size"`
+	MimeType      string `json:"mime_type"`
+	UseCase       string `json:"use_case"`
+	Width         int    `json:"width,omitempty"`
+	Height        int    `json:"height,omitempty"`
+	DownloadURL   string `json:"download_url"`
 }
 
 func (c *Client) UploadFile(ctx context.Context, data []byte, fileName string) (*UploadedFile, error) {
@@ -2096,7 +2342,86 @@ func (c *Client) UploadFile(ctx context.Context, data []byte, fileName string) (
 	}
 	_ = common.Unmarshal(buf3, &step3Resp)
 	out.DownloadURL = step3Resp.DownloadURL
+	if strings.HasPrefix(mimeType, "image/") {
+		libraryFileID, err := c.ProcessUploadStream(ctx, step1Resp.FileID, fileName)
+		if err != nil {
+			return nil, err
+		}
+		out.LibraryFileID = libraryFileID
+	}
 	return out, nil
+}
+
+func (c *Client) ProcessUploadStream(ctx context.Context, fileID, fileName string) (string, error) {
+	fileID = strings.TrimSpace(fileID)
+	if fileID == "" {
+		return "", errors.New("file_id required")
+	}
+	body := map[string]any{
+		"file_id":                  fileID,
+		"use_case":                 "multimodal",
+		"index_for_retrieval":      false,
+		"file_name":                strings.TrimSpace(fileName),
+		"library_persistence_mode": "opportunistic",
+		"metadata":                 map[string]any{"store_in_library": true},
+		"entry_surface":            "chat_composer",
+	}
+	payload, err := common.Marshal(body)
+	if err != nil {
+		return "", fmt.Errorf("marshal process upload stream: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/files/process_upload_stream", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	c.commonHeaders(req)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	res, err := c.hc.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("process upload stream: %w", err)
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(res.Body)
+	if err != nil {
+		return "", err
+	}
+	if res.StatusCode >= 400 {
+		return "", &UpstreamError{Status: res.StatusCode, Message: "process upload stream failed", Body: string(raw)}
+	}
+	libraryFileID, err := parseProcessUploadStreamLibraryFileID(raw)
+	if err != nil {
+		return "", err
+	}
+	return libraryFileID, nil
+}
+
+func parseProcessUploadStreamLibraryFileID(raw []byte) (string, error) {
+	scanner := bufio.NewScanner(bytes.NewReader(raw))
+	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
+	libraryFileID := ""
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || line == "[DONE]" {
+			continue
+		}
+		line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if line == "" || line == "[DONE]" {
+			continue
+		}
+		var ev struct {
+			Extra struct {
+				MetadataObjectID string `json:"metadata_object_id"`
+			} `json:"extra"`
+		}
+		if err := common.Unmarshal([]byte(line), &ev); err == nil && strings.TrimSpace(ev.Extra.MetadataObjectID) != "" {
+			libraryFileID = strings.TrimSpace(ev.Extra.MetadataObjectID)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+	return libraryFileID, nil
 }
 
 type Attachment struct {

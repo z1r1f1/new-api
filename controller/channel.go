@@ -63,6 +63,51 @@ func parseStatusFilter(statusParam string) int {
 	}
 }
 
+func parseChannelStatusCodeFilter(statusCodeParam string) (int, bool) {
+	statusCode, err := strconv.Atoi(strings.TrimSpace(statusCodeParam))
+	if err != nil || statusCode < 100 || statusCode > 599 {
+		return 0, false
+	}
+	return statusCode, true
+}
+
+func applyChannelStatusCodeQuery(query *gorm.DB, statusCode int, ok bool) *gorm.DB {
+	if query == nil || !ok {
+		return query
+	}
+	compactPattern := fmt.Sprintf("%%\"last_status_code\":%d%%", statusCode)
+	spacedPattern := fmt.Sprintf("%%\"last_status_code\": %d%%", statusCode)
+	return query.Where("(other_info LIKE ? OR other_info LIKE ?)", compactPattern, spacedPattern)
+}
+
+func channelMatchesStatusCode(channel *model.Channel, statusCode int, ok bool) bool {
+	if !ok {
+		return true
+	}
+	if channel == nil || strings.TrimSpace(channel.OtherInfo) == "" {
+		return false
+	}
+	otherInfo := make(map[string]interface{})
+	if err := common.Unmarshal([]byte(channel.OtherInfo), &otherInfo); err != nil {
+		return false
+	}
+	lastStatusCode, err := strconv.Atoi(strings.TrimSpace(fmt.Sprint(otherInfo["last_status_code"])))
+	return err == nil && lastStatusCode == statusCode
+}
+
+func filterChannelsByStatusCode(channels []*model.Channel, statusCode int, ok bool) []*model.Channel {
+	if !ok {
+		return channels
+	}
+	filtered := make([]*model.Channel, 0, len(channels))
+	for _, ch := range channels {
+		if channelMatchesStatusCode(ch, statusCode, ok) {
+			filtered = append(filtered, ch)
+		}
+	}
+	return filtered
+}
+
 func clearChannelInfo(channel *model.Channel) {
 	if channel.ChannelInfo.IsMultiKey {
 		channel.ChannelInfo.MultiKeyDisabledReason = nil
@@ -129,6 +174,7 @@ func GetAllChannels(c *gin.Context) {
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
 	statusParam := c.Query("status")
+	statusCodeFilter, hasStatusCodeFilter := parseChannelStatusCodeFilter(c.Query("status_code"))
 	codexAccount := c.Query("codex_account")
 	group := c.Query("group")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
@@ -173,6 +219,9 @@ func GetAllChannels(c *gin.Context) {
 				if !channelMatchesCodexAccount(ch, codexAccount) {
 					continue
 				}
+				if !channelMatchesStatusCode(ch, statusCodeFilter, hasStatusCodeFilter) {
+					continue
+				}
 				filtered = append(filtered, ch)
 			}
 			channelData = append(channelData, filtered...)
@@ -185,6 +234,7 @@ func GetAllChannels(c *gin.Context) {
 			baseQuery = baseQuery.Where("type = ?", typeFilter)
 		}
 		baseQuery = applyCodexAccountChannelQuery(baseQuery, codexAccount)
+		baseQuery = applyChannelStatusCodeQuery(baseQuery, statusCodeFilter, hasStatusCodeFilter)
 		if statusFilter == common.ChannelStatusEnabled {
 			baseQuery = baseQuery.Where("status = ?", common.ChannelStatusEnabled)
 		} else if statusFilter == 0 {
@@ -208,6 +258,7 @@ func GetAllChannels(c *gin.Context) {
 	countQuery := model.DB.Model(&model.Channel{})
 	countQuery = model.ApplyChannelGroupFilter(countQuery, group)
 	countQuery = applyCodexAccountChannelQuery(countQuery, codexAccount)
+	countQuery = applyChannelStatusCodeQuery(countQuery, statusCodeFilter, hasStatusCodeFilter)
 	if statusFilter == common.ChannelStatusEnabled {
 		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
 	} else if statusFilter == 0 {
@@ -309,6 +360,7 @@ func SearchChannels(c *gin.Context) {
 	group := c.Query("group")
 	modelKeyword := c.Query("model")
 	statusParam := c.Query("status")
+	statusCodeFilter, hasStatusCodeFilter := parseChannelStatusCodeFilter(c.Query("status_code"))
 	codexAccount := c.Query("codex_account")
 	statusFilter := parseStatusFilter(statusParam)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
@@ -359,6 +411,7 @@ func SearchChannels(c *gin.Context) {
 	}
 
 	channelData = filterChannelsByCodexAccount(channelData, codexAccount)
+	channelData = filterChannelsByStatusCode(channelData, statusCodeFilter, hasStatusCodeFilter)
 
 	// calculate type counts for search results
 	typeCounts := make(map[int64]int64)

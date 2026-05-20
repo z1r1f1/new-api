@@ -1,17 +1,20 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/relay/channel/chatgptimg"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -356,6 +359,72 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 	return availableBalanceUsd, nil
 }
 
+type chatGPTImageBalanceData struct {
+	ImageQuotaRemaining int      `json:"image_quota_remaining"`
+	ImageQuotaTotal     int      `json:"image_quota_total,omitempty"`
+	ImageQuotaResetAt   int64    `json:"image_quota_reset_at,omitempty"`
+	DefaultModelSlug    string   `json:"default_model_slug,omitempty"`
+	BlockedFeatures     []string `json:"blocked_features,omitempty"`
+}
+
+func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPTImageBalanceData, error) {
+	if channel == nil {
+		return 0, nil, errors.New("channel is nil")
+	}
+	settings := channel.GetSetting()
+	proxyURL := strings.TrimSpace(settings.Proxy)
+	oauthKey, err := chatgptimg.ParseOAuthKey(channel.Key)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	accessToken, err := chatgptimg.ResolveAccessToken(ctx, oauthKey, proxyURL)
+	if err != nil {
+		return 0, nil, err
+	}
+	baseURL := strings.TrimSpace(channel.GetBaseURL())
+	if baseURL == "" {
+		baseURL = constant.ChannelBaseURLs[channel.Type]
+	}
+	client, err := chatgptimg.NewClient(chatgptimg.ClientOptions{
+		BaseURL:    baseURL,
+		AuthToken:  accessToken,
+		DeviceID:   strings.TrimSpace(oauthKey.DeviceID),
+		SessionID:  strings.TrimSpace(oauthKey.SessionID),
+		ProxyURL:   proxyURL,
+		Timeout:    90 * time.Second,
+		SSETimeout: 90 * time.Second,
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+
+	info, err := client.ProbeImageQuota(ctx)
+	if err != nil {
+		return 0, nil, err
+	}
+	if info == nil || info.ImageQuotaRemaining < 0 {
+		return 0, nil, errors.New("未找到 ChatGPT 图片额度信息")
+	}
+
+	data := &chatGPTImageBalanceData{
+		ImageQuotaRemaining: info.ImageQuotaRemaining,
+		ImageQuotaResetAt:   info.ImageQuotaResetAt,
+		DefaultModelSlug:    info.DefaultModelSlug,
+		BlockedFeatures:     info.BlockedFeatures,
+	}
+	if info.ImageQuotaTotal > 0 {
+		data.ImageQuotaTotal = info.ImageQuotaTotal
+	}
+
+	balance := float64(info.ImageQuotaRemaining)
+	channel.UpdateBalance(balance)
+	return balance, data, nil
+}
+
 func updateChannelBalance(channel *model.Channel) (float64, error) {
 	baseURL := constant.ChannelBaseURLs[channel.Type]
 	if channel.GetBaseURL() == "" {
@@ -436,6 +505,21 @@ func UpdateChannelBalance(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "多密钥渠道不支持余额查询",
+		})
+		return
+	}
+	if channel.Type == constant.ChannelTypeChatGPTImage {
+		balance, data, err := updateChannelChatGPTImageBalance(channel)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"success":  true,
+			"message":  "",
+			"balance":  balance,
+			"currency": "images",
+			"data":     data,
 		})
 		return
 	}

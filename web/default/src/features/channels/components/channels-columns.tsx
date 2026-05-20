@@ -406,6 +406,8 @@ function BalanceCell({ channel }: { channel: Channel }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const isTagRow = isTagAggregateRow(channel)
+  const isCodex = channel.type === 57
+  const isChatGPTWeb = channel.type === 58
   const balance = channel.balance || 0
   const usedQuota = channel.used_quota || 0
   const [isUpdating, setIsUpdating] = useState(false)
@@ -418,7 +420,12 @@ function BalanceCell({ channel }: { channel: Channel }) {
     tokenSuffix && value !== '-' ? `${value}${tokenSuffix}` : value
 
   const usedDisplay = withSuffix(formatQuotaValue(usedQuota))
-  const remainingDisplay = withSuffix(formatBalance(balance))
+  const formatImageCount = (value: number) =>
+    String(Math.max(0, Math.trunc(value)))
+  let remainingDisplay = withSuffix(formatBalance(balance))
+  if (isChatGPTWeb) {
+    remainingDisplay = `${formatImageCount(balance)} ${t('images')}`
+  }
 
   // Tag row: only show cumulative used quota
   if (isTagRow) {
@@ -434,12 +441,24 @@ function BalanceCell({ channel }: { channel: Channel }) {
 
   // Regular channel row: show used and remaining with click to update
   const variant = getBalanceVariant(balance)
+  let clickableText = remainingDisplay
+  if (isUpdating) {
+    clickableText = t('Updating...')
+  } else if (isCodex) {
+    clickableText = t('Account Info')
+  }
+  let tooltipPrimary = `${t('Remaining:')} ${remainingDisplay}`
+  if (isCodex) {
+    tooltipPrimary = t('Click to view Codex usage')
+  } else if (isChatGPTWeb) {
+    tooltipPrimary = `${t('Image quota remaining:')} ${remainingDisplay}`
+  }
 
   const handleClickUpdate = async () => {
     if (isUpdating) return
 
     setIsUpdating(true)
-    if (channel.type === 57) {
+    if (isCodex) {
       try {
         const res = await getCodexUsage(channel.id)
         if (!res.success) {
@@ -490,7 +509,7 @@ function BalanceCell({ channel }: { channel: Channel }) {
               <span
                 className={cn(
                   'cursor-pointer transition-opacity hover:opacity-70',
-                  channel.type === 57
+                  isCodex
                     ? 'text-primary'
                     : textColorMap[isUpdating ? 'neutral' : variant]
                 )}
@@ -498,19 +517,11 @@ function BalanceCell({ channel }: { channel: Channel }) {
               />
             }
           >
-            {isUpdating
-              ? 'Updating...'
-              : channel.type === 57
-                ? t('Account Info')
-                : remainingDisplay}
+            {clickableText}
           </TooltipTrigger>
           <TooltipContent>
-            <p>
-              {channel.type === 57
-                ? t('Click to view Codex usage')
-                : `${t('Remaining:')} ${remainingDisplay}`}
-            </p>
-            {channel.type !== 57 && <p>{t('Click to update balance')}</p>}
+            <p>{tooltipPrimary}</p>
+            {!isCodex && <p>{t('Click to update balance')}</p>}
           </TooltipContent>
         </Tooltip>
       </div>

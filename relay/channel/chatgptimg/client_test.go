@@ -2,7 +2,9 @@ package chatgptimg
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -233,6 +235,10 @@ func TestFilterExcludedFileIDsRemovesUploadedReference(t *testing.T) {
 
 func TestPollConversationForImagesReturnsPreviewWhenSedimentIsReady(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/backend-api/files/library" {
+			_, _ = w.Write([]byte(`{"items": []}`))
+			return
+		}
 		if r.URL.Path != "/backend-api/conversation/conv-1" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -278,6 +284,10 @@ func TestPollConversationForImagesReturnsPreviewWhenSedimentIsReady(t *testing.T
 
 func TestPollConversationForImagesDoesNotReturnUploadedReference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/backend-api/files/library" {
+			_, _ = w.Write([]byte(`{"items": []}`))
+			return
+		}
 		if r.URL.Path != "/backend-api/conversation/conv-1" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -474,6 +484,10 @@ func TestParseChatSSEExtractsBareDeltaAfterAppendStarts(t *testing.T) {
 
 func TestPollConversationForImagesIgnoresBaselineToolMessages(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/backend-api/files/library" {
+			_, _ = w.Write([]byte(`{"items": []}`))
+			return
+		}
 		if r.URL.Path != "/backend-api/conversation/conv-1" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -520,5 +534,219 @@ func TestPollConversationForImagesIgnoresBaselineToolMessages(t *testing.T) {
 	}
 	if len(sids) != 1 || sids[0] != "new_sed" {
 		t.Fatalf("expected only new sediment id, got %#v", sids)
+	}
+}
+
+func TestProbeImageQuotaReadsConversationInitLimits(t *testing.T) {
+	var sawInit bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte("ok"))
+		case "/backend-api/conversation/init":
+			sawInit = true
+			if r.Method != http.MethodPost {
+				t.Fatalf("expected POST, got %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Fatalf("unexpected authorization header: %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"blocked_features":["voice"],
+				"default_model_slug":"gpt-5.5-thinking",
+				"limits_progress":[
+					{"feature_name":"message_cap","remaining":99,"max_value":100,"reset_after":"2026-05-15T10:00:00Z"},
+					{"feature_name":"image_generation","remaining":7,"max_value":50,"reset_after":"2026-05-15T09:00:00Z"},
+					{"feature_name":"image_edit","remaining":3,"cap":25,"reset_after":"2026-05-15T08:00:00Z"}
+				]
+			}`))
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: server.URL, AuthToken: "test-token", DeviceID: "test-device", Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	info, err := client.ProbeImageQuota(context.Background())
+	if err != nil {
+		t.Fatalf("probe image quota: %v", err)
+	}
+	if !sawInit {
+		t.Fatal("expected conversation/init to be called")
+	}
+	if info.DefaultModelSlug != "gpt-5.5-thinking" {
+		t.Fatalf("unexpected default model: %q", info.DefaultModelSlug)
+	}
+	if info.ImageQuotaRemaining != 3 {
+		t.Fatalf("expected min remaining 3, got %d", info.ImageQuotaRemaining)
+	}
+	if info.ImageQuotaTotal != 50 {
+		t.Fatalf("expected max total 50, got %d", info.ImageQuotaTotal)
+	}
+	if info.ImageQuotaResetAt != 1778832000 {
+		t.Fatalf("expected earliest reset timestamp 1778832000, got %d", info.ImageQuotaResetAt)
+	}
+	if len(info.BlockedFeatures) != 1 || info.BlockedFeatures[0] != "voice" {
+		t.Fatalf("unexpected blocked features: %#v", info.BlockedFeatures)
+	}
+}
+
+func TestProbeImageQuotaFallsBackTotalFromUsed(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			_, _ = w.Write([]byte("ok"))
+			return
+		}
+		if r.URL.Path != "/backend-api/conversation/init" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"limits_progress":[
+				{"feature_name":"img_gen","remaining":8,"used":12}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(ClientOptions{BaseURL: server.URL, AuthToken: "test-token", DeviceID: "test-device", Timeout: 2 * time.Second})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	info, err := client.ProbeImageQuota(context.Background())
+	if err != nil {
+		t.Fatalf("probe image quota: %v", err)
+	}
+	if info.ImageQuotaRemaining != 8 {
+		t.Fatalf("expected remaining 8, got %d", info.ImageQuotaRemaining)
+	}
+	if info.ImageQuotaTotal != 20 {
+		t.Fatalf("expected fallback total 20, got %d", info.ImageQuotaTotal)
+	}
+}
+
+func TestParseProcessUploadStreamLibraryFileID(t *testing.T) {
+	got, err := parseProcessUploadStreamLibraryFileID([]byte("data: {\"event\":\"done\",\"extra\":{\"metadata_object_id\":\"file-lib-1\"}}\n\n[DONE]\n"))
+	if err != nil {
+		t.Fatalf("parse returned error: %v", err)
+	}
+	if got != "file-lib-1" {
+		t.Fatalf("expected library file id, got %q", got)
+	}
+}
+
+func TestUploadFileProcessesImageIntoLibrary(t *testing.T) {
+	pngData, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lCqF4gAAAABJRU5ErkJggg==")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var processCalled bool
+	var uploadURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/files":
+			uploadURL = "http://" + r.Host + "/upload"
+			_, _ = w.Write([]byte(`{"file_id":"file-upload-1","upload_url":"` + uploadURL + `"}`))
+		case "/upload":
+			if r.Method != http.MethodPut {
+				t.Fatalf("expected PUT upload, got %s", r.Method)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "/backend-api/files/file-upload-1/uploaded":
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/image.png"}`))
+		case "/backend-api/files/process_upload_stream":
+			processCalled = true
+			if ct := r.Header.Get("Accept"); ct != "text/event-stream" {
+				t.Fatalf("expected event-stream accept, got %q", ct)
+			}
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), `"library_persistence_mode":"opportunistic"`) {
+				t.Fatalf("process body missing library persistence mode: %s", body)
+			}
+			_, _ = w.Write([]byte("data: {\"extra\":{\"metadata_object_id\":\"file-library-1\"}}\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{opts: ClientOptions{BaseURL: server.URL, UserAgent: defaultUserAgent}, hc: server.Client()}
+	uploaded, err := client.UploadFile(context.Background(), pngData, "reference.png")
+	if err != nil {
+		t.Fatalf("UploadFile returned error: %v", err)
+	}
+	if !processCalled {
+		t.Fatal("expected process_upload_stream to be called")
+	}
+	if uploaded.FileID != "file-upload-1" || uploaded.LibraryFileID != "file-library-1" {
+		t.Fatalf("unexpected upload metadata: %#v", uploaded)
+	}
+}
+
+func TestLibraryImageIDsFiltersCurrentConversationReadyImages(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/files/library" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"items": [
+				{"file_id":"file-ref","mime_type":"image/png","library_file_category":"image","state":"ready","origination_thread_id":"conv-1"},
+				{"file_id":"file-generated","mime_type":"image/png","library_file_category":"image","state":"ready","origination_thread_id":"conv-1"},
+				{"file_id":"file-other","mime_type":"image/png","library_file_category":"image","state":"ready","origination_thread_id":"conv-2"},
+				{"file_id":"file-pending","mime_type":"image/png","library_file_category":"image","state":"processing","origination_thread_id":"conv-1"}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	client := &Client{opts: ClientOptions{BaseURL: server.URL}, hc: server.Client()}
+	ids, err := client.LibraryImageIDs(context.Background(), "conv-1", map[string]struct{}{"file-ref": {}})
+	if err != nil {
+		t.Fatalf("LibraryImageIDs returned error: %v", err)
+	}
+	if len(ids) != 1 || ids[0] != "file-generated" {
+		t.Fatalf("expected only generated library file, got %#v", ids)
+	}
+}
+
+func TestPollConversationForImagesUsesLibraryFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/conversation/conv-1":
+			_, _ = w.Write([]byte(`{"mapping": {}}`))
+		case "/backend-api/files/library":
+			_, _ = w.Write([]byte(`{"items":[{"file_id":"file-library-generated","mime_type":"image/png","library_file_category":"image","state":"ready","origination_thread_id":"conv-1"}]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{opts: ClientOptions{BaseURL: server.URL}, hc: server.Client()}
+	status, fids, sids := client.PollConversationForImages(context.Background(), "conv-1", PollOpts{
+		MaxWait:  50 * time.Millisecond,
+		Interval: time.Millisecond,
+	})
+	if status != PollStatusIMG2 {
+		t.Fatalf("expected img2 status, got %s", status)
+	}
+	if len(fids) != 1 || fids[0] != "file-library-generated" || len(sids) != 0 {
+		t.Fatalf("unexpected refs fids=%#v sids=%#v", fids, sids)
+	}
+}
+
+func TestUploadedFileIDSetIncludesLibraryFileID(t *testing.T) {
+	got := uploadedFileIDSet([]*UploadedFile{{FileID: "file-upload", LibraryFileID: "file-library"}})
+	if _, ok := got["file-upload"]; !ok {
+		t.Fatalf("missing file id in set: %#v", got)
+	}
+	if _, ok := got["file-library"]; !ok {
+		t.Fatalf("missing library file id in set: %#v", got)
 	}
 }

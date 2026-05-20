@@ -4505,6 +4505,17 @@
     "Failed to take photo": "拍照失败",
     "Failed to read attachment": "读取附件失败",
     "Web search enabled": "已开启联网搜索",
-    "Web search disabled": "已关闭联网搜索"
+    "Web search disabled": "已关闭联网搜索",
+    "Blocked features": "已阻止功能",
+    "Current Image Quota": "当前图片额度",
+    "Default model": "默认模型",
+    "Filter by response code...": "按响应码筛选...",
+    "Image quota remaining:": "图片剩余额度：",
+    "Image quota reset time": "图片额度重置时间",
+    "Image quota updated: {{quota}}": "图片额度已更新：{{quota}}",
+    "Query Image Quota": "查询图片额度",
+    "Update Image Quota": "更新图片额度",
+    "Updating...": "更新中...",
+    "images": "张图片"
   }
 }

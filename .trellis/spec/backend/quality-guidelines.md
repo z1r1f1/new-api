@@ -138,6 +138,55 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### Admin channel list filters
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `GET /api/channel`, `GET /api/channel/search`, or the default frontend channel table filters.
+
+#### 2. Signatures
+
+- List API: `GET /api/channel?status_code=<100-599>`
+- Search API: `GET /api/channel/search?status_code=<100-599>`
+- Frontend URL state key: `statusCode`; backend query parameter: `status_code`.
+
+#### 3. Contracts
+
+- `status_code` filters by `other_info.last_status_code`, which is updated by relay/test logging paths.
+- Invalid or out-of-range values must be ignored rather than returning an error, matching existing optional filter behavior.
+- The filter must apply to paginated list totals and search totals so pagination stays consistent.
+
+#### 4. Validation & Error Matrix
+
+- `status_code` absent/empty/invalid -> no status-code filtering.
+- `status_code` in `100..599` -> include only channels whose last recorded status code equals the value.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `/api/channel?status_code=429` returns only channels with `other_info.last_status_code == 429`.
+- Base: `/api/channel` preserves the unfiltered channel list.
+- Bad: client-side-only filtering after pagination; this hides matching channels on other pages and gives wrong totals.
+
+#### 6. Tests Required
+
+- Controller tests for list and search endpoints filtering by `status_code`.
+- Frontend typecheck/lint after adding channel table URL/filter fields.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```ts
+// Filters only the current page after the server already paginated.
+rows.filter((row) => row.lastStatusCode === 429)
+```
+
+Correct:
+
+```ts
+getChannels({ status_code: '429', p, page_size })
+```
+
 ### ChatGPT Web image requests and playground async image tasks
 
 #### 1. Scope / Trigger
@@ -159,6 +208,8 @@ When adding or modifying a channel:
 - Explicit `response_format` values must be preserved for normal image models. Exception: ChatGPT Web `gpt-image-2` / `chatgpt-image-2` (including model aliases mapped upstream to those names) must force `b64_json`, because downstream image-edit clients reuse the generated image bytes and fail when the gateway returns only a URL.
 - The ChatGPT Web `gpt-image-2` / `chatgpt-image-2` force-to-base64 rule must be enforced at both request normalization and response construction. A stale or overridden `response_format=url` must not cause `url` to be emitted for these models.
 - OpenAI-compatible image JSON must omit empty image fields. A base64 image item should serialize as `b64_json` without an empty `url` key, so clients do not choose the wrong representation for follow-up image edits.
+- ChatGPT Web reference image uploads must complete the full web upload chain: `POST /backend-api/files`, blob `PUT`, `POST /backend-api/files/{file_id}/uploaded`, then `POST /backend-api/files/process_upload_stream`. The process step should store `extra.metadata_object_id` as the uploaded file's library id.
+- ChatGPT Web image polling must use the conversation mapping first and periodically fall back to `POST /backend-api/files/library`, filtering by `origination_thread_id`, ready image state/category, and excluding both uploaded `file_id` and uploaded library id so reference images are not returned as generated images.
 - Playground async image tasks persist task ids client-side while the assistant message is loading/streaming, and resume polling after reload if the same session/message is still pending.
 - Playground wait text is user-facing UI and must go through frontend i18n; do not display provider progress percentages as real progress unless the backend can prove they are meaningful.
 
@@ -175,6 +226,7 @@ When adding or modifying a channel:
 - Good: multipart edit form contains `response_format=b64_json`; parser stores it and ChatGPT Web response omits `url`.
 - Good: `gpt-image-2` request, or a mapped alias whose upstream model is `gpt-image-2`, contains `response_format=url`; ChatGPT Web overrides it to `b64_json` so follow-up image-to-image clients receive base64 media.
 - Good: `gpt-image-2` response payload contains `data[].b64_json` and no `data[].url` field, even if a stale request body or override tried to force `url`.
+- Good: uploaded reference images record both `file_id` and `library_file_id`; polling excludes both values and can still find generated images from `/backend-api/files/library` when the conversation mapping has not exposed a final file id yet.
 - Base: image form/body omits `response_format`; ChatGPT Web image conversion defaults to `b64_json`.
 - Bad: edit response returns only a gateway URL to an image-model client expecting base64; clients can throw `Invalid data content. Content string is not a base64-encoded media.`
 
@@ -182,6 +234,7 @@ When adding or modifying a channel:
 
 - `relay/helper`: regression test that multipart image edits preserve `response_format`.
 - `relay/channel/chatgptimg`: regression tests that image generations/edits default to `b64_json` and explicit formats are preserved.
+- `relay/channel/chatgptimg`: regression tests that reference uploads call `process_upload_stream`, parse `metadata_object_id`, exclude uploaded library ids, and use `/backend-api/files/library` as a generated-image fallback.
 - `web/default`: run `bun run typecheck` and `bun run lint` after changing playground state, i18n, or image markdown helpers.
 
 #### 7. Wrong vs Correct

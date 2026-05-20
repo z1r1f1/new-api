@@ -55,6 +55,104 @@ func TestGetAllChannelsFiltersByGroupWithoutKeyword(t *testing.T) {
 	require.Equal(t, "vip-only", response.Data.Items[0].Name)
 }
 
+func TestGetAllChannelsFiltersByLastStatusCode(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	okChannel := &model.Channel{
+		Name:   "status-429",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-429",
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}
+	okChannel.SetOtherInfo(map[string]interface{}{"last_status_code": 429})
+	require.NoError(t, db.Create(okChannel).Error)
+
+	otherChannel := &model.Channel{
+		Name:   "status-200",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-200",
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}
+	otherChannel.SetOtherInfo(map[string]interface{}{"last_status_code": 200})
+	require.NoError(t, db.Create(otherChannel).Error)
+	require.NoError(t, db.Create(&model.Channel{
+		Name:   "status-empty",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-empty",
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest("GET", "/api/channel?status_code=429&p=1&page_size=20", nil)
+
+	GetAllChannels(ctx)
+
+	require.Equal(t, 200, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []model.Channel `json:"items"`
+			Total int             `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Equal(t, 1, response.Data.Total)
+	require.Len(t, response.Data.Items, 1)
+	require.Equal(t, "status-429", response.Data.Items[0].Name)
+}
+
+func TestSearchChannelsFiltersByLastStatusCode(t *testing.T) {
+	db := setupModelListControllerTestDB(t)
+	matchChannel := &model.Channel{
+		Name:   "search-status-500",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-search-500",
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}
+	matchChannel.SetOtherInfo(map[string]interface{}{"last_status_code": 500})
+	require.NoError(t, db.Create(matchChannel).Error)
+
+	missChannel := &model.Channel{
+		Name:   "search-status-200",
+		Type:   constant.ChannelTypeOpenAI,
+		Key:    "sk-search-200",
+		Models: "gpt-4o",
+		Group:  "default",
+		Status: common.ChannelStatusEnabled,
+	}
+	missChannel.SetOtherInfo(map[string]interface{}{"last_status_code": 200})
+	require.NoError(t, db.Create(missChannel).Error)
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest("GET", "/api/channel/search?keyword=search&status_code=500&p=1&page_size=20", nil)
+
+	SearchChannels(ctx)
+
+	require.Equal(t, 200, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Items []model.Channel `json:"items"`
+			Total int             `json:"total"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	require.Equal(t, 1, response.Data.Total)
+	require.Len(t, response.Data.Items, 1)
+	require.Equal(t, "search-status-500", response.Data.Items[0].Name)
+}
+
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 	info := &relaycommon.RelayInfo{
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{

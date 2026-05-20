@@ -109,6 +109,7 @@ export function ChannelsTable() {
       { columnId: 'status', searchKey: 'status', type: 'array' },
       { columnId: 'type', searchKey: 'type', type: 'array' },
       { columnId: 'group', searchKey: 'group', type: 'array' },
+      { columnId: 'last_status_code', searchKey: 'statusCode', type: 'string' },
       {
         columnId: 'codex_account_type',
         searchKey: 'codexAccount',
@@ -132,15 +133,26 @@ export function ChannelsTable() {
       ?.value as string[]) || []
   const modelFilterFromUrl =
     (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
+  const statusCodeFilterFromUrl =
+    (columnFilters.find((f) => f.id === 'last_status_code')?.value as string) ||
+    ''
 
   // Local state for immediate input feedback
   const [modelFilterInput, setModelFilterInput] = useState(modelFilterFromUrl)
+  const [statusCodeFilterInput, setStatusCodeFilterInput] = useState(
+    statusCodeFilterFromUrl
+  )
   const debouncedModelFilter = useDebounce(modelFilterInput, 500)
+  const debouncedStatusCodeFilter = useDebounce(statusCodeFilterInput, 500)
 
   // Sync local input with URL when URL changes (e.g., from back/forward navigation)
   useEffect(() => {
     setModelFilterInput(modelFilterFromUrl)
   }, [modelFilterFromUrl])
+
+  useEffect(() => {
+    setStatusCodeFilterInput(statusCodeFilterFromUrl)
+  }, [statusCodeFilterFromUrl])
 
   // Update URL when debounced value changes
   useEffect(() => {
@@ -154,7 +166,26 @@ export function ChannelsTable() {
     }
   }, [debouncedModelFilter, modelFilterFromUrl, onColumnFiltersChange])
 
+  useEffect(() => {
+    if (debouncedStatusCodeFilter !== statusCodeFilterFromUrl) {
+      onColumnFiltersChange((prev) => {
+        const filtered = prev.filter((f) => f.id !== 'last_status_code')
+        return debouncedStatusCodeFilter
+          ? [
+              ...filtered,
+              { id: 'last_status_code', value: debouncedStatusCodeFilter },
+            ]
+          : filtered
+      })
+    }
+  }, [
+    debouncedStatusCodeFilter,
+    statusCodeFilterFromUrl,
+    onColumnFiltersChange,
+  ])
+
   const modelFilter = modelFilterFromUrl
+  const statusCodeFilter = statusCodeFilterFromUrl.trim()
   const codexAccountParam =
     codexAccountFilter.length > 0 && !codexAccountFilter.includes('all')
       ? codexAccountFilter[0]
@@ -209,6 +240,7 @@ export function ChannelsTable() {
     queryKey: channelsQueryKeys.list({
       keyword: globalFilter,
       model: modelFilter,
+      status_code: statusCodeFilter || undefined,
       group:
         groupFilter.length > 0 && !groupFilter.includes('all')
           ? groupFilter[0]
@@ -233,6 +265,7 @@ export function ChannelsTable() {
         return searchChannels({
           keyword: globalFilter,
           model: modelFilter,
+          status_code: statusCodeFilter || undefined,
           group:
             groupFilter.length > 0 && !groupFilter.includes('all')
               ? groupFilter[0]
@@ -254,6 +287,7 @@ export function ChannelsTable() {
         })
       } else {
         return getChannels({
+          status_code: statusCodeFilter || undefined,
           group:
             groupFilter.length > 0 && !groupFilter.includes('all')
               ? groupFilter[0]
@@ -412,12 +446,24 @@ export function ChannelsTable() {
       toolbarProps={{
         searchPlaceholder: t('Filter by name, ID, or key...'),
         additionalSearch: (
-          <Input
-            placeholder={t('Filter by model...')}
-            value={modelFilterInput}
-            onChange={(e) => setModelFilterInput(e.target.value)}
-            className='w-full sm:w-[150px] lg:w-[180px]'
-          />
+          <div className='flex w-full flex-col gap-2 sm:w-auto sm:flex-row'>
+            <Input
+              placeholder={t('Filter by model...')}
+              value={modelFilterInput}
+              onChange={(e) => setModelFilterInput(e.target.value)}
+              className='w-full sm:w-[150px] lg:w-[180px]'
+            />
+            <Input
+              inputMode='numeric'
+              pattern='[0-9]*'
+              placeholder={t('Filter by response code...')}
+              value={statusCodeFilterInput}
+              onChange={(e) => {
+                setStatusCodeFilterInput(e.target.value.replace(/\D/g, ''))
+              }}
+              className='w-full sm:w-[150px] lg:w-[180px]'
+            />
+          </div>
         ),
         filters: [
           {
