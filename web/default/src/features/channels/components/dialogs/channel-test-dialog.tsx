@@ -236,7 +236,7 @@ export function ChannelTestDialog({
       } catch (error: unknown) {
         updateTestResult(model, {
           status: 'error',
-          error: error instanceof Error ? error.message : 'Test failed',
+          error: error instanceof Error ? error.message : t('Test failed'),
         })
       } finally {
         queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
@@ -250,6 +250,7 @@ export function ChannelTestDialog({
       markModelTesting,
       streamDisabled,
       queryClient,
+      t,
       updateTestResult,
     ]
   )

@@ -167,16 +167,38 @@ func filterChannelsByCodexAccount(channels []*model.Channel, account string) []*
 	return filtered
 }
 
+func applyChannelStatusFilter(query *gorm.DB, statusFilter int) *gorm.DB {
+	if statusFilter == common.ChannelStatusEnabled {
+		return query.Where("status = ?", common.ChannelStatusEnabled)
+	}
+	if statusFilter == 0 {
+		return query.Where("status != ?", common.ChannelStatusEnabled)
+	}
+	return query
+}
+
+func buildChannelListQuery(group string, statusFilter int, typeFilter int, codexAccount string, statusCode int, hasStatusCode bool) *gorm.DB {
+	query := model.DB.Model(&model.Channel{})
+	query = model.ApplyChannelGroupFilter(query, group)
+	query = applyChannelStatusFilter(query, statusFilter)
+	if typeFilter >= 0 {
+		query = query.Where("type = ?", typeFilter)
+	}
+	query = applyCodexAccountChannelQuery(query, codexAccount)
+	query = applyChannelStatusCodeQuery(query, statusCode, hasStatusCode)
+	return query
+}
+
 func GetAllChannels(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	channelData := make([]*model.Channel, 0)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
 	enableTagMode, _ := strconv.ParseBool(c.Query("tag_mode"))
+	groupFilter := model.NormalizeChannelGroupFilter(c.Query("group"))
 	statusParam := c.Query("status")
 	statusCodeFilter, hasStatusCodeFilter := parseChannelStatusCodeFilter(c.Query("status_code"))
 	codexAccount := c.Query("codex_account")
-	group := c.Query("group")
 	// statusFilter: -1 all, 1 enabled, 0 disabled (include auto & manual)
 	statusFilter := parseStatusFilter(statusParam)
 	// type filter
@@ -191,31 +213,33 @@ func GetAllChannels(c *gin.Context) {
 	var total int64
 
 	if enableTagMode {
-		tags, err := model.GetPaginatedTags(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+		tags, err := model.GetPaginatedChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter, codexAccount, statusCodeFilter, hasStatusCodeFilter), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 		if err != nil {
 			common.SysError("failed to get paginated tags: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签失败，请稍后重试"})
+			return
+		}
+		total, err = model.CountChannelTags(buildChannelListQuery(groupFilter, statusFilter, typeFilter, codexAccount, statusCodeFilter, hasStatusCodeFilter))
+		if err != nil {
+			common.SysError("failed to count tags: " + err.Error())
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签数量失败，请稍后重试"})
 			return
 		}
 		for _, tag := range tags {
 			if tag == nil || *tag == "" {
 				continue
 			}
-			tagChannels, err := model.GetChannelsByTag(*tag, idSort, false, sortOptions)
+			var tagChannels []*model.Channel
+			err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter, codexAccount, statusCodeFilter, hasStatusCodeFilter).Where("tag = ?", *tag)).
+				Omit("key").
+				Find(&tagChannels).Error
 			if err != nil {
-				continue
+				common.SysError("failed to get channels by tag: " + err.Error())
+				c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取标签渠道失败，请稍后重试"})
+				return
 			}
-			filtered := make([]*model.Channel, 0)
+			filtered := make([]*model.Channel, 0, len(tagChannels))
 			for _, ch := range tagChannels {
-				if statusFilter == common.ChannelStatusEnabled && ch.Status != common.ChannelStatusEnabled {
-					continue
-				}
-				if statusFilter == 0 && ch.Status == common.ChannelStatusEnabled {
-					continue
-				}
-				if typeFilter >= 0 && ch.Type != typeFilter {
-					continue
-				}
 				if !channelMatchesCodexAccount(ch, codexAccount) {
 					continue
 				}
@@ -226,24 +250,17 @@ func GetAllChannels(c *gin.Context) {
 			}
 			channelData = append(channelData, filtered...)
 		}
-		total, _ = model.CountAllTags()
 	} else {
-		baseQuery := model.DB.Model(&model.Channel{})
-		baseQuery = model.ApplyChannelGroupFilter(baseQuery, group)
-		if typeFilter >= 0 {
-			baseQuery = baseQuery.Where("type = ?", typeFilter)
+		if err := buildChannelListQuery(groupFilter, statusFilter, typeFilter, codexAccount, statusCodeFilter, hasStatusCodeFilter).Count(&total).Error; err != nil {
+			common.SysError("failed to count channels: " + err.Error())
+			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道数量失败，请稍后重试"})
+			return
 		}
-		baseQuery = applyCodexAccountChannelQuery(baseQuery, codexAccount)
-		baseQuery = applyChannelStatusCodeQuery(baseQuery, statusCodeFilter, hasStatusCodeFilter)
-		if statusFilter == common.ChannelStatusEnabled {
-			baseQuery = baseQuery.Where("status = ?", common.ChannelStatusEnabled)
-		} else if statusFilter == 0 {
-			baseQuery = baseQuery.Where("status != ?", common.ChannelStatusEnabled)
-		}
-
-		baseQuery.Count(&total)
-
-		err := sortOptions.Apply(baseQuery).Limit(pageInfo.GetPageSize()).Offset(pageInfo.GetStartIdx()).Omit("key").Find(&channelData).Error
+		err := sortOptions.Apply(buildChannelListQuery(groupFilter, statusFilter, typeFilter, codexAccount, statusCodeFilter, hasStatusCodeFilter)).
+			Limit(pageInfo.GetPageSize()).
+			Offset(pageInfo.GetStartIdx()).
+			Omit("key").
+			Find(&channelData).Error
 		if err != nil {
 			common.SysError("failed to get channels: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道列表失败，请稍后重试"})
@@ -255,20 +272,16 @@ func GetAllChannels(c *gin.Context) {
 		clearChannelInfo(datum)
 	}
 
-	countQuery := model.DB.Model(&model.Channel{})
-	countQuery = model.ApplyChannelGroupFilter(countQuery, group)
-	countQuery = applyCodexAccountChannelQuery(countQuery, codexAccount)
-	countQuery = applyChannelStatusCodeQuery(countQuery, statusCodeFilter, hasStatusCodeFilter)
-	if statusFilter == common.ChannelStatusEnabled {
-		countQuery = countQuery.Where("status = ?", common.ChannelStatusEnabled)
-	} else if statusFilter == 0 {
-		countQuery = countQuery.Where("status != ?", common.ChannelStatusEnabled)
-	}
+	countQuery := buildChannelListQuery(groupFilter, statusFilter, -1, codexAccount, statusCodeFilter, hasStatusCodeFilter)
 	var results []struct {
 		Type  int64
 		Count int64
 	}
-	_ = countQuery.Select("type, count(*) as count").Group("type").Find(&results).Error
+	if err := countQuery.Select("type, count(*) as count").Group("type").Find(&results).Error; err != nil {
+		common.SysError("failed to count channel types: " + err.Error())
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取渠道类型统计失败，请稍后重试"})
+		return
+	}
 	typeCounts := make(map[int64]int64)
 	for _, r := range results {
 		typeCounts[r.Type] = r.Count
@@ -357,11 +370,11 @@ func FixChannelsAbilities(c *gin.Context) {
 
 func SearchChannels(c *gin.Context) {
 	keyword := c.Query("keyword")
-	group := c.Query("group")
 	modelKeyword := c.Query("model")
 	statusParam := c.Query("status")
 	statusCodeFilter, hasStatusCodeFilter := parseChannelStatusCodeFilter(c.Query("status_code"))
 	codexAccount := c.Query("codex_account")
+	group := model.NormalizeChannelGroupFilter(c.Query("group"))
 	statusFilter := parseStatusFilter(statusParam)
 	idSort, _ := strconv.ParseBool(c.Query("id_sort"))
 	sortOptions := model.NewChannelSortOptions(c.Query("sort_by"), c.Query("sort_order"), idSort)
@@ -378,10 +391,18 @@ func SearchChannels(c *gin.Context) {
 		}
 		for _, tag := range tags {
 			if tag != nil && *tag != "" {
-				tagChannel, err := model.GetChannelsByTag(*tag, idSort, false, sortOptions)
-				if err == nil {
-					channelData = append(channelData, tagChannel...)
+				var tagChannels []*model.Channel
+				err := sortOptions.Apply(buildChannelListQuery(group, -1, -1, codexAccount, statusCodeFilter, hasStatusCodeFilter).Where("tag = ?", *tag)).
+					Omit("key").
+					Find(&tagChannels).Error
+				if err != nil {
+					c.JSON(http.StatusOK, gin.H{
+						"success": false,
+						"message": err.Error(),
+					})
+					return
 				}
+				channelData = append(channelData, tagChannels...)
 			}
 		}
 	} else {

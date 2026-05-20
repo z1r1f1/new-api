@@ -22,7 +22,7 @@ func TestPerfMetricIncrementExprQualifiesPostgreSQLColumn(t *testing.T) {
 	}
 }
 
-func TestPerfMetricIncrementExprKeepsGenericColumn(t *testing.T) {
+func TestPerfMetricIncrementExprQualifiesGenericColumn(t *testing.T) {
 	originalPostgreSQL := common.UsingPostgreSQL
 	common.UsingPostgreSQL = false
 	t.Cleanup(func() {
@@ -30,7 +30,7 @@ func TestPerfMetricIncrementExprKeepsGenericColumn(t *testing.T) {
 	})
 
 	expr := perfMetricIncrementExpr("generation_ms", 12)
-	if expr.SQL != "generation_ms + ?" {
-		t.Fatalf("SQL = %q, want generic unqualified column", expr.SQL)
+	if expr.SQL != "perf_metrics.generation_ms + ?" {
+		t.Fatalf("SQL = %q, want generic qualified perf_metrics column", expr.SQL)
 	}
 }

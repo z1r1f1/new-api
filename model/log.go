@@ -320,15 +320,9 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		tx = LOG_DB.Where("logs.type = ?", logType)
 	}
 
-	if modelName != "" {
-		tx = tx.Where("logs.model_name like ?", modelName)
-	}
-	if username != "" {
-		tx = tx.Where("logs.username = ?", username)
-	}
-	if tokenName != "" {
-		tx = tx.Where("logs.token_name = ?", tokenName)
-	}
+	tx = applyLogContainsFilter(tx, "logs.model_name", modelName)
+	tx = applyLogContainsFilter(tx, "logs.username", username)
+	tx = applyLogContainsFilter(tx, "logs.token_name", tokenName)
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
@@ -405,6 +399,24 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
+func logContainsPattern(input string) (string, bool) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return "", false
+	}
+
+	replacer := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_")
+	return "%" + replacer.Replace(input) + "%", true
+}
+
+func applyLogContainsFilter(tx *gorm.DB, column string, value string) *gorm.DB {
+	pattern, ok := logContainsPattern(value)
+	if !ok {
+		return tx
+	}
+	return tx.Where(column+" LIKE ? ESCAPE '!'", pattern)
+}
+
 func applyChannelNameLogFilter(tx *gorm.DB, channelName string) (*gorm.DB, error) {
 	channelName = strings.TrimSpace(channelName)
 	if channelName == "" {
@@ -432,16 +444,8 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
 
-	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
-		if err != nil {
-			return nil, 0, err
-		}
-		tx = tx.Where("logs.model_name LIKE ? ESCAPE '!'", modelNamePattern)
-	}
-	if tokenName != "" {
-		tx = tx.Where("logs.token_name = ?", tokenName)
-	}
+	tx = applyLogContainsFilter(tx, "logs.model_name", modelName)
+	tx = applyLogContainsFilter(tx, "logs.token_name", tokenName)
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
@@ -489,12 +493,8 @@ type Stat struct {
 }
 
 func applyCommonLogStatFilters(tx *gorm.DB, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, channelName string, group string, requestId string, includeTimeRange bool) (*gorm.DB, error) {
-	if username != "" {
-		tx = tx.Where("logs.username = ?", username)
-	}
-	if tokenName != "" {
-		tx = tx.Where("logs.token_name = ?", tokenName)
-	}
+	tx = applyLogContainsFilter(tx, "logs.username", username)
+	tx = applyLogContainsFilter(tx, "logs.token_name", tokenName)
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
@@ -506,13 +506,7 @@ func applyCommonLogStatFilters(tx *gorm.DB, logType int, startTimestamp int64, e
 			tx = tx.Where("logs.created_at <= ?", endTimestamp)
 		}
 	}
-	if modelName != "" {
-		modelNamePattern, err := sanitizeLikePattern(modelName)
-		if err != nil {
-			return tx, err
-		}
-		tx = tx.Where("logs.model_name LIKE ? ESCAPE '!'", modelNamePattern)
-	}
+	tx = applyLogContainsFilter(tx, "logs.model_name", modelName)
 	if channel != 0 {
 		tx = tx.Where("logs.channel_id = ?", channel)
 	}
