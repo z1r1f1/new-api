@@ -4592,6 +4592,15 @@
     "Query Image Quota": "Interroger le quota d’images",
     "Update Image Quota": "Mettre à jour le quota d’images",
     "Updating...": "Mise à jour...",
-    "images": "image(s)"
+    "images": "image(s)",
+    "Redo selected OAuth": "Refaire OAuth pour la sélection",
+    "Redo selected ChatGPT": "Refaire ChatGPT pour la sélection",
+    "No selected OAuth channels can be redone": "Aucun canal OAuth sélectionné ne peut être relancé",
+    "No selected ChatGPT channels can be redone": "Aucun canal ChatGPT sélectionné ne peut être relancé",
+    "{{count}} OAuth redo request(s) completed": "{{count}} demande(s) de relance OAuth terminée(s)",
+    "{{count}} ChatGPT redo task(s) submitted": "{{count}} tâche(s) de relance ChatGPT soumise(s)",
+    "{{count}} selected channel(s) skipped because they are not supported": "{{count}} canal(aux) sélectionné(s) ignoré(s), car non pris en charge",
+    "{{count}} channel(s) failed to redo OAuth": "Échec de la relance OAuth pour {{count}} canal(aux)",
+    "{{count}} channel(s) failed to redo ChatGPT": "Échec de la relance ChatGPT pour {{count}} canal(aux)"
   }
 }

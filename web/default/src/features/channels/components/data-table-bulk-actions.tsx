@@ -19,7 +19,7 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { type Table } from '@tanstack/react-table'
-import { Power, PowerOff, Tag, Trash2 } from 'lucide-react'
+import { Loader2, Power, PowerOff, RotateCcw, Tag, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import {
@@ -42,7 +42,9 @@ import {
   handleBatchDelete,
   handleBatchDisable,
   handleBatchEnable,
+  handleBatchRedoOAuth,
   handleBatchSetTag,
+  isMultiKeyChannel,
 } from '../lib'
 import type { Channel } from '../types'
 
@@ -57,9 +59,17 @@ export function DataTableBulkActions<TData>({
   const queryClient = useQueryClient()
   const [showTagDialog, setShowTagDialog] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [redoingType, setRedoingType] = useState<57 | 58 | null>(null)
   const [tagValue, setTagValue] = useState('')
 
   const selectedRows = table.getFilteredSelectedRowModel().rows
+  const selectedChannels = selectedRows.map((row) => row.original as Channel)
+  const hasRedoableOAuthChannel = selectedChannels.some((channel) => {
+    return channel.type === 57 && !isMultiKeyChannel(channel)
+  })
+  const hasRedoableChatGPTChannel = selectedChannels.some((channel) => {
+    return channel.type === 58 && !isMultiKeyChannel(channel)
+  })
   const selectedIds = selectedRows.reduce<number[]>((ids, row) => {
     const id = (row.original as Channel).id
 
@@ -97,6 +107,21 @@ export function DataTableBulkActions<TData>({
     })
   }
 
+  const handleRedoSelected = async (channelType: 57 | 58) => {
+    if (redoingType !== null) return
+    setRedoingType(channelType)
+    try {
+      await handleBatchRedoOAuth(
+        selectedChannels,
+        channelType,
+        queryClient,
+        handleClearSelection
+      )
+    } finally {
+      setRedoingType(null)
+    }
+  }
+
   return (
     <>
       <BulkActionsToolbar table={table} entityName='channel'>
@@ -118,6 +143,58 @@ export function DataTableBulkActions<TData>({
           </TooltipTrigger>
           <TooltipContent>
             <p>{t('Enable selected channels')}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => handleRedoSelected(57)}
+                disabled={redoingType !== null || !hasRedoableOAuthChannel}
+                className='size-8'
+                aria-label={t('Redo selected OAuth')}
+                title={t('Redo selected OAuth')}
+              />
+            }
+          >
+            {redoingType === 57 ? (
+              <Loader2 className='animate-spin' />
+            ) : (
+              <RotateCcw />
+            )}
+            <span className='sr-only'>{t('Redo selected OAuth')}</span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Redo selected OAuth')}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant='outline'
+                size='icon'
+                onClick={() => handleRedoSelected(58)}
+                disabled={redoingType !== null || !hasRedoableChatGPTChannel}
+                className='size-8'
+                aria-label={t('Redo selected ChatGPT')}
+                title={t('Redo selected ChatGPT')}
+              />
+            }
+          >
+            {redoingType === 58 ? (
+              <Loader2 className='animate-spin' />
+            ) : (
+              <RotateCcw />
+            )}
+            <span className='sr-only'>{t('Redo selected ChatGPT')}</span>
+          </TooltipTrigger>
+          <TooltipContent>
+            <p>{t('Redo selected ChatGPT')}</p>
           </TooltipContent>
         </Tooltip>
 

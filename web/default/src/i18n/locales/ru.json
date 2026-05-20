@@ -4592,6 +4592,15 @@
     "Query Image Quota": "Запросить квоту изображений",
     "Update Image Quota": "Обновить квоту изображений",
     "Updating...": "Обновление...",
-    "images": "изображений"
+    "images": "изображений",
+    "Redo selected OAuth": "Повторить OAuth для выбранных",
+    "Redo selected ChatGPT": "Повторить ChatGPT для выбранных",
+    "No selected OAuth channels can be redone": "Среди выбранных нет OAuth-каналов для повтора",
+    "No selected ChatGPT channels can be redone": "Среди выбранных нет ChatGPT-каналов для повтора",
+    "{{count}} OAuth redo request(s) completed": "Завершено запросов повтора OAuth: {{count}}",
+    "{{count}} ChatGPT redo task(s) submitted": "Отправлено задач повтора ChatGPT: {{count}}",
+    "{{count}} selected channel(s) skipped because they are not supported": "Пропущено выбранных каналов из-за отсутствия поддержки: {{count}}",
+    "{{count}} channel(s) failed to redo OAuth": "Не удалось повторить OAuth для каналов: {{count}}",
+    "{{count}} channel(s) failed to redo ChatGPT": "Не удалось повторить ChatGPT для каналов: {{count}}"
   }
 }

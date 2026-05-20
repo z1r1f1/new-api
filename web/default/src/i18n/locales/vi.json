@@ -4592,6 +4592,15 @@
     "Query Image Quota": "Truy vấn hạn mức ảnh",
     "Update Image Quota": "Cập nhật hạn mức ảnh",
     "Updating...": "Đang cập nhật...",
-    "images": "ảnh"
+    "images": "ảnh",
+    "Redo selected OAuth": "Làm lại OAuth đã chọn",
+    "Redo selected ChatGPT": "Làm lại ChatGPT đã chọn",
+    "No selected OAuth channels can be redone": "Không có kênh OAuth đã chọn nào có thể làm lại",
+    "No selected ChatGPT channels can be redone": "Không có kênh ChatGPT đã chọn nào có thể làm lại",
+    "{{count}} OAuth redo request(s) completed": "Đã hoàn tất {{count}} yêu cầu làm lại OAuth",
+    "{{count}} ChatGPT redo task(s) submitted": "Đã gửi {{count}} tác vụ làm lại ChatGPT",
+    "{{count}} selected channel(s) skipped because they are not supported": "Đã bỏ qua {{count}} kênh đã chọn vì không được hỗ trợ",
+    "{{count}} channel(s) failed to redo OAuth": "{{count}} kênh làm lại OAuth thất bại",
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} kênh làm lại ChatGPT thất bại"
   }
 }

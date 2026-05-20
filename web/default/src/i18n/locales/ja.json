@@ -4592,6 +4592,15 @@
     "Query Image Quota": "画像クォータを照会",
     "Update Image Quota": "画像クォータを更新",
     "Updating...": "更新中...",
-    "images": "枚"
+    "images": "枚",
+    "Redo selected OAuth": "選択した OAuth を再実行",
+    "Redo selected ChatGPT": "選択した ChatGPT を再実行",
+    "No selected OAuth channels can be redone": "選択した OAuth チャネルに再実行可能なものはありません",
+    "No selected ChatGPT channels can be redone": "選択した ChatGPT チャネルに再実行可能なものはありません",
+    "{{count}} OAuth redo request(s) completed": "{{count}} 件の OAuth 再実行リクエストが完了しました",
+    "{{count}} ChatGPT redo task(s) submitted": "{{count}} 件の ChatGPT 再実行タスクを送信しました",
+    "{{count}} selected channel(s) skipped because they are not supported": "未対応のため、選択した {{count}} 件のチャネルをスキップしました",
+    "{{count}} channel(s) failed to redo OAuth": "{{count}} 件のチャネルで OAuth の再実行に失敗しました",
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} 件のチャネルで ChatGPT の再実行に失敗しました"
   }
 }

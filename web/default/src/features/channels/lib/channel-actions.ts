@@ -35,9 +35,11 @@ import {
   testAllChannels,
   updateAllChannelsBalance,
   updateChannelBalance,
+  redoChannelOAuth,
 } from '../api'
 import { CHANNEL_STATUS, ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
-import type { CopyChannelParams } from '../types'
+import type { Channel, CopyChannelParams } from '../types'
+import { isMultiKeyChannel } from './channel-utils'
 
 // ============================================================================
 // Query Keys
@@ -464,6 +466,91 @@ export async function handleBatchSetTag(
     }
   } catch (_error) {
     toast.error(i18next.t('Failed to set tag'))
+  }
+}
+
+/**
+ * Batch redo OAuth / ChatGPT credentials for selected single-key channels.
+ */
+export async function handleBatchRedoOAuth(
+  channels: Channel[],
+  channelType: 57 | 58,
+  queryClient?: QueryClient,
+  onSuccess?: () => void
+): Promise<void> {
+  if (channels.length === 0) {
+    toast.error(i18next.t('No channels selected'))
+    return
+  }
+
+  const eligibleChannels = channels.filter((channel) => {
+    return channel.type === channelType && !isMultiKeyChannel(channel)
+  })
+  const skippedCount = channels.length - eligibleChannels.length
+  const isChatGPT = channelType === 58
+
+  if (eligibleChannels.length === 0) {
+    toast.error(
+      i18next.t(
+        isChatGPT
+          ? 'No selected ChatGPT channels can be redone'
+          : 'No selected OAuth channels can be redone'
+      )
+    )
+    return
+  }
+
+  const results = await Promise.allSettled(
+    eligibleChannels.map(async (channel) => {
+      const response = await redoChannelOAuth(channel.id, channel.type)
+      if (!response.success) {
+        throw new Error(
+          response.message ||
+            i18next.t(
+              isChatGPT ? 'Failed to redo ChatGPT' : 'Failed to redo OAuth'
+            )
+        )
+      }
+      return response
+    })
+  )
+
+  const successCount = results.filter(
+    (result) => result.status === 'fulfilled'
+  ).length
+  const failCount = results.length - successCount
+
+  if (successCount > 0) {
+    toast.success(
+      i18next.t(
+        isChatGPT
+          ? '{{count}} ChatGPT redo task(s) submitted'
+          : '{{count}} OAuth redo request(s) completed',
+        { count: successCount }
+      )
+    )
+    queryClient?.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    onSuccess?.()
+  }
+
+  if (skippedCount > 0) {
+    toast.info(
+      i18next.t(
+        '{{count}} selected channel(s) skipped because they are not supported',
+        { count: skippedCount }
+      )
+    )
+  }
+
+  if (failCount > 0) {
+    toast.error(
+      i18next.t(
+        isChatGPT
+          ? '{{count}} channel(s) failed to redo ChatGPT'
+          : '{{count}} channel(s) failed to redo OAuth',
+        { count: failCount }
+      )
+    )
   }
 }
 

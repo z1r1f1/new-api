@@ -4592,6 +4592,15 @@
     "Query Image Quota": "Query Image Quota",
     "Update Image Quota": "Update Image Quota",
     "Updating...": "Updating...",
-    "images": "images"
+    "images": "images",
+    "Redo selected OAuth": "Redo selected OAuth",
+    "Redo selected ChatGPT": "Redo selected ChatGPT",
+    "No selected OAuth channels can be redone": "No selected OAuth channels can be redone",
+    "No selected ChatGPT channels can be redone": "No selected ChatGPT channels can be redone",
+    "{{count}} OAuth redo request(s) completed": "{{count}} OAuth redo request(s) completed",
+    "{{count}} ChatGPT redo task(s) submitted": "{{count}} ChatGPT redo task(s) submitted",
+    "{{count}} selected channel(s) skipped because they are not supported": "{{count}} selected channel(s) skipped because they are not supported",
+    "{{count}} channel(s) failed to redo OAuth": "{{count}} channel(s) failed to redo OAuth",
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} channel(s) failed to redo ChatGPT"
   }
 }
