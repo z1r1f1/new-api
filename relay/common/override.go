@@ -192,6 +192,10 @@ func ApplyParamOverrideWithRelayInfo(jsonData []byte, info *RelayInfo) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
+	result, err = NormalizePromptCacheKey(result)
+	if err != nil {
+		return nil, err
+	}
 	syncRuntimeHeaderOverrideFromContext(info, overrideCtx)
 	if info != nil {
 		if recorder != nil {
@@ -1480,6 +1484,7 @@ func buildRequestHeadersContext(headers map[string]string) map[string]interface{
 		if normalized == "" || value == "" {
 			return lo.Entry[string, string]{}, false
 		}
+		value = normalizePromptCacheHeaderValue(normalized, value)
 		return lo.Entry[string, string]{Key: normalized, Value: value}, true
 	})
 	return lo.SliceToMap(normalizedEntries, func(item lo.Entry[string, string]) (string, interface{}) {
@@ -1498,6 +1503,10 @@ func syncRuntimeHeaderOverrideFromContext(info *RelayInfo, context map[string]in
 	rawMap, ok := raw.(map[string]interface{})
 	if !ok {
 		return
+	}
+	for key, value := range rawMap {
+		normalizedKey := normalizeHeaderContextKey(key)
+		rawMap[key] = normalizePromptCacheHeaderValue(normalizedKey, strings.TrimSpace(fmt.Sprintf("%v", value)))
 	}
 	info.RuntimeHeadersOverride = sanitizeHeaderOverrideMap(rawMap)
 	info.UseRuntimeHeadersOverride = true

@@ -1,9 +1,12 @@
 package common
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"reflect"
+	"strings"
 	"testing"
 
 	common2 "github.com/QuantumNous/new-api/common"
@@ -14,6 +17,10 @@ import (
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/require"
 )
+
+func expectedPromptCacheKeyHash(value string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(value)))
+}
 
 func TestApplyParamOverrideTrimPrefix(t *testing.T) {
 	// trim_prefix example:
@@ -1479,6 +1486,88 @@ func TestApplyParamOverrideSyncFieldsHeaderToJSON(t *testing.T) {
 	assertJSONEqual(t, `{"model":"gpt-4","prompt_cache_key":"sess-123"}`, string(out))
 }
 
+func TestApplyParamOverrideWithRelayInfoHashesLongPromptCacheKeyFromHeader(t *testing.T) {
+	longSessionID := strings.Repeat("a", maxPromptCacheKeyLength+10)
+	input := []byte(`{"model":"gpt-4"}`)
+	info := &RelayInfo{
+		RequestHeaders: map[string]string{
+			"session_id": longSessionID,
+		},
+		ChannelMeta: &ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode": "sync_fields",
+						"from": "header:session_id",
+						"to":   "json:prompt_cache_key",
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverrideWithRelayInfo(input, info)
+	if err != nil {
+		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
+	}
+	assertJSONEqual(t, fmt.Sprintf(`{"model":"gpt-4","prompt_cache_key":"%s"}`, expectedPromptCacheKeyHash(longSessionID)), string(out))
+}
+
+func TestApplyParamOverrideWithRelayInfoHashesLongSessionIDHeader(t *testing.T) {
+	longSessionID := strings.Repeat("s", maxPromptCacheKeyLength+10)
+	input := []byte(fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":%q}`, longSessionID))
+	info := &RelayInfo{
+		RequestHeaders: map[string]string{
+			"Session_id": longSessionID,
+		},
+		ChannelMeta: &ChannelMeta{
+			ParamOverride: map[string]interface{}{
+				"operations": []interface{}{
+					map[string]interface{}{
+						"mode":        "pass_headers",
+						"value":       []interface{}{"Session_id"},
+						"keep_origin": true,
+					},
+				},
+			},
+		},
+	}
+
+	out, err := ApplyParamOverrideWithRelayInfo(input, info)
+	if err != nil {
+		t.Fatalf("ApplyParamOverrideWithRelayInfo returned error: %v", err)
+	}
+
+	expectedHash := expectedPromptCacheKeyHash(longSessionID)
+	assertJSONEqual(t, fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":"%s"}`, expectedHash), string(out))
+	if !info.UseRuntimeHeadersOverride {
+		t.Fatalf("expected runtime header override to be enabled")
+	}
+	if got := info.RuntimeHeadersOverride["session_id"]; got != expectedHash {
+		t.Fatalf("expected session_id header to be normalized to %q, got %#v", expectedHash, got)
+	}
+}
+
+func TestReaderWithNormalizedPromptCacheKeyHashesPassThroughBody(t *testing.T) {
+	longPromptCacheKey := strings.Repeat("pass-through-", 7)
+	input := []byte(fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":%q}`, longPromptCacheKey))
+	storage, err := common2.CreateBodyStorage(input)
+	if err != nil {
+		t.Fatalf("CreateBodyStorage returned error: %v", err)
+	}
+	defer storage.Close()
+
+	reader, err := ReaderWithNormalizedPromptCacheKey(storage)
+	if err != nil {
+		t.Fatalf("ReaderWithNormalizedPromptCacheKey returned error: %v", err)
+	}
+	out, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("ReadAll returned error: %v", err)
+	}
+	assertJSONEqual(t, fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":"%s"}`, expectedPromptCacheKeyHash(longPromptCacheKey)), string(out))
+}
+
 func TestApplyParamOverrideSyncFieldsJSONToHeader(t *testing.T) {
 	input := []byte(`{"model":"gpt-4","prompt_cache_key":"cache-abc"}`)
 	override := map[string]interface{}{
@@ -2014,6 +2103,21 @@ func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
 	assertJSONEqual(t, input, string(out))
 }
 
+func TestRemoveDisabledFieldsPassThroughStillHashesLongPromptCacheKey(t *testing.T) {
+	longPromptCacheKey := strings.Repeat("pass-through-", 7)
+	input := fmt.Sprintf(`{
+		"service_tier":"flex",
+		"prompt_cache_key":%q
+	}`, longPromptCacheKey)
+	settings := dto.ChannelOtherSettings{}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, true)
+	if err != nil {
+		t.Fatalf("RemoveDisabledFields returned error: %v", err)
+	}
+	assertJSONEqual(t, fmt.Sprintf(`{"service_tier":"flex","prompt_cache_key":"%s"}`, expectedPromptCacheKeyHash(longPromptCacheKey)), string(out))
+}
+
 func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
 	original := model_setting.GetGlobalSettings().PassThroughRequestEnabled
 	model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
@@ -2052,6 +2156,35 @@ func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
 	assertJSONEqual(t, `{"cache_control":{"type":"ephemeral"},"store":true}`, string(out))
+}
+
+func TestRemoveDisabledFieldsHashesLongPromptCacheKey(t *testing.T) {
+	longPromptCacheKey := strings.Repeat("session-", 10)
+	input := fmt.Sprintf(`{
+		"prompt_cache_key":%q,
+		"store":true
+	}`, longPromptCacheKey)
+	settings := dto.ChannelOtherSettings{}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	if err != nil {
+		t.Fatalf("RemoveDisabledFields returned error: %v", err)
+	}
+	assertJSONEqual(t, fmt.Sprintf(`{"prompt_cache_key":"%s","store":true}`, expectedPromptCacheKeyHash(longPromptCacheKey)), string(out))
+}
+
+func TestRemoveDisabledFieldsKeepsShortPromptCacheKey(t *testing.T) {
+	input := `{
+		"prompt_cache_key":"short-session",
+		"store":true
+	}`
+	settings := dto.ChannelOtherSettings{}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	if err != nil {
+		t.Fatalf("RemoveDisabledFields returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"prompt_cache_key":"short-session","store":true}`, string(out))
 }
 
 func TestRemoveDisabledFieldsAllowInferenceGeo(t *testing.T) {

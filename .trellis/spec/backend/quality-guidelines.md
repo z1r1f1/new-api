@@ -255,6 +255,66 @@ imageRequest.Model = formData.Get("model")
 imageRequest.ResponseFormat = formData.Get("response_format")
 ```
 
+### OpenAI Responses prompt cache key normalization
+
+#### 1. Scope / Trigger
+
+- Trigger: any change that forwards OpenAI-compatible `prompt_cache_key` to upstream, including `/v1/responses`, chat-to-responses conversion, `relay/common.RemoveDisabledFields`, or channel parameter override sync rules.
+- This is a relay boundary contract: client / header / param override value -> gateway JSON normalization -> upstream OpenAI-compatible request.
+
+#### 2. Signatures
+
+- Normalizer: `relay/common.NormalizePromptCacheKey(jsonData []byte) ([]byte, error)`
+- Field normalizer: `relay/common.normalizePromptCacheKeyValue(value string) string`
+- Filter path: `relay/common.RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error)`
+- Override path: `relay/common.ApplyParamOverrideWithRelayInfo(jsonData []byte, info *RelayInfo) ([]byte, error)`
+
+#### 3. Contracts
+
+- Top-level JSON field: `prompt_cache_key`.
+- OpenAI-compatible upstreams reject `prompt_cache_key` strings longer than 64 characters.
+- A short `prompt_cache_key` must be preserved exactly.
+- A too-long `prompt_cache_key` must be converted to a deterministic SHA-256 hex string of the original value. This keeps a stable cache bucket while satisfying the 64-character upstream limit.
+- Normalization must happen for raw pass-through request bodies, raw request fields processed by `RemoveDisabledFields`, and values introduced later by parameter override, especially `sync_fields` rules such as `header:session_id -> json:prompt_cache_key`.
+- Codex-compatible `session_id` request headers are prompt-cache related. When channel affinity / parameter override passes `Session_id` to the upstream, the runtime header override value must be normalized with the same rule as `prompt_cache_key`; otherwise ChatGPT Codex upstream can still reject the request as an overlong `prompt_cache_key`.
+- Non-string `prompt_cache_key` values are invalid client input for upstream, but this normalizer must not reinterpret them; leave them to existing request validation/upstream error behavior.
+
+#### 4. Validation & Error Matrix
+
+- Missing `prompt_cache_key` -> leave request unchanged.
+- String length <= 64 characters and <= 64 bytes -> leave value unchanged.
+- String length > 64 characters or > 64 bytes -> replace with SHA-256 hex digest of the original string.
+- JSON mutation failure while normalizing after param override -> return the error to the relay handler.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `prompt_cache_key="short-session"` reaches upstream unchanged.
+- Good: a 74-character Codex/session key becomes a 64-character SHA-256 hex string and no longer triggers upstream `string_above_max_length`.
+- Base: request has no `prompt_cache_key`; no extra field is added.
+- Bad: forwarding a long client/header value unchanged; OpenAI-compatible upstream returns `Invalid 'prompt_cache_key': string too long`.
+- Bad: truncating to the first 64 characters; different sessions with a shared prefix can collide and reduce cache behavior quality.
+
+#### 6. Tests Required
+
+- `relay/common`: regression test that `RemoveDisabledFields` hashes too-long `prompt_cache_key` values and preserves short values.
+- `relay/common`: regression test that raw pass-through request body readers hash too-long `prompt_cache_key` values before the body is sent upstream.
+- `relay/common`: regression test that `ApplyParamOverrideWithRelayInfo` hashes a long `prompt_cache_key` introduced by `sync_fields`.
+- `relay/common`: regression test that `ApplyParamOverrideWithRelayInfo` hashes a long `Session_id` header introduced by `pass_headers`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+data["prompt_cache_key"] = headerSessionID // may exceed upstream max length
+```
+
+Correct:
+
+```go
+data["prompt_cache_key"] = normalizePromptCacheKeyValue(headerSessionID)
+```
+
 ### Channel affinity and stream completion
 
 Channel affinity cache entries represent a successfully usable channel for a

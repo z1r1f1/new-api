@@ -785,7 +785,7 @@ func FailTaskInfo(reason string) *TaskInfo {
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
 func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
-		return jsonData, nil
+		return NormalizePromptCacheKey(jsonData)
 	}
 
 	var data map[string]interface{}
@@ -843,6 +843,10 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 				}
 			}
 		}
+	}
+
+	if promptCacheKey, ok := data["prompt_cache_key"].(string); ok {
+		data["prompt_cache_key"] = normalizePromptCacheKeyValue(promptCacheKey)
 	}
 
 	jsonDataAfter, err := common.Marshal(data)
