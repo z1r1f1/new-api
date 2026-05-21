@@ -340,6 +340,70 @@ Regression tests:
 - `service/channel_affinity_template_test.go` covers clearing the current
   affinity cache key.
 
+### Codex account type cache during channel tests
+
+#### 1. Scope / Trigger
+
+Codex channel rows display account plan (`free`, `plus`, `pro`, `team`,
+`enterprise`) from `channel.other_info.codex_account_type` when it is already
+cached. If an account upgrades from Free to Plus, the cached value must be
+refreshed by successful channel tests, not only by the manual usage dialog.
+
+#### 2. Signatures
+
+- Backend helper: `syncCodexChannelAccountTypeFromUsage(ctx, channel)`.
+- Persisted DB field: `channels.other_info` JSON key
+  `codex_account_type`, plus `codex_account_type_updated_at`.
+- Upstream probe: `GET <channel_base_url>/backend-api/wham/usage` with the
+  Codex OAuth `access_token` and `chatgpt-account-id`.
+
+#### 3. Contracts
+
+- Only single-key Codex channels (`ChannelTypeCodex`) participate.
+- Successful channel tests must attempt a usage probe and persist the
+  normalized plan type when the upstream usage response contains a supported
+  value.
+- Usage-probe failures must not turn an otherwise successful channel test into
+  a failed test.
+
+#### 4. Validation & Error Matrix
+
+- Non-Codex or multi-key channel -> skip without error.
+- Missing/invalid Codex OAuth key -> log diagnostics, keep the test result.
+- Usage upstream non-2xx or malformed JSON -> log diagnostics, keep the test
+  result.
+- Unsupported/missing `plan_type` -> leave cached account type unchanged.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: cached `free` plus usage payload `{"plan_type":"plus"}` updates
+  `other_info.codex_account_type` to `plus`.
+- Base: ordinary OpenAI channel test does not perform any Codex usage probe.
+- Bad: only updating the React Query result while leaving `other_info` as
+  `free`; refreshed channel lists will still show the stale cached value.
+
+#### 6. Tests Required
+
+- `controller`: regression test that `syncCodexChannelAccountTypeFromUsage`
+  persists a plan change from `free` to `plus`.
+- `controller`: regression test that non-Codex channels are ignored.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Successful test updates only response_time/status_code.
+channel.UpdateResponseTime(milliseconds)
+```
+
+Correct:
+
+```go
+syncCodexChannelAccountTypeAfterSuccessfulTest(ctx, channel)
+channel.UpdateResponseTime(milliseconds)
+```
+
 ### Billing expression changes
 
 Before changing expression-based/tiered billing, read `pkg/billingexpr/expr.md`. It documents expression variables, token normalization, pre-consume/settlement flow, quota conversion, and expression versioning.

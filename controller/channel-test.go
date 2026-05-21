@@ -500,6 +500,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewOpenAIError(bodyErr, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
 		}
 	}
+	syncCodexChannelAccountTypeAfterSuccessfulTest(c.Request.Context(), channel)
 	info.SetEstimatePromptTokens(usage.PromptTokens)
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)

@@ -92,6 +92,59 @@ func persistCodexChannelAccountType(ch *model.Channel, planType string) {
 	}
 }
 
+func syncCodexChannelAccountTypeFromUsage(ctx context.Context, ch *model.Channel) error {
+	if ch == nil || ch.Type != constant.ChannelTypeCodex || ch.ChannelInfo.IsMultiKey {
+		return nil
+	}
+
+	oauthKey, err := codex.ParseOAuthKey(strings.TrimSpace(ch.Key))
+	if err != nil {
+		return err
+	}
+
+	accessToken := strings.TrimSpace(oauthKey.AccessToken)
+	accountID := strings.TrimSpace(oauthKey.AccountID)
+	if accessToken == "" {
+		return fmt.Errorf("codex channel: access_token is required")
+	}
+	if accountID == "" {
+		return fmt.Errorf("codex channel: account_id is required")
+	}
+
+	client, err := service.NewProxyHttpClient(ch.GetSetting().Proxy)
+	if err != nil {
+		return err
+	}
+
+	usageCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+
+	statusCode, body, err := service.FetchCodexWhamUsage(usageCtx, client, ch.GetBaseURL(), accessToken, accountID)
+	if err != nil {
+		return err
+	}
+	if statusCode < 200 || statusCode >= 300 {
+		return fmt.Errorf("codex usage upstream status: %d", statusCode)
+	}
+
+	var payload any
+	if err := common.Unmarshal(body, &payload); err != nil {
+		return err
+	}
+	persistCodexChannelAccountType(ch, extractCodexUsagePlanType(payload))
+	return nil
+}
+
+func syncCodexChannelAccountTypeAfterSuccessfulTest(ctx context.Context, ch *model.Channel) {
+	if err := syncCodexChannelAccountTypeFromUsage(ctx, ch); err != nil {
+		channelID := 0
+		if ch != nil {
+			channelID = ch.Id
+		}
+		common.SysLog(fmt.Sprintf("failed to sync codex account type after channel test: channel_id=%d, error=%v", channelID, err))
+	}
+}
+
 func getAutoTeamAPIURL() string {
 	apiURL := strings.TrimSpace(os.Getenv("AUTOTEAM_API_URL"))
 	if apiURL == "" {
