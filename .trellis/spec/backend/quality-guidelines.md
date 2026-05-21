@@ -404,6 +404,18 @@ syncCodexChannelAccountTypeAfterSuccessfulTest(ctx, channel)
 channel.UpdateResponseTime(milliseconds)
 ```
 
+### Channel test response time semantics
+
+Channel test `response_time` is used by operators to compare perceived channel latency in the channel list.
+
+- Non-streaming channel tests store the full test elapsed time in `channel.response_time`.
+- Streaming channel tests store time-to-first-body-write (TTFT) in `channel.response_time`, because waiting for the full stream completion overstates perceived streaming latency.
+- If a streaming test does not observe a first body write, fall back to the full elapsed test time instead of writing zero.
+- Consume logs for channel tests may continue to record the full test duration; do not silently reinterpret billing/log elapsed time as TTFT.
+- Add focused controller tests when changing this behavior.
+
+---
+
 ### Billing expression changes
 
 Before changing expression-based/tiered billing, read `pkg/billingexpr/expr.md`. It documents expression variables, token normalization, pre-consume/settlement flow, quota conversion, and expression versioning.

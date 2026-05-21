@@ -3,12 +3,73 @@ package controller
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
+	"github.com/gin-gonic/gin"
 )
+
+func TestResolveChannelTestResponseTimeMillis(t *testing.T) {
+	startedAt := time.Unix(100, 0)
+	fullElapsed := 5 * time.Second
+
+	t.Run("stream uses first body write time", func(t *testing.T) {
+		writer := &firstByteResponseWriter{firstByteAt: startedAt.Add(1250 * time.Millisecond)}
+		got := resolveChannelTestResponseTimeMillis(startedAt, fullElapsed, true, writer)
+		if got != 1250 {
+			t.Fatalf("expected stream response time to use first byte duration, got %d", got)
+		}
+	})
+
+	t.Run("stream falls back to full elapsed without first byte", func(t *testing.T) {
+		got := resolveChannelTestResponseTimeMillis(startedAt, fullElapsed, true, &firstByteResponseWriter{})
+		if got != fullElapsed.Milliseconds() {
+			t.Fatalf("expected stream response time to fall back to full elapsed, got %d", got)
+		}
+	})
+
+	t.Run("non-stream keeps full elapsed", func(t *testing.T) {
+		writer := &firstByteResponseWriter{firstByteAt: startedAt.Add(100 * time.Millisecond)}
+		got := resolveChannelTestResponseTimeMillis(startedAt, fullElapsed, false, writer)
+		if got != fullElapsed.Milliseconds() {
+			t.Fatalf("expected non-stream response time to use full elapsed, got %d", got)
+		}
+	})
+
+	t.Run("invalid first byte time falls back", func(t *testing.T) {
+		writer := &firstByteResponseWriter{firstByteAt: startedAt.Add(-time.Second)}
+		got := resolveChannelTestResponseTimeMillis(startedAt, fullElapsed, true, writer)
+		if got != fullElapsed.Milliseconds() {
+			t.Fatalf("expected invalid first byte time to fall back, got %d", got)
+		}
+	})
+}
+
+func TestFirstByteResponseWriterMarksBodyWrites(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	writer := &firstByteResponseWriter{ResponseWriter: ctx.Writer}
+
+	if _, ok := writer.firstByteTime(); ok {
+		t.Fatalf("expected empty writer not to have first byte time")
+	}
+	if _, err := writer.Write([]byte{}); err != nil {
+		t.Fatalf("empty write failed: %v", err)
+	}
+	if _, ok := writer.firstByteTime(); ok {
+		t.Fatalf("expected empty write not to mark first byte time")
+	}
+	if _, err := writer.WriteString("data"); err != nil {
+		t.Fatalf("write string failed: %v", err)
+	}
+	if _, ok := writer.firstByteTime(); !ok {
+		t.Fatalf("expected non-empty body write to mark first byte time")
+	}
+}
 
 func TestShouldAutoTestUseStream(t *testing.T) {
 	t.Run("codex channels use stream", func(t *testing.T) {

@@ -38,9 +38,67 @@ import (
 )
 
 type testResult struct {
-	context     *gin.Context
-	localErr    error
-	newAPIError *types.NewAPIError
+	context            *gin.Context
+	localErr           error
+	newAPIError        *types.NewAPIError
+	responseTimeMillis int64
+	hasResponseTime    bool
+}
+
+type firstByteResponseWriter struct {
+	gin.ResponseWriter
+	mu          sync.Mutex
+	firstByteAt time.Time
+}
+
+func (w *firstByteResponseWriter) markFirstByte() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.firstByteAt.IsZero() {
+		w.firstByteAt = time.Now()
+	}
+}
+
+func (w *firstByteResponseWriter) Write(data []byte) (int, error) {
+	if len(data) > 0 {
+		w.markFirstByte()
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+func (w *firstByteResponseWriter) WriteString(data string) (int, error) {
+	if data != "" {
+		w.markFirstByte()
+	}
+	return w.ResponseWriter.WriteString(data)
+}
+
+func (w *firstByteResponseWriter) firstByteTime() (time.Time, bool) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.firstByteAt.IsZero() {
+		return time.Time{}, false
+	}
+	return w.firstByteAt, true
+}
+
+func resolveChannelTestResponseTimeMillis(startedAt time.Time, fullElapsed time.Duration, isStream bool, firstByteWriter *firstByteResponseWriter) int64 {
+	if isStream && firstByteWriter != nil {
+		if firstByteAt, ok := firstByteWriter.firstByteTime(); ok {
+			firstByteElapsed := firstByteAt.Sub(startedAt)
+			if firstByteElapsed >= 0 {
+				return firstByteElapsed.Milliseconds()
+			}
+		}
+	}
+	return fullElapsed.Milliseconds()
+}
+
+func channelTestResponseTimeMillis(result testResult, fallbackMillis int64) int64 {
+	if result.hasResponseTime {
+		return result.responseTimeMillis
+	}
+	return fallbackMillis
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -82,6 +140,8 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	}
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
+	firstByteWriter := &firstByteResponseWriter{ResponseWriter: c.Writer}
+	c.Writer = firstByteWriter
 
 	testModel = strings.TrimSpace(testModel)
 	if testModel == "" {
@@ -505,7 +565,9 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 	quota, tieredResult := settleTestQuota(info, priceData, usage)
 	tok := time.Now()
-	milliseconds := tok.Sub(tik).Milliseconds()
+	fullElapsed := tok.Sub(tik)
+	milliseconds := fullElapsed.Milliseconds()
+	responseTimeMillis := resolveChannelTestResponseTimeMillis(tik, fullElapsed, isStream, firstByteWriter)
 	consumedTime := float64(milliseconds) / 1000.0
 	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
 	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
@@ -523,9 +585,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	})
 	common.SysLog(fmt.Sprintf("testing channel #%d, response: \n%s", channel.Id, string(respBody)))
 	return testResult{
-		context:     c,
-		localErr:    nil,
-		newAPIError: nil,
+		context:            c,
+		localErr:           nil,
+		newAPIError:        nil,
+		responseTimeMillis: responseTimeMillis,
+		hasResponseTime:    true,
 	}
 }
 
@@ -952,7 +1016,7 @@ func TestChannel(c *gin.Context) {
 		return
 	}
 	tok := time.Now()
-	milliseconds := tok.Sub(tik).Milliseconds()
+	milliseconds := channelTestResponseTimeMillis(result, tok.Sub(tik).Milliseconds())
 	go channel.UpdateResponseTime(milliseconds)
 	consumedTime := float64(milliseconds) / 1000.0
 	if result.newAPIError != nil {
@@ -1003,7 +1067,7 @@ func runChannelAutoTests(channels []*model.Channel, notify bool, deleteUnauthori
 			tik := time.Now()
 			result := testChannel(channel, "", "", shouldUseStreamForAutomaticChannelTest(channel))
 			tok := time.Now()
-			milliseconds := tok.Sub(tik).Milliseconds()
+			milliseconds := channelTestResponseTimeMillis(result, tok.Sub(tik).Milliseconds())
 
 			if deleteReason := channelDeletionReasonAfterTest(result, deleteUnauthorized); deleteReason != "" {
 				if shouldPreserveChannelAfterTestDeletion(channel) {
