@@ -255,6 +255,68 @@ imageRequest.Model = formData.Get("model")
 imageRequest.ResponseFormat = formData.Get("response_format")
 ```
 
+### OpenAI-compatible image generation drawing logs
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to `/v1/images/generations` or `/v1/images/edits` relay handling, OpenAI-compatible image response handlers, or drawing-log persistence for generated images.
+- This is a cross-layer persistence contract: relay response body -> request-scoped captured image response -> `model.Midjourney` drawing log -> admin/user drawing-log pages.
+
+#### 2. Signatures
+
+- Relay handler: `relay.ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) *types.NewAPIError`.
+- Response capture key: `constant.ContextKeyImageGenerationResponse`.
+- OpenAI-compatible response handler: `openai.OpenaiHandlerWithUsage(c, info, resp)`.
+- Drawing-log persistence model: `model.Midjourney.Insert()`.
+
+#### 3. Contracts
+
+- Successful OpenAI-compatible image responses with non-empty `data[]` must be captured on the Gin context under `ContextKeyImageGenerationResponse`.
+- `ImageHelper` must mirror successful non-test `/v1/images/generations` / image edit responses into drawing logs when the captured response contains at least one `url` or `b64_json`.
+- Drawing-log `image_url` stores `data[].url` when present; otherwise it stores `data:image/png;base64,` plus `data[].b64_json` unless the value is already a data URL.
+- ChatGPT Web image requests keep their adaptor-specific drawing-log path so conversation metadata is preserved; the generic `ImageHelper` mirroring must skip `ChannelTypeChatGPTImage` to avoid duplicates.
+- Channel tests (`info.IsChannelTest`) must not create drawing-log rows.
+
+#### 4. Validation & Error Matrix
+
+- Empty/malformed image response capture -> no drawing-log row, relay response stays unchanged.
+- Response item without `url` and without `b64_json` -> skip that item.
+- Drawing-log insert failure -> log server-side diagnostic; do not fail an already-successful image generation response.
+- ChatGPT Web image response -> adaptor-specific log only, not generic duplicate.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `/v1/images/generations` returns `data:[{url: ...}]`; a `midjourneys` row is inserted with action `IMAGINE`, status `SUCCESS`, image URL, model, channel id, and endpoint metadata.
+- Good: response returns `data:[{b64_json: ...}]`; the drawing log stores a data URL so the generated image can be displayed.
+- Base: image channel test succeeds; no drawing-log row is inserted.
+- Bad: only calling `PostTextConsumeQuota` for image responses; the call appears in consume logs but not drawing logs.
+- Bad: generic logging of ChatGPT Web images in addition to adaptor logging; this duplicates rows for the same generated image.
+
+#### 6. Tests Required
+
+- `relay`: regression test that `recordImageGenerationDrawingLog` persists an OpenAI-compatible image response into `model.Midjourney`.
+- `relay`: regression test that ChatGPT Web is skipped by the generic mirror.
+- `relay/channel/openai`: regression test that `OpenaiHandlerWithUsage` captures image responses in `ContextKeyImageGenerationResponse`.
+- `relay/channel/chatgptimg`: regression test that stream image responses also expose a captured image response for downstream accounting/logging.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+usage, err := adaptor.DoResponse(c, httpResp, info)
+service.PostTextConsumeQuota(c, info, usage, logContent)
+// Image exists in client response, but drawing logs never see it.
+```
+
+Correct:
+
+```go
+usage, err := adaptor.DoResponse(c, httpResp, info)
+recordImageGenerationDrawingLog(c, info, imageRequest)
+service.PostTextConsumeQuota(c, info, usage, logContent)
+```
+
 ### OpenAI Responses prompt cache key normalization
 
 #### 1. Scope / Trigger

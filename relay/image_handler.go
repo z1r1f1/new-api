@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
@@ -20,6 +22,110 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+func recordImageGenerationDrawingLog(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest) {
+	if c == nil || info == nil || request == nil || info.IsChannelTest {
+		return
+	}
+	channelType := 0
+	channelID := 0
+	upstreamModel := ""
+	if info.ChannelMeta != nil {
+		channelType = info.ChannelMeta.ChannelType
+		channelID = info.ChannelMeta.ChannelId
+		upstreamModel = strings.TrimSpace(info.ChannelMeta.UpstreamModelName)
+	}
+	// ChatGPT Web image requests are logged by the adaptor with conversation
+	// metadata; skip here to avoid duplicate drawing-log rows.
+	if channelType == constant.ChannelTypeChatGPTImage {
+		return
+	}
+
+	imageResp, ok := common.GetContextKeyType[*dto.ImageResponse](c, constant.ContextKeyImageGenerationResponse)
+	if !ok || imageResp == nil || len(imageResp.Data) == 0 {
+		return
+	}
+
+	submitTime := time.Now().UnixMilli()
+	if !info.StartTime.IsZero() {
+		submitTime = info.StartTime.UnixMilli()
+	}
+	finishTime := time.Now().UnixMilli()
+	modelName := strings.TrimSpace(info.OriginModelName)
+	if modelName == "" {
+		modelName = strings.TrimSpace(request.Model)
+	}
+	if upstreamModel == "" {
+		upstreamModel = strings.TrimSpace(request.Model)
+	}
+	description := strings.TrimSpace(constant.GetChannelTypeName(channelType))
+	if description == "" || description == "Unknown" {
+		description = "image-generation"
+	}
+	taskIDPrefix := model.GenerateTaskID()
+	propertiesBytes, _ := common.Marshal(map[string]any{
+		"source":               "openai-image",
+		"endpoint":             strings.TrimSpace(info.RequestURLPath),
+		"channel_type":         channelType,
+		"channel_type_name":    description,
+		"model":                modelName,
+		"upstream_model":       upstreamModel,
+		"response_created":     imageResp.Created,
+		"response_format":      strings.TrimSpace(request.ResponseFormat),
+		"size":                 strings.TrimSpace(request.Size),
+		"quality":              strings.TrimSpace(request.Quality),
+		"image_response_count": len(imageResp.Data),
+	})
+	properties := string(propertiesBytes)
+
+	for index, item := range imageResp.Data {
+		imageURL := imageDataDrawingLogURL(item)
+		if imageURL == "" {
+			continue
+		}
+		taskID := taskIDPrefix
+		if len(imageResp.Data) > 1 {
+			taskID = fmt.Sprintf("%s-%d", taskIDPrefix, index+1)
+		}
+		prompt := strings.TrimSpace(request.Prompt)
+		if revisedPrompt := strings.TrimSpace(item.RevisedPrompt); revisedPrompt != "" {
+			prompt = revisedPrompt
+		}
+		if err := (&model.Midjourney{
+			Code:        1,
+			UserId:      info.UserId,
+			Action:      "IMAGINE",
+			MjId:        taskID,
+			Prompt:      prompt,
+			Description: description,
+			State:       modelName,
+			SubmitTime:  submitTime,
+			StartTime:   submitTime,
+			FinishTime:  finishTime,
+			ImageUrl:    imageURL,
+			Status:      string(model.TaskStatusSuccess),
+			Progress:    "100%",
+			ChannelId:   channelID,
+			Quota:       info.FinalPreConsumedQuota,
+			Properties:  properties,
+		}).Insert(); err != nil {
+			logger.LogError(c, fmt.Sprintf("record image generation drawing log failed: channel_id=%d model=%s err=%v", channelID, modelName, err))
+		}
+	}
+}
+
+func imageDataDrawingLogURL(item dto.ImageData) string {
+	if imageURL := strings.TrimSpace(item.Url); imageURL != "" {
+		return imageURL
+	}
+	if b64 := strings.TrimSpace(item.B64Json); b64 != "" {
+		if strings.HasPrefix(b64, "data:") {
+			return b64
+		}
+		return "data:image/png;base64," + b64
+	}
+	return ""
+}
 
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
@@ -126,6 +232,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		service.ResetStatusCode(newAPIError, statusCodeMappingStr)
 		return newAPIError
 	}
+	recordImageGenerationDrawingLog(c, info, request)
 
 	imageN := uint(1)
 	if request.N != nil {

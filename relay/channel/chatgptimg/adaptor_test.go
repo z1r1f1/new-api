@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
@@ -748,6 +749,10 @@ func TestStreamImageResponseClosesBodyAndWritesSSE(t *testing.T) {
 	}
 	if usage == nil || usage.TotalTokens != 3 {
 		t.Fatalf("unexpected usage: %#v", usage)
+	}
+	stored, ok := common.GetContextKeyType[*dto.ImageResponse](c, constant.ContextKeyImageGenerationResponse)
+	if !ok || stored == nil || len(stored.Data) != 1 || stored.Data[0].Url != "https://example.com/image.png" {
+		t.Fatalf("expected stream image response to be captured for drawing log, got ok=%v stored=%#v", ok, stored)
 	}
 	if got := recorder.Header().Get("Content-Type"); got != "text/event-stream" {
 		t.Fatalf("expected SSE content-type, got %q", got)

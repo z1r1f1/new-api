@@ -72,4 +72,8 @@ const (
 
 	// ContextKeyRelayInfo stores the request-scoped relay info after validation.
 	ContextKeyRelayInfo ContextKey = "relay_info"
+
+	// ContextKeyImageGenerationResponse stores an OpenAI-compatible image response
+	// captured by provider handlers so /v1/images/generations can be mirrored into drawing logs.
+	ContextKeyImageGenerationResponse ContextKey = "image_generation_response"
 )

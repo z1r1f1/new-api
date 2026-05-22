@@ -1615,6 +1615,12 @@ func streamImageResponse(c *gin.Context, resp *http.Response) (*dto.Usage, *type
 	if err := decodeImageStreamPayload(responseBody, &payload); err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	if len(payload.Data) > 0 {
+		common.SetContextKey(c, constant.ContextKeyImageGenerationResponse, &dto.ImageResponse{
+			Created: payload.Created,
+			Data:    payload.Data,
+		})
+	}
 
 	service.IOCopyBytesGracefully(c, resp, responseBody)
 	return &payload.Usage, nil
