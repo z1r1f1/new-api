@@ -3285,7 +3285,9 @@
     "Request conversion": "リクエスト変換",
     "Request Conversion": "リクエスト変換",
     "Request Count": "リクエスト数",
+    "Request Effort": "リクエスト推論強度",
     "Request failed": "リクエスト失敗",
+    "Request Fast Parameter": "リクエスト Fast パラメータ",
     "Request flow": "リクエストフロー",
     "Request Header Field": "リクエストヘッダーフィールド",
     "Request Header Override": "リクエストヘッダー上書き",
@@ -3296,6 +3298,7 @@
     "Request Model:": "リクエストモデル：",
     "Request overrides, routing behavior, and upstream model automation": "リクエスト上書き、ルーティング動作、上流モデル自動化",
     "Request rule pricing": "リクエストルールの課金",
+    "Request Service Tier": "リクエストサービス階層",
     "Request success rate sampled over the last 24 hours": "過去 24 時間にサンプリングされたリクエスト成功率",
     "Request success rate; {{incidents}} incident buckets in the last 24 hours": "リクエスト成功率；過去 24 時間に {{incidents}} 個のインシデント時間枠",
     "Request timed out, please refresh and restart GitHub login": "タイムアウトしました。ページをリロードして GitHub ログインをやり直してください",
@@ -3344,6 +3347,7 @@
     "Resource Configuration": "リソース設定",
     "Response": "レスポンス",
     "Response Time": "応答時間",
+    "Response Service Tier": "レスポンスサービス階層",
     "Responses API Version": "応答APIバージョン",
     "Restore defaults": "既定に戻す",
     "Restrict user model request frequency (may impact high concurrency performance)": "ユーザーモデルのリクエスト頻度を制限する（高並行性パフォーマンスに影響を与える可能性があります）",
@@ -4484,6 +4488,7 @@
     "Zoom": "ズーム",
     "Service Tier": "サービス階層",
     "Fast Param": "Fastパラメータ",
+    "Fast Conversion": "Fast 変換",
     "On": "オン",
     "Off": "オフ",
     "{{count}} messages are included when exporting.": "エクスポートには {{count}} 件のメッセージが含まれます。",
@@ -4601,6 +4606,7 @@
     "{{count}} ChatGPT redo task(s) submitted": "{{count}} 件の ChatGPT 再実行タスクを送信しました",
     "{{count}} selected channel(s) skipped because they are not supported": "未対応のため、選択した {{count}} 件のチャネルをスキップしました",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} 件のチャネルで OAuth の再実行に失敗しました",
-    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} 件のチャネルで ChatGPT の再実行に失敗しました"
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} 件のチャネルで ChatGPT の再実行に失敗しました",
+    "Final Reasoning Effort": "最終推論強度"
   }
 }

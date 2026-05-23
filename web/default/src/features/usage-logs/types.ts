@@ -149,7 +149,10 @@ export interface LogOtherData {
   expr_b64?: string
   matched_tier?: string
   fast_service_tier?: boolean
+  request_fast?: boolean
+  request_fast_service_tier?: string
   request_service_tier?: string
+  request_effort?: string
   response_service_tier?: string
   reasoning_effort?: string
   image?: boolean

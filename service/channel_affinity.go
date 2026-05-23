@@ -556,6 +556,10 @@ func buildChannelAffinityJSONDebug(body []byte) map[string]interface{} {
 
 	setStringFieldDebug(debug, obj, "model", "model")
 	setStringFieldDebug(debug, obj, "service_tier", "service_tier")
+	setStringFieldDebug(debug, obj, "effort", "effort")
+	setStringFieldDebug(debug, obj, "think_effort", "think_effort")
+	setStringFieldDebug(debug, obj, "model_reasoning_effort", "model_reasoning_effort")
+	setStringFieldDebug(debug, obj, "reasoning_effort", "reasoning_effort")
 	setHashedRawFieldDebug(debug, obj, "prompt_cache_key", "prompt_cache_key")
 	setHashedRawFieldDebug(debug, obj, "previous_response_id", "previous_response_id")
 	setHashedRawFieldDebug(debug, obj, "conversation", "conversation")
@@ -568,7 +572,12 @@ func buildChannelAffinityJSONDebug(body []byte) map[string]interface{} {
 		debug["metadata"] = summarizeChannelAffinityObject(raw)
 	}
 	if raw, ok := obj["reasoning"]; ok {
-		debug["reasoning"] = summarizeChannelAffinityObject(raw)
+		reasoning := summarizeChannelAffinityObject(raw)
+		var reasoningObj map[string]json.RawMessage
+		if err := common.Unmarshal(raw, &reasoningObj); err == nil {
+			setStringFieldDebug(reasoning, reasoningObj, "effort", "effort")
+		}
+		debug["reasoning"] = reasoning
 	}
 	if raw, ok := obj["store"]; ok {
 		debug["store"] = summarizeScalarRawMessage(raw)

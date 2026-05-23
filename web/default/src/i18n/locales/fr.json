@@ -3285,7 +3285,9 @@
     "Request conversion": "Conversion de requête",
     "Request Conversion": "Conversion de requête",
     "Request Count": "Nombre de requêtes",
+    "Request Effort": "Effort demandé",
     "Request failed": "Échec de la requête",
+    "Request Fast Parameter": "Paramètre fast demandé",
     "Request flow": "Flux de requête",
     "Request Header Field": "Champ d'en-tête de requête",
     "Request Header Override": "Remplacement des en-têtes de requête",
@@ -3296,6 +3298,7 @@
     "Request Model:": "Modèle demandé :",
     "Request overrides, routing behavior, and upstream model automation": "Surcharges de requête, comportement de routage et automatisation des modèles amont",
     "Request rule pricing": "Règles de tarification de requête",
+    "Request Service Tier": "Niveau de service demandé",
     "Request success rate sampled over the last 24 hours": "Taux de réussite des requêtes échantillonné sur les dernières 24 heures",
     "Request success rate; {{incidents}} incident buckets in the last 24 hours": "Taux de réussite des requêtes ; {{incidents}} créneaux avec incident sur les dernières 24 heures",
     "Request timed out, please refresh and restart GitHub login": "Délai dépassé, veuillez actualiser la page puis relancer la connexion GitHub",
@@ -3344,6 +3347,7 @@
     "Resource Configuration": "Configuration des ressources",
     "Response": "Réponse",
     "Response Time": "Temps de réponse",
+    "Response Service Tier": "Niveau de service de la réponse",
     "Responses API Version": "Version de l'API des réponses",
     "Restore defaults": "Restaurer les paramètres par défaut",
     "Restrict user model request frequency (may impact high concurrency performance)": "Restreindre la fréquence des requêtes du modèle utilisateur (peut impacter les performances en cas de forte concurrence)",
@@ -4484,6 +4488,7 @@
     "Zoom": "Zoom",
     "Service Tier": "Niveau de service",
     "Fast Param": "Paramètre Fast",
+    "Fast Conversion": "Conversion fast",
     "On": "Activé",
     "Off": "Désactivé",
     "{{count}} messages are included when exporting.": "{{count}} messages sont inclus lors de l'exportation.",
@@ -4601,6 +4606,7 @@
     "{{count}} ChatGPT redo task(s) submitted": "{{count}} tâche(s) de relance ChatGPT soumise(s)",
     "{{count}} selected channel(s) skipped because they are not supported": "{{count}} canal(aux) sélectionné(s) ignoré(s), car non pris en charge",
     "{{count}} channel(s) failed to redo OAuth": "Échec de la relance OAuth pour {{count}} canal(aux)",
-    "{{count}} channel(s) failed to redo ChatGPT": "Échec de la relance ChatGPT pour {{count}} canal(aux)"
+    "{{count}} channel(s) failed to redo ChatGPT": "Échec de la relance ChatGPT pour {{count}} canal(aux)",
+    "Final Reasoning Effort": "Effort de raisonnement final"
   }
 }

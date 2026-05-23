@@ -3285,7 +3285,9 @@
     "Request conversion": "Chuyển đổi yêu cầu",
     "Request Conversion": "Chuyển đổi yêu cầu",
     "Request Count": "Number of requests",
+    "Request Effort": "Mức suy luận yêu cầu",
     "Request failed": "Yêu cầu thất bại",
+    "Request Fast Parameter": "Tham số fast yêu cầu",
     "Request flow": "Luồng yêu cầu",
     "Request Header Field": "Trường header yêu cầu",
     "Request Header Override": "Ghi đè header yêu cầu",
@@ -3296,6 +3298,7 @@
     "Request Model:": "Mô hình yêu cầu:",
     "Request overrides, routing behavior, and upstream model automation": "Ghi đè yêu cầu, hành vi định tuyến và tự động hóa mô hình upstream",
     "Request rule pricing": "Quy tắc tính giá theo request",
+    "Request Service Tier": "Tầng dịch vụ yêu cầu",
     "Request success rate sampled over the last 24 hours": "Tỷ lệ yêu cầu thành công được lấy mẫu trong 24 giờ qua",
     "Request success rate; {{incidents}} incident buckets in the last 24 hours": "Tỷ lệ yêu cầu thành công; {{incidents}} khoảng có sự cố trong 24 giờ qua",
     "Request timed out, please refresh and restart GitHub login": "Yêu cầu đã hết thời gian chờ, vui lòng làm mới và đăng nhập lại GitHub",
@@ -3344,6 +3347,7 @@
     "Resource Configuration": "Cấu hình tài nguyên",
     "Response": "Phản hồi",
     "Response Time": "Thời gian phản hồi",
+    "Response Service Tier": "Tầng dịch vụ phản hồi",
     "Responses API Version": "Phiên bản API Phản hồi",
     "Restore defaults": "Khôi phục mặc định",
     "Restrict user model request frequency (may impact high concurrency performance)": "Hạn chế tần suất yêu cầu mô hình người dùng (có thể ảnh hưởng đến hiệu suất khi có độ đồng thời cao)",
@@ -4484,6 +4488,7 @@
     "Zoom": "Zoom",
     "Service Tier": "Tầng dịch vụ",
     "Fast Param": "Tham số Fast",
+    "Fast Conversion": "Chuyển đổi fast",
     "On": "Bật",
     "Off": "Tắt",
     "{{count}} messages are included when exporting.": "Bao gồm {{count}} tin nhắn khi xuất.",
@@ -4601,6 +4606,7 @@
     "{{count}} ChatGPT redo task(s) submitted": "Đã gửi {{count}} tác vụ làm lại ChatGPT",
     "{{count}} selected channel(s) skipped because they are not supported": "Đã bỏ qua {{count}} kênh đã chọn vì không được hỗ trợ",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} kênh làm lại OAuth thất bại",
-    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} kênh làm lại ChatGPT thất bại"
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} kênh làm lại ChatGPT thất bại",
+    "Final Reasoning Effort": "Mức suy luận cuối cùng"
   }
 }

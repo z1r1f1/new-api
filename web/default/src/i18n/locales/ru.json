@@ -3285,7 +3285,9 @@
     "Request conversion": "Преобразование запроса",
     "Request Conversion": "Конвертация запроса",
     "Request Count": "Количество запросов",
+    "Request Effort": "Запрошенное усилие рассуждения",
     "Request failed": "Запрос не выполнен",
+    "Request Fast Parameter": "Запрошенный параметр fast",
     "Request flow": "Поток запросов",
     "Request Header Field": "Поле заголовка запроса",
     "Request Header Override": "Переопределение заголовков запроса",
@@ -3296,6 +3298,7 @@
     "Request Model:": "Модель запроса:",
     "Request overrides, routing behavior, and upstream model automation": "Переопределения запросов, маршрутизация и автоматизация upstream-моделей",
     "Request rule pricing": "Правила ценообразования по запросу",
+    "Request Service Tier": "Запрошенный уровень сервиса",
     "Request success rate sampled over the last 24 hours": "Доля успешных запросов по выборкам за последние 24 часа",
     "Request success rate; {{incidents}} incident buckets in the last 24 hours": "Доля успешных запросов; {{incidents}} интервалов с инцидентами за последние 24 часа",
     "Request timed out, please refresh and restart GitHub login": "Время ожидания истекло, обновите страницу и снова запустите вход через GitHub",
@@ -3344,6 +3347,7 @@
     "Resource Configuration": "Конфигурация ресурсов",
     "Response": "Ответ",
     "Response Time": "Время ответа",
+    "Response Service Tier": "Уровень сервиса ответа",
     "Responses API Version": "Версия API ответов",
     "Restore defaults": "Сбросить к значениям по умолчанию",
     "Restrict user model request frequency (may impact high concurrency performance)": "Ограничить частоту запросов пользовательских моделей (может повлиять на производительность при высокой конкуренции)",
@@ -4484,6 +4488,7 @@
     "Zoom": "Zoom",
     "Service Tier": "Уровень сервиса",
     "Fast Param": "Параметр Fast",
+    "Fast Conversion": "Преобразование fast",
     "On": "Вкл",
     "Off": "Выкл",
     "{{count}} messages are included when exporting.": "При экспорте включено сообщений: {{count}}.",
@@ -4601,6 +4606,7 @@
     "{{count}} ChatGPT redo task(s) submitted": "Отправлено задач повтора ChatGPT: {{count}}",
     "{{count}} selected channel(s) skipped because they are not supported": "Пропущено выбранных каналов из-за отсутствия поддержки: {{count}}",
     "{{count}} channel(s) failed to redo OAuth": "Не удалось повторить OAuth для каналов: {{count}}",
-    "{{count}} channel(s) failed to redo ChatGPT": "Не удалось повторить ChatGPT для каналов: {{count}}"
+    "{{count}} channel(s) failed to redo ChatGPT": "Не удалось повторить ChatGPT для каналов: {{count}}",
+    "Final Reasoning Effort": "Итоговая интенсивность рассуждения"
   }
 }

@@ -14,6 +14,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+const (
+	headerClaudeCodeProxyFast            = "X-Claude-Code-Proxy-Fast"
+	headerClaudeCodeProxyFastServiceTier = "X-Claude-Code-Proxy-Fast-Service-Tier"
+)
+
 func appendRequestPath(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if other == nil {
 		return
@@ -73,7 +78,8 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
-	appendServiceTierInfo(ctx, adminInfo, other)
+	appendServiceTierInfo(ctx, relayInfo, adminInfo, other)
+	appendRequestEffortInfo(ctx, relayInfo, adminInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
 	appendRequestConversionChain(relayInfo, other)
 	appendFinalRequestFormat(relayInfo, other)
@@ -84,7 +90,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	return other
 }
 
-func appendServiceTierInfo(ctx *gin.Context, adminInfo map[string]interface{}, other map[string]interface{}) {
+func appendServiceTierInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}, other map[string]interface{}) {
 	if other == nil {
 		return
 	}
@@ -95,6 +101,21 @@ func appendServiceTierInfo(ctx *gin.Context, adminInfo map[string]interface{}, o
 	}
 	if requestServiceTier := extractChannelAffinityRequestServiceTier(adminInfo); requestServiceTier != "" {
 		other["request_service_tier"] = requestServiceTier
+	} else if requestServiceTier := extractRequestServiceTier(ctx, relayInfo); requestServiceTier != "" {
+		other["request_service_tier"] = requestServiceTier
+	}
+}
+
+func appendRequestEffortInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}, other map[string]interface{}) {
+	if other == nil {
+		return
+	}
+	if effort := extractChannelAffinityRequestEffort(adminInfo); effort != "" {
+		other["request_effort"] = effort
+		return
+	}
+	if effort := extractRequestEffort(ctx, relayInfo); effort != "" {
+		other["request_effort"] = effort
 	}
 }
 
@@ -134,6 +155,17 @@ func extractChannelAffinityRequestServiceTier(adminInfo map[string]interface{}) 
 	return getStringValue(getMapValue(channelAffinity, "request_debug"), "service_tier")
 }
 
+func extractChannelAffinityRequestEffort(adminInfo map[string]interface{}) string {
+	channelAffinity := getMapValue(adminInfo, "channel_affinity")
+	for _, debugKey := range []string{"final_request_debug", "request_debug"} {
+		debug := getMapValue(channelAffinity, debugKey)
+		if effort := extractEffortFromMap(debug); effort != "" {
+			return effort
+		}
+	}
+	return ""
+}
+
 func getMapValue(source map[string]interface{}, key string) map[string]interface{} {
 	if source == nil {
 		return nil
@@ -157,11 +189,105 @@ func getStringValue(source map[string]interface{}, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func extractRequestServiceTier(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) string {
+	return extractStringParamFromRequestBody(ctx, relayInfo, "service_tier")
+}
+
+func extractRequestEffort(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) string {
+	body := requestBodyForLogParamExtraction(ctx, relayInfo)
+	if len(body) == 0 {
+		return ""
+	}
+	var data map[string]interface{}
+	if err := common.Unmarshal(body, &data); err != nil {
+		return ""
+	}
+	return extractEffortFromMap(data)
+}
+
+func extractStringParamFromRequestBody(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, key string) string {
+	body := requestBodyForLogParamExtraction(ctx, relayInfo)
+	if len(body) == 0 {
+		return ""
+	}
+	var data map[string]interface{}
+	if err := common.Unmarshal(body, &data); err != nil {
+		return ""
+	}
+	return getStringValue(data, key)
+}
+
+func requestBodyForLogParamExtraction(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) []byte {
+	if relayInfo != nil && relayInfo.BillingRequestInput != nil && len(relayInfo.BillingRequestInput.Body) > 0 {
+		return relayInfo.BillingRequestInput.Body
+	}
+	if ctx == nil || ctx.Request == nil {
+		return nil
+	}
+	contentType := strings.ToLower(strings.TrimSpace(ctx.Request.Header.Get("Content-Type")))
+	if !strings.HasPrefix(contentType, "application/json") {
+		return nil
+	}
+	storage, err := common.GetBodyStorage(ctx)
+	if err != nil {
+		return nil
+	}
+	body, err := storage.Bytes()
+	if err != nil {
+		return nil
+	}
+	return body
+}
+
+func extractEffortFromMap(data map[string]interface{}) string {
+	if data == nil {
+		return ""
+	}
+	if reasoning := getMapValue(data, "reasoning"); reasoning != nil {
+		if effort := getStringValue(reasoning, "effort"); effort != "" {
+			return effort
+		}
+	}
+	for _, key := range []string{"effort", "think_effort", "model_reasoning_effort", "reasoning_effort"} {
+		if effort := getStringValue(data, key); effort != "" {
+			return effort
+		}
+	}
+	return ""
+}
+
 func appendFastServiceTierInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {
 	if other == nil {
 		return
 	}
 	other["fast_service_tier"] = hasFastServiceTier(ctx, relayInfo)
+	requestServiceTier := ""
+	if value, ok := other["request_service_tier"].(string); ok {
+		requestServiceTier = strings.TrimSpace(value)
+	}
+	if requestServiceTier == "" {
+		requestServiceTier = extractRequestServiceTier(ctx, relayInfo)
+	}
+	fast, ok := extractRequestFastParam(ctx, relayInfo)
+	if !ok {
+		fast = false
+	}
+	if !fast && isFastRequestServiceTier(requestServiceTier) {
+		fast = true
+	}
+	other["request_fast"] = fast
+	if tier := extractRequestFastServiceTier(ctx, relayInfo, other, fast); tier != "" {
+		other["request_fast_service_tier"] = tier
+	}
+}
+
+func isFastRequestServiceTier(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "fast", "priority":
+		return true
+	default:
+		return false
+	}
 }
 
 func hasFastServiceTier(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) bool {
@@ -199,6 +325,81 @@ func hasFastServiceTierInBody(body []byte) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(value), "fast")
+}
+
+func extractRequestFastParam(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) (bool, bool) {
+	if ctx != nil && ctx.Request != nil {
+		if value := strings.TrimSpace(ctx.Request.Header.Get(headerClaudeCodeProxyFast)); value != "" {
+			return parseBoolishValue(value)
+		}
+	}
+
+	body := requestBodyForLogParamExtraction(ctx, relayInfo)
+	if len(body) == 0 {
+		return false, false
+	}
+	var data map[string]interface{}
+	if err := common.Unmarshal(body, &data); err != nil {
+		return false, false
+	}
+	return getBoolishValue(data, "fast")
+}
+
+func extractRequestFastServiceTier(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}, requestFast bool) string {
+	if !requestFast {
+		return ""
+	}
+	if ctx != nil && ctx.Request != nil {
+		if value := strings.TrimSpace(ctx.Request.Header.Get(headerClaudeCodeProxyFastServiceTier)); value != "" {
+			return value
+		}
+	}
+	if other != nil {
+		if value, ok := other["request_service_tier"].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return extractRequestServiceTier(ctx, relayInfo)
+}
+
+func getBoolishValue(source map[string]interface{}, key string) (bool, bool) {
+	if source == nil {
+		return false, false
+	}
+	value, ok := source[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		return parseBoolishValue(typed)
+	case float64:
+		return typed != 0, true
+	case int:
+		return typed != 0, true
+	case int64:
+		return typed != 0, true
+	case uint:
+		return typed != 0, true
+	case uint64:
+		return typed != 0, true
+	default:
+		return false, false
+	}
+}
+
+func parseBoolishValue(value string) (bool, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	switch normalized {
+	case "1", "true", "yes", "on", "enabled", "enable", "fast":
+		return true, true
+	case "0", "false", "no", "off", "disabled", "disable":
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 func appendParamOverrideInfo(relayInfo *relaycommon.RelayInfo, other map[string]interface{}) {

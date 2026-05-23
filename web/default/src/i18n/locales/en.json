@@ -3285,7 +3285,9 @@
     "Request conversion": "Request conversion",
     "Request Conversion": "Request Conversion",
     "Request Count": "Request Count",
+    "Request Effort": "Request Effort",
     "Request failed": "Request failed",
+    "Request Fast Parameter": "Request Fast Parameter",
     "Request flow": "Request flow",
     "Request Header Field": "Request Header Field",
     "Request Header Override": "Request Header Override",
@@ -3296,6 +3298,7 @@
     "Request Model:": "Request Model:",
     "Request overrides, routing behavior, and upstream model automation": "Request overrides, routing behavior, and upstream model automation",
     "Request rule pricing": "Request rule pricing",
+    "Request Service Tier": "Request Service Tier",
     "Request success rate sampled over the last 24 hours": "Request success rate sampled over the last 24 hours",
     "Request success rate; {{incidents}} incident buckets in the last 24 hours": "Request success rate; {{incidents}} incident buckets in the last 24 hours",
     "Request timed out, please refresh and restart GitHub login": "Request timed out, please refresh and restart GitHub login",
@@ -3344,6 +3347,7 @@
     "Resource Configuration": "Resource Configuration",
     "Response": "Response",
     "Response Time": "Response Time",
+    "Response Service Tier": "Response Service Tier",
     "Responses API Version": "Responses API Version",
     "Restore defaults": "Restore defaults",
     "Restrict user model request frequency (may impact high concurrency performance)": "Restrict user model request frequency (may impact high concurrency performance)",
@@ -4484,6 +4488,7 @@
     "Zoom": "Zoom",
     "Service Tier": "Service Tier",
     "Fast Param": "Fast Param",
+    "Fast Conversion": "Fast Conversion",
     "On": "On",
     "Off": "Off",
     "{{count}} messages are included when exporting.": "{{count}} messages are included when exporting.",
@@ -4601,6 +4606,7 @@
     "{{count}} ChatGPT redo task(s) submitted": "{{count}} ChatGPT redo task(s) submitted",
     "{{count}} selected channel(s) skipped because they are not supported": "{{count}} selected channel(s) skipped because they are not supported",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} channel(s) failed to redo OAuth",
-    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} channel(s) failed to redo ChatGPT"
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} channel(s) failed to redo ChatGPT",
+    "Final Reasoning Effort": "Final Reasoning Effort"
   }
 }

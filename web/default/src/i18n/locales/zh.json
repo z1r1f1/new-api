@@ -3285,7 +3285,9 @@
     "Request conversion": "请求转换",
     "Request Conversion": "请求转换",
     "Request Count": "请求计数",
+    "Request Effort": "请求推理强度",
     "Request failed": "请求失败",
+    "Request Fast Parameter": "请求 Fast 参数",
     "Request flow": "请求流",
     "Request Header Field": "请求头字段",
     "Request Header Override": "请求头覆盖",
@@ -3296,6 +3298,7 @@
     "Request Model:": "请求模型：",
     "Request overrides, routing behavior, and upstream model automation": "请求覆盖、路由行为和上游模型自动化",
     "Request rule pricing": "请求规则计费",
+    "Request Service Tier": "请求服务层级",
     "Request success rate sampled over the last 24 hours": "最近 24 小时按时间桶采样的请求成功率",
     "Request success rate; {{incidents}} incident buckets in the last 24 hours": "请求成功率；最近 24 小时 {{incidents}} 个异常桶",
     "Request timed out, please refresh and restart GitHub login": "请求超时，请刷新页面后重新发起 GitHub 登录",
@@ -3344,6 +3347,7 @@
     "Resource Configuration": "资源配置",
     "Response": "响应",
     "Response Time": "响应时间",
+    "Response Service Tier": "响应服务层级",
     "Responses API Version": "响应 API 版本",
     "Restore defaults": "恢复默认",
     "Restrict user model request frequency (may impact high concurrency performance)": "限制用户模型请求频率（可能会影响高并发性能）",
@@ -4484,6 +4488,7 @@
     "Zoom": "缩放",
     "Service Tier": "服务层级",
     "Fast Param": "Fast 参数",
+    "Fast Conversion": "Fast 转换",
     "On": "开",
     "Off": "关",
     "{{count}} messages are included when exporting.": "导出时包含 {{count}} 条消息。",
@@ -4601,6 +4606,7 @@
     "{{count}} ChatGPT redo task(s) submitted": "已提交 {{count}} 个 ChatGPT 重做任务",
     "{{count}} selected channel(s) skipped because they are not supported": "已跳过 {{count}} 个不支持该操作的所选渠道",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} 个渠道重做 OAuth 失败",
-    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} 个渠道重做 ChatGPT 失败"
+    "{{count}} channel(s) failed to redo ChatGPT": "{{count}} 个渠道重做 ChatGPT 失败",
+    "Final Reasoning Effort": "最终推理强度"
   }
 }

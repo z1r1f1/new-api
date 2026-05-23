@@ -447,6 +447,17 @@ func TestChannelAffinityJSONDebugIncludesServiceTierValue(t *testing.T) {
 	require.Equal(t, "priority", debug["service_tier"])
 }
 
+func TestChannelAffinityJSONDebugIncludesRequestEffortValue(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.5","service_tier":"priority","reasoning":{"effort":"high"},"input":"hello"}`)
+
+	debug := buildChannelAffinityJSONDebug(body)
+
+	require.Equal(t, true, debug["json_valid"])
+	reasoning, ok := debug["reasoning"].(map[string]interface{})
+	require.True(t, ok)
+	require.Equal(t, "high", reasoning["effort"])
+}
+
 func TestAppendChannelAffinityResponseDebugIncludesNestedServiceTierValue(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

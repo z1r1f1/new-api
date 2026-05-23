@@ -135,6 +135,11 @@ function formatRatio(ratio: number | undefined): string {
   return ratio.toFixed(4)
 }
 
+function isFastServiceTierValue(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase()
+  return normalized === 'fast' || normalized === 'priority'
+}
+
 function BillingBreakdown(props: {
   log: UsageLog
   other: LogOtherData
@@ -483,6 +488,40 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const responseServiceTier =
+    typeof other?.response_service_tier === 'string'
+      ? other.response_service_tier.trim()
+      : ''
+  const requestServiceTier =
+    typeof other?.request_service_tier === 'string'
+      ? other.request_service_tier.trim()
+      : ''
+  const requestFastServiceTier =
+    typeof other?.request_fast_service_tier === 'string'
+      ? other.request_fast_service_tier.trim()
+      : ''
+  const requestEffort =
+    typeof other?.request_effort === 'string' ? other.request_effort.trim() : ''
+  const reasoningEffort =
+    typeof other?.reasoning_effort === 'string'
+      ? other.reasoning_effort.trim()
+      : ''
+  const showRequestFast =
+    typeof other?.request_fast === 'boolean' ||
+    !!(
+      other?.request_path ||
+      requestServiceTier ||
+      responseServiceTier ||
+      requestEffort ||
+      reasoningEffort
+    )
+  const requestFast =
+    other?.request_fast === true ||
+    isFastServiceTierValue(requestServiceTier) ||
+    isFastServiceTierValue(requestFastServiceTier)
+  const showReasoningEffort =
+    !!reasoningEffort &&
+    reasoningEffort.toLowerCase() !== requestEffort.toLowerCase()
 
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
@@ -793,17 +832,94 @@ export function DetailsDialog(props: DetailsDialogProps) {
               </DetailSection>
             )}
 
-            {/* Reasoning effort */}
-            {other?.reasoning_effort && (
+            {/* Request service tier / reasoning effort */}
+            {showRequestFast && (
               <DetailRow
-                label={t('Reasoning Effort')}
+                label={t('Request Fast Parameter')}
                 value={
                   <StatusBadge
-                    label={other.reasoning_effort}
+                    label={requestFast ? t('On') : t('Off')}
+                    variant={requestFast ? 'green' : 'grey'}
+                    size='sm'
+                    copyable={false}
+                  />
+                }
+              />
+            )}
+
+            {other?.request_fast_service_tier && (
+              <DetailRow
+                label={t('Fast Conversion')}
+                value={`fast=${requestFast ? 'on' : 'off'} → service_tier=${other.request_fast_service_tier}`}
+                mono
+              />
+            )}
+
+            {requestServiceTier && (
+              <DetailRow
+                label={t('Request Service Tier')}
+                value={
+                  <StatusBadge
+                    label={requestServiceTier}
+                    variant='blue'
+                    size='sm'
+                    copyable={false}
+                  />
+                }
+              />
+            )}
+
+            {responseServiceTier && (
+              <DetailRow
+                label={t('Response Service Tier')}
+                value={
+                  <StatusBadge
+                    label={responseServiceTier}
                     variant={
-                      other.reasoning_effort === 'high'
+                      responseServiceTier === 'priority' ||
+                      responseServiceTier === 'fast'
+                        ? 'green'
+                        : responseServiceTier === 'default'
+                          ? 'grey'
+                          : 'blue'
+                    }
+                    size='sm'
+                    copyable={false}
+                  />
+                }
+              />
+            )}
+
+            {requestEffort && (
+              <DetailRow
+                label={t('Request Effort')}
+                value={
+                  <StatusBadge
+                    label={requestEffort}
+                    variant={
+                      requestEffort.toLowerCase() === 'high'
                         ? 'orange'
-                        : other.reasoning_effort === 'medium'
+                        : requestEffort.toLowerCase() === 'medium'
+                          ? 'yellow'
+                          : 'green'
+                    }
+                    size='sm'
+                    copyable={false}
+                  />
+                }
+              />
+            )}
+
+            {showReasoningEffort && (
+              <DetailRow
+                label={t('Final Reasoning Effort')}
+                value={
+                  <StatusBadge
+                    label={reasoningEffort}
+                    variant={
+                      reasoningEffort.toLowerCase() === 'high'
+                        ? 'orange'
+                        : reasoningEffort.toLowerCase() === 'medium'
                           ? 'yellow'
                           : 'green'
                     }
