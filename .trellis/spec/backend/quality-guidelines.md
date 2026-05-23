@@ -138,6 +138,75 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### Relay first-byte timeout and channel retry
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to channel tests, `relay/channel/api_request.go`, upstream HTTP request creation, relay retry behavior, or the monitoring/alarm setting `ChannelDisableThreshold`.
+- This is a relay boundary contract: runtime setting -> outbound upstream request wait -> relay error code -> channel retry/disable behavior.
+
+#### 2. Signatures
+
+- Runtime setting: `common.ChannelDisableThreshold` in seconds.
+- Channel-test helpers: `channelTestTimeoutDuration()`, `shouldSkipChannelTestTimeout(channel *model.Channel)`, and `applyChannelTestTimeout(req *http.Request, channel *model.Channel)`.
+- Normal relay helpers: `upstreamFirstByteTimeoutDuration()`, `shouldApplyUpstreamFirstByteTimeout(info *relaycommon.RelayInfo)`, and `upstreamFirstByteTimeoutError(timeout time.Duration)`.
+- Retry error: `types.ErrorCodeChannelResponseTimeExceeded` with HTTP status `408`.
+
+#### 3. Contracts
+
+- Model/channel tests must use `ChannelDisableThreshold` as their timeout budget so an upstream that never starts responding cannot leave a test running for many minutes.
+- Normal relay calls must apply the threshold only while waiting for the upstream HTTP response to start. Once upstream headers/first byte have arrived, the timeout timer must be stopped so long streaming responses are not cut off merely because their total duration exceeds the threshold.
+- Normal relay timeout must be represented as `channel:response_time_exceeded` so existing `shouldRetry` / channel-disable logic can switch to another channel.
+- Image generation/edit, async task, realtime/websocket, channel-test paths, and the local `codex-to-claude` bridge channel must not use the normal relay first-byte timer. Image/task requests can legitimately wait longer and have their own task/polling lifecycle; the local bridge has its own upstream lifecycle and should not be cut off by the gateway first-byte guard.
+- Channel tests should use `ChannelDisableThreshold` by default, except the local `codex-to-claude` bridge channel; that bridge should not be wrapped by the channel-test timeout either.
+- Outbound requests created from Gin handlers should use `http.NewRequestWithContext(ginRequestContext(c), ...)` so client cancellation and test timeouts propagate to the upstream request.
+
+#### 4. Validation & Error Matrix
+
+- `ChannelDisableThreshold <= 0` -> no first-byte timeout.
+- Channel test for channel name `codex-to-claude` -> no channel-test timeout.
+- Normal non-image relay and upstream does not start responding before the threshold -> cancel the upstream request and return `channel:response_time_exceeded`, HTTP `408`.
+- Normal relay receives upstream headers before the threshold -> stop the timer; continue reading/streaming the response body normally.
+- Image generation/edit, task relay, or the local `codex-to-claude` bridge channel exceeds the threshold -> do not abort via the normal first-byte timer.
+- Client/request context is canceled before the outbound request -> preserve cancellation behavior; do not classify it as a channel response-time timeout unless the gateway timer fired.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `/v1/responses` waits 180 seconds for upstream to start responding; if no response starts, the gateway records a channel error and retries the next channel.
+- Good: a stream starts within 2 seconds and continues for 5 minutes; the first-byte timer has already stopped and the stream is governed by stream idle/error handling, not the channel-disable threshold.
+- Base: `ChannelDisableThreshold=0` preserves legacy no-timeout behavior.
+- Bad: setting `http.Client.Timeout` globally; this also limits image/task calls and long successful streams.
+- Bad: wrapping the entire normal relay request with `context.WithTimeout`; the context can expire after the first byte and incorrectly abort an otherwise healthy stream.
+
+#### 6. Tests Required
+
+- `controller`: regression test that channel-test timeout duration follows `ChannelDisableThreshold`.
+- `controller`: regression test that channel-test timeout skips channel name `codex-to-claude`.
+- `relay/channel`: regression test that `DoApiRequest` uses the Gin request context.
+- `relay/channel`: regression test that normal relay first-byte timeout returns `channel:response_time_exceeded` / `408`.
+- `relay/channel`: regression test that receiving headers before the threshold does not cancel later response-body reads.
+- `relay/channel`: regression test that image/test/task paths are excluded from the normal first-byte timer.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+ctx, cancel := context.WithTimeout(c.Request.Context(), threshold)
+c.Request = c.Request.WithContext(ctx)
+// A streaming response that lasts longer than threshold can be canceled mid-stream.
+```
+
+Correct:
+
+```go
+reqCtx, cancel := context.WithCancel(req.Context())
+timer := time.AfterFunc(threshold, cancel)
+resp, err := client.Do(req.WithContext(reqCtx))
+timer.Stop() // upstream started responding; do not cap the full stream duration
+resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: cancel}
+```
+
 ### Admin channel list filters
 
 #### 1. Scope / Trigger

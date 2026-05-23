@@ -10,9 +10,11 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	common2 "github.com/QuantumNous/new-api/common"
+	rootconstant "github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
@@ -288,6 +290,70 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 	}
 }
 
+func ginRequestContext(c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return context.Background()
+}
+
+func upstreamFirstByteTimeoutDuration() time.Duration {
+	if common2.ChannelDisableThreshold <= 0 {
+		return 0
+	}
+	return time.Duration(common2.ChannelDisableThreshold * float64(time.Second))
+}
+
+func shouldApplyUpstreamFirstByteTimeout(info *common.RelayInfo) bool {
+	if info == nil || info.IsChannelTest {
+		return false
+	}
+	switch info.RelayFormat {
+	case types.RelayFormatOpenAI,
+		types.RelayFormatClaude,
+		types.RelayFormatGemini,
+		types.RelayFormatOpenAIResponses,
+		types.RelayFormatOpenAIResponsesCompaction,
+		types.RelayFormatOpenAIAudio,
+		types.RelayFormatRerank,
+		types.RelayFormatEmbedding:
+	default:
+		return false
+	}
+	switch info.RelayMode {
+	case constant.RelayModeImagesGenerations, constant.RelayModeImagesEdits:
+		return false
+	default:
+		return true
+	}
+}
+
+func shouldSkipUpstreamFirstByteTimeoutForChannel(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	channelName := strings.TrimSpace(common2.GetContextKeyString(c, rootconstant.ContextKeyChannelName))
+	return strings.EqualFold(channelName, "codex-to-claude")
+}
+
+func upstreamFirstByteTimeoutError(timeout time.Duration) *types.NewAPIError {
+	err := fmt.Errorf("渠道首字响应超时：响应时间超过禁用阈值 %.2fs", timeout.Seconds())
+	return types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	err := b.ReadCloser.Close()
+	if b.cancel != nil {
+		b.cancel()
+	}
+	return err
+}
+
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
 	fullRequestURL, err := a.GetRequestURL(info)
 	if err != nil {
@@ -300,7 +366,7 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, err := http.NewRequestWithContext(ginRequestContext(c), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
@@ -335,7 +401,7 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 		return nil, err
 	}
 
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, err := http.NewRequestWithContext(ginRequestContext(c), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
@@ -508,13 +574,48 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	timeout := upstreamFirstByteTimeoutDuration()
+	var firstByteTimeoutHit atomic.Bool
+	var firstByteTimeoutCancel context.CancelFunc
+	var firstByteTimeoutTimer *time.Timer
+	if timeout > 0 && shouldApplyUpstreamFirstByteTimeout(info) && !shouldSkipUpstreamFirstByteTimeoutForChannel(c) {
+		reqCtx, cancel := context.WithCancel(req.Context())
+		firstByteTimeoutCancel = cancel
+		req = req.WithContext(reqCtx)
+		firstByteTimeoutTimer = time.AfterFunc(timeout, func() {
+			firstByteTimeoutHit.Store(true)
+			cancel()
+		})
+		defer firstByteTimeoutTimer.Stop()
+	}
+
 	resp, err := client.Do(req)
 	if err != nil {
+		if firstByteTimeoutHit.Load() {
+			logger.LogError(c, fmt.Sprintf("do request first byte timeout after %.2fs", timeout.Seconds()))
+			return nil, upstreamFirstByteTimeoutError(timeout)
+		}
+		if firstByteTimeoutCancel != nil {
+			firstByteTimeoutCancel()
+		}
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))
 	}
 	if resp == nil {
+		if firstByteTimeoutCancel != nil {
+			firstByteTimeoutCancel()
+		}
 		return nil, errors.New("resp is nil")
+	}
+	if firstByteTimeoutTimer != nil {
+		firstByteTimeoutTimer.Stop()
+	}
+	if firstByteTimeoutCancel != nil {
+		if resp.Body != nil {
+			resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: firstByteTimeoutCancel}
+		} else {
+			firstByteTimeoutCancel()
+		}
 	}
 
 	if upID := resp.Header.Get(common2.RequestIdKey); upID != "" {
@@ -535,7 +636,7 @@ func DoTaskApiRequest(a TaskAdaptor, c *gin.Context, info *common.RelayInfo, req
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(c.Request.Method, fullRequestURL, requestBody)
+	req, err := http.NewRequestWithContext(ginRequestContext(c), c.Request.Method, fullRequestURL, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}

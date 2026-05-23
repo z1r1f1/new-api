@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -99,6 +100,35 @@ func channelTestResponseTimeMillis(result testResult, fallbackMillis int64) int6
 		return result.responseTimeMillis
 	}
 	return fallbackMillis
+}
+
+func channelTestTimeoutDuration() time.Duration {
+	if common.ChannelDisableThreshold <= 0 {
+		return 0
+	}
+	return time.Duration(common.ChannelDisableThreshold * float64(time.Second))
+}
+
+func shouldSkipChannelTestTimeout(channel *model.Channel) bool {
+	if channel == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(channel.Name), "codex-to-claude")
+}
+
+func applyChannelTestTimeout(req *http.Request, channel *model.Channel) (*http.Request, context.CancelFunc) {
+	if req == nil {
+		return req, nil
+	}
+	if shouldSkipChannelTestTimeout(channel) {
+		return req, nil
+	}
+	timeout := channelTestTimeoutDuration()
+	if timeout <= 0 {
+		return req, nil
+	}
+	ctx, cancel := context.WithTimeout(req.Context(), timeout)
+	return req.WithContext(ctx), cancel
 }
 
 func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
@@ -213,6 +243,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		URL:    &url.URL{Path: requestPath}, // 使用动态路径
 		Body:   nil,
 		Header: make(http.Header),
+	}
+	var cancelTestTimeout context.CancelFunc
+	c.Request, cancelTestTimeout = applyChannelTestTimeout(c.Request, channel)
+	if cancelTestTimeout != nil {
+		defer cancelTestTimeout()
 	}
 
 	cache, err := model.GetUserCache(1)
@@ -494,6 +529,14 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
+		if errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
+			timeoutErr := fmt.Errorf("模型测试超时：响应时间超过禁用阈值 %.2fs", channelTestTimeoutDuration().Seconds())
+			return testResult{
+				context:     c,
+				localErr:    timeoutErr,
+				newAPIError: types.NewOpenAIError(timeoutErr, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout),
+			}
+		}
 		return testResult{
 			context:     c,
 			localErr:    err,

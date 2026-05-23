@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/types"
@@ -47,6 +48,51 @@ func TestResolveChannelTestResponseTimeMillis(t *testing.T) {
 			t.Fatalf("expected invalid first byte time to fall back, got %d", got)
 		}
 	})
+}
+
+func TestChannelTestTimeoutDurationUsesDisableThreshold(t *testing.T) {
+	oldThreshold := common.ChannelDisableThreshold
+	t.Cleanup(func() {
+		common.ChannelDisableThreshold = oldThreshold
+	})
+
+	common.ChannelDisableThreshold = 1.5
+	if got := channelTestTimeoutDuration(); got != 1500*time.Millisecond {
+		t.Fatalf("expected timeout to follow disable threshold, got %s", got)
+	}
+
+	common.ChannelDisableThreshold = 0
+	if got := channelTestTimeoutDuration(); got != 0 {
+		t.Fatalf("expected zero threshold to disable channel test timeout, got %s", got)
+	}
+}
+
+func TestApplyChannelTestTimeoutSkipsCodexToClaudeChannel(t *testing.T) {
+	oldThreshold := common.ChannelDisableThreshold
+	t.Cleanup(func() {
+		common.ChannelDisableThreshold = oldThreshold
+	})
+	common.ChannelDisableThreshold = 0.01
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	originalContext := req.Context()
+
+	gotReq, cancel := applyChannelTestTimeout(req, &model.Channel{Name: " codex-to-claude "})
+	if cancel != nil {
+		t.Fatalf("expected codex-to-claude channel test to skip timeout")
+	}
+	if gotReq.Context() != originalContext {
+		t.Fatalf("expected skipped timeout to keep original request context")
+	}
+
+	gotReq, cancel = applyChannelTestTimeout(req, &model.Channel{Name: "ordinary"})
+	if cancel == nil {
+		t.Fatalf("expected ordinary channel test to get timeout cancel")
+	}
+	defer cancel()
+	if gotReq.Context() == originalContext {
+		t.Fatalf("expected ordinary channel test to wrap request context")
+	}
 }
 
 func TestFirstByteResponseWriterMarksBodyWrites(t *testing.T) {
