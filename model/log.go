@@ -320,9 +320,15 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		tx = LOG_DB.Where("logs.type = ?", logType)
 	}
 
-	tx = applyLogContainsFilter(tx, "logs.model_name", modelName)
-	tx = applyLogContainsFilter(tx, "logs.username", username)
-	tx = applyLogContainsFilter(tx, "logs.token_name", tokenName)
+	if modelName != "" {
+		tx = tx.Where("logs.model_name like ?", modelName)
+	}
+	if username != "" {
+		tx = tx.Where("logs.username = ?", username)
+	}
+	if tokenName != "" {
+		tx = tx.Where("logs.token_name = ?", tokenName)
+	}
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}
@@ -444,8 +450,16 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
 
-	tx = applyLogContainsFilter(tx, "logs.model_name", modelName)
-	tx = applyLogContainsFilter(tx, "logs.token_name", tokenName)
+	if modelName != "" {
+		modelNamePattern, err := sanitizeLikePattern(modelName)
+		if err != nil {
+			return nil, 0, err
+		}
+		tx = tx.Where("logs.model_name LIKE ? ESCAPE '!'", modelNamePattern)
+	}
+	if tokenName != "" {
+		tx = tx.Where("logs.token_name = ?", tokenName)
+	}
 	if requestId != "" {
 		tx = tx.Where("logs.request_id = ?", requestId)
 	}

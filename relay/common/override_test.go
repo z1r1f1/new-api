@@ -2158,6 +2158,17 @@ func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
 	assertJSONEqual(t, `{"cache_control":{"type":"ephemeral"},"store":true}`, string(out))
 }
 
+func TestRemoveDisabledFieldsNoControlledFieldsKeepsBody(t *testing.T) {
+	input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
+	settings := dto.ChannelOtherSettings{}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	if err != nil {
+		t.Fatalf("RemoveDisabledFields returned error: %v", err)
+	}
+	require.Equal(t, input, string(out))
+}
+
 func TestRemoveDisabledFieldsHashesLongPromptCacheKey(t *testing.T) {
 	longPromptCacheKey := strings.Repeat("session-", 10)
 	input := fmt.Sprintf(`{
