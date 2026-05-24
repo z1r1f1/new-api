@@ -640,8 +640,7 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *dto.TaskError,
 		return false
 	}
 	if taskErr.StatusCode == 408 {
-		// azure处理超时不重试
-		return false
+		return true
 	}
 	if taskErr.LocalError {
 		return false

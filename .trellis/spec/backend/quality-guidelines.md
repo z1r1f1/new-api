@@ -156,7 +156,7 @@ When adding or modifying a channel:
 
 - Model/channel tests must use `ChannelDisableThreshold` as their timeout budget so an upstream that never starts responding cannot leave a test running for many minutes.
 - Normal relay calls must apply the threshold only while waiting for the upstream HTTP response to start. Once upstream headers/first byte have arrived, the timeout timer must be stopped so long streaming responses are not cut off merely because their total duration exceeds the threshold.
-- Normal relay timeout must be represented as `channel:response_time_exceeded` so existing `shouldRetry` / channel-disable logic can switch to another channel.
+- Normal relay timeout must be represented as `channel:response_time_exceeded` with HTTP `408` so retry logic can switch to another channel. HTTP `408` is retry-only and must not auto-disable the channel, even if it is configured in automatic-disable status codes or matches automatic-disable keywords.
 - Image generation/edit, async task, realtime/websocket, channel-test paths, and the local `codex-to-claude` bridge channel must not use the normal relay first-byte timer. Image/task requests can legitimately wait longer and have their own task/polling lifecycle; the local bridge has its own upstream lifecycle and should not be cut off by the gateway first-byte guard.
 - Channel tests should use `ChannelDisableThreshold` by default, except the local `codex-to-claude` bridge channel; that bridge should not be wrapped by the channel-test timeout either.
 - Outbound requests created from Gin handlers should use `http.NewRequestWithContext(ginRequestContext(c), ...)` so client cancellation and test timeouts propagate to the upstream request.
@@ -165,14 +165,15 @@ When adding or modifying a channel:
 
 - `ChannelDisableThreshold <= 0` -> no first-byte timeout.
 - Channel test for channel name `codex-to-claude` -> no channel-test timeout.
-- Normal non-image relay and upstream does not start responding before the threshold -> cancel the upstream request and return `channel:response_time_exceeded`, HTTP `408`.
+- Normal non-image relay and upstream does not start responding before the threshold -> cancel the upstream request, return `channel:response_time_exceeded`, HTTP `408`, retry another eligible channel, and do not auto-disable the timed-out channel.
 - Normal relay receives upstream headers before the threshold -> stop the timer; continue reading/streaming the response body normally.
 - Image generation/edit, task relay, or the local `codex-to-claude` bridge channel exceeds the threshold -> do not abort via the normal first-byte timer.
+- Any relay error with HTTP status `408` -> retry/switch channel when retries remain; do not auto-disable the channel.
 - Client/request context is canceled before the outbound request -> preserve cancellation behavior; do not classify it as a channel response-time timeout unless the gateway timer fired.
 
 #### 5. Good/Base/Bad Cases
 
-- Good: `/v1/responses` waits 180 seconds for upstream to start responding; if no response starts, the gateway records a channel error and retries the next channel.
+- Good: `/v1/responses` waits 180 seconds for upstream to start responding; if no response starts, the gateway records a 408 timeout error and retries the next channel without auto-disabling the current channel.
 - Good: a stream starts within 2 seconds and continues for 5 minutes; the first-byte timer has already stopped and the stream is governed by stream idle/error handling, not the channel-disable threshold.
 - Base: `ChannelDisableThreshold=0` preserves legacy no-timeout behavior.
 - Bad: setting `http.Client.Timeout` globally; this also limits image/task calls and long successful streams.
@@ -254,6 +255,95 @@ Correct:
 
 ```ts
 getChannels({ status_code: '429', p, page_size })
+```
+
+### API key access restrictions
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to API key/token create or edit UI, `controller/token.go`, `model/token.go`, `middleware/auth.go`, or relay model-limit enforcement.
+- This is a cross-layer contract: frontend form values -> `/api/token/` payload -> `tokens` DB fields -> token auth/distributor context -> relay authorization.
+
+#### 2. Signatures
+
+- Create: `POST /api/token/`
+- Update: `PUT /api/token/`
+- Relevant payload/storage fields:
+  - `model_limits_enabled bool`
+  - `model_limits string` — comma-separated model names in storage/API payload.
+  - `allow_ips string` — newline and comma separated IP/CIDR allowlist.
+- Runtime enforcement:
+  - `model.Token.GetModelLimits()` / `GetModelLimitsMap()`
+  - `model.Token.GetIpLimits()`
+  - `middleware.SetupContextForToken(...)`
+  - `middleware.TokenAuth()`
+  - `middleware.Distribute()` model-limit check.
+
+#### 3. Contracts
+
+- Frontend must allow API-key model restrictions to be selected from available models **and** manually typed/pasted. Some valid models may not appear in the current group-derived option list.
+- Frontend must trim and de-duplicate model names before sending.
+- Backend must trim, drop empty values, and de-duplicate parsed `model_limits`.
+- Backend model limit parsing must accept comma and newline delimiters so old/new UI and manual API clients round-trip safely.
+- Backend IP allowlist parsing must accept newline and comma delimiters, trim spaces, and preserve CIDR strings.
+- Empty `model_limits` means `model_limits_enabled=false` and all models are allowed.
+- Empty `allow_ips` means no IP restriction.
+
+#### 4. Validation & Error Matrix
+
+- `model_limits=""` -> no model restriction.
+- `model_limits=" gpt-5.5, ,gpt-4o\n"` -> limits `gpt-5.5` and `gpt-4o`.
+- request model not in token limit map -> relay returns forbidden token-model-access error.
+- `allow_ips=""` -> no IP restriction.
+- client IP not matching any parsed IP/CIDR -> relay returns HTTP 403 access denied.
+- invalid IP/CIDR entries are ignored by `common.IsIpInCIDRList`; they must not grant access.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: user types `gpt-5.5`, presses Enter, saves, and later `/v1/responses` for `gpt-5.5` is allowed.
+- Good: user pastes `gpt-5.5,gpt-4o\nclaude-sonnet-4`; all three values are saved once.
+- Good: user enters `127.0.0.1, 10.0.0.0/8`; both the exact IP and CIDR are enforced.
+- Base: no model limits and no IP allowlist preserves legacy unrestricted API key behavior.
+- Bad: treating the model-limit input as search-only UI; typed text disappears and the saved payload has `model_limits=""`.
+- Bad: splitting IP allowlist only by newline and deleting commas; `127.0.0.1,10.0.0.0/8` becomes an invalid single token.
+
+#### 6. Tests Required
+
+- `model`: `Token.GetModelLimits()` trims, de-duplicates, and accepts comma/newline delimiters.
+- `model`: `Token.GetIpLimits()` accepts comma/newline IP/CIDR values.
+- `middleware`: `SetupContextForToken()` sets normalized model-limit context.
+- `controller`: `UpdateToken()` persists `model_limits_enabled`, `model_limits`, and `allow_ips`.
+- `web/default`: run `bun run typecheck`, `bun run lint`, and `bun run build` after changing the API-key form or multi-select component.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```typescript
+// Search text is not a selected value; pressing Save sends an empty limit.
+<MultiSelect selected={field.value} onChange={field.onChange} />
+```
+
+Correct:
+
+```typescript
+// API-key model limits must support custom typed/pasted model IDs.
+<MultiSelect selected={field.value} onChange={field.onChange} allowCustomValues />
+```
+
+Wrong:
+
+```go
+return strings.Split(token.ModelLimits, ",")
+```
+
+Correct:
+
+```go
+// Trim, drop empties, de-duplicate, and accept comma/newline delimiters.
+return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
+    return r == ',' || r == '\n' || r == '\r'
+})
 ```
 
 ### ChatGPT Web image requests and playground async image tasks

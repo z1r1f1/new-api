@@ -185,7 +185,7 @@ export function WaffoPancakeSettingsSection(props: Props) {
       preselect?: { storeID?: string; productID?: string }
     ) => {
       const serial = ++fetchSerialRef.current
-      let stores: CatalogStore[] = []
+      let stores: CatalogStore[]
       try {
         const body = await listWaffoPancakeCatalog(merchantID, privateKey)
         if (serial !== fetchSerialRef.current) return

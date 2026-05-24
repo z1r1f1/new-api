@@ -57,9 +57,7 @@ export function getApiKeyFormSchema(t: TFunction) {
     })
 }
 
-export type ApiKeyFormValues = z.infer<
-  ReturnType<typeof getApiKeyFormSchema>
->
+export type ApiKeyFormValues = z.infer<ReturnType<typeof getApiKeyFormSchema>>
 
 // ============================================================================
 // Form Defaults
@@ -97,6 +95,7 @@ export function getApiKeyFormDefaultValues(
 export function transformFormDataToPayload(
   data: ApiKeyFormValues
 ): ApiKeyFormData {
+  const modelLimits = normalizeStringList(data.model_limits)
   return {
     name: data.name,
     remain_quota: data.unlimited_quota
@@ -106,8 +105,8 @@ export function transformFormDataToPayload(
       ? Math.floor(data.expired_time.getTime() / 1000)
       : -1,
     unlimited_quota: data.unlimited_quota,
-    model_limits_enabled: data.model_limits.length > 0,
-    model_limits: data.model_limits.join(','),
+    model_limits_enabled: modelLimits.length > 0,
+    model_limits: modelLimits.join(','),
     allow_ips: data.allow_ips || '',
     group: data.group || '',
     cross_group_retry: data.group === 'auto' ? !!data.cross_group_retry : false,
@@ -131,11 +130,29 @@ export function transformApiKeyToFormDefaults(
         : undefined,
     unlimited_quota: apiKey.unlimited_quota,
     model_limits: apiKey.model_limits
-      ? apiKey.model_limits.split(',').filter(Boolean)
+      ? splitModelLimits(apiKey.model_limits)
       : [],
     allow_ips: apiKey.allow_ips || '',
     group: apiKey.group || DEFAULT_GROUP,
     cross_group_retry: !!apiKey.cross_group_retry,
     tokenCount: 1,
   }
+}
+
+function splitModelLimits(value: string): string[] {
+  return normalizeStringList(value.split(/[\n,]+/))
+}
+
+function normalizeStringList(values: string[]): string[] {
+  const seen = new Set<string>()
+  const normalized: string[] = []
+  for (const value of values) {
+    const item = value.trim()
+    if (!item || seen.has(item)) {
+      continue
+    }
+    seen.add(item)
+    normalized.push(item)
+  }
+  return normalized
 }

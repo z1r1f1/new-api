@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -47,6 +48,9 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 		return false
 	}
 	if err == nil {
+		return false
+	}
+	if err.StatusCode == http.StatusRequestTimeout {
 		return false
 	}
 	if types.IsChannelError(err) {

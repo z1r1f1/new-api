@@ -35,6 +35,7 @@ interface MultiSelectProps {
   onChange: (values: string[]) => void
   placeholder?: string
   className?: string
+  allowCustomValues?: boolean
 }
 
 export function MultiSelect({
@@ -43,12 +44,59 @@ export function MultiSelect({
   onChange,
   placeholder,
   className,
+  allowCustomValues = false,
 }: MultiSelectProps) {
   const { t } = useTranslation()
   const resolvedPlaceholder = placeholder ?? t('Select items...')
   const inputRef = React.useRef<HTMLInputElement>(null)
   const [open, setOpen] = React.useState(false)
   const [inputValue, setInputValue] = React.useState('')
+
+  const parseCustomValues = (value: string) =>
+    value
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+
+  const addSelectedValues = (values: string[]) => {
+    const next = [...selected]
+    for (const value of values) {
+      const normalized = value.trim()
+      if (!normalized || next.includes(normalized)) {
+        continue
+      }
+      next.push(normalized)
+    }
+    if (next.length !== selected.length) {
+      onChange(next)
+    }
+  }
+
+  const commitInputValue = () => {
+    if (!allowCustomValues) {
+      return false
+    }
+    const values = parseCustomValues(inputValue)
+    if (values.length === 0) {
+      return false
+    }
+    addSelectedValues(values)
+    setInputValue('')
+    return true
+  }
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (!allowCustomValues) {
+      return
+    }
+    const values = parseCustomValues(e.clipboardData.getData('text'))
+    if (values.length <= 1) {
+      return
+    }
+    e.preventDefault()
+    addSelectedValues(values)
+    setInputValue('')
+  }
 
   const handleUnselect = (value: string) => {
     onChange(selected.filter((s) => s !== value))
@@ -57,6 +105,15 @@ export function MultiSelect({
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const input = inputRef.current
     if (input) {
+      if (
+        allowCustomValues &&
+        (e.key === 'Enter' || e.key === 'Tab' || e.key === ',') &&
+        input.value.trim() !== ''
+      ) {
+        e.preventDefault()
+        commitInputValue()
+        return
+      }
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (input.value === '' && selected.length > 0) {
           onChange(selected.slice(0, -1))
@@ -112,7 +169,11 @@ export function MultiSelect({
             ref={inputRef}
             value={inputValue}
             onValueChange={setInputValue}
-            onBlur={() => setOpen(false)}
+            onPaste={handlePaste}
+            onBlur={() => {
+              commitInputValue()
+              setOpen(false)
+            }}
             onFocus={() => setOpen(true)}
             placeholder={selected.length === 0 ? resolvedPlaceholder : ''}
             className='placeholder:text-muted-foreground flex-1 bg-transparent outline-none'

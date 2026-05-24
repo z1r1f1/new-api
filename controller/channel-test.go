@@ -1139,7 +1139,7 @@ func runChannelAutoTests(channels []*model.Channel, notify bool, deleteUnauthori
 				if milliseconds > disableThreshold {
 					err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
 					newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
-					shouldBanChannel = true
+					shouldBanChannel = service.ShouldDisableChannel(newAPIError)
 				}
 			}
 

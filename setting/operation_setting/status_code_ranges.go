@@ -16,8 +16,9 @@ type StatusCodeRange struct {
 
 var AutomaticDisableStatusCodeRanges = []StatusCodeRange{{Start: 401, End: 401}}
 
-// Default behavior matches legacy hardcoded retry rules in controller/relay.go shouldRetry:
-// retry for 1xx, 3xx, 4xx(except 400/408), 5xx(except 504/524), and no retry for 2xx.
+// Default behavior matches legacy hardcoded retry rules in controller/relay.go shouldRetry,
+// with 408 handled as retry-only timeout so the relay can switch channels without auto-disabling:
+// retry for 1xx, 3xx, 4xx(except 400), 5xx(except 504/524), and no retry for 2xx.
 var AutomaticRetryStatusCodeRanges = []StatusCodeRange{
 	{Start: 100, End: 199},
 	{Start: 300, End: 399},
@@ -31,6 +32,10 @@ var AutomaticRetryStatusCodeRanges = []StatusCodeRange{
 var alwaysSkipRetryStatusCodes = map[int]struct{}{
 	504: {},
 	524: {},
+}
+
+var alwaysRetryStatusCodes = map[int]struct{}{
+	408: {},
 }
 
 var alwaysSkipRetryCodes = map[types.ErrorCode]struct{}{
@@ -72,6 +77,11 @@ func IsAlwaysSkipRetryStatusCode(code int) bool {
 	return exists
 }
 
+func IsAlwaysRetryStatusCode(code int) bool {
+	_, exists := alwaysRetryStatusCodes[code]
+	return exists
+}
+
 func IsAlwaysSkipRetryCode(errorCode types.ErrorCode) bool {
 	_, exists := alwaysSkipRetryCodes[errorCode]
 	return exists
@@ -80,6 +90,9 @@ func IsAlwaysSkipRetryCode(errorCode types.ErrorCode) bool {
 func ShouldRetryByStatusCode(code int) bool {
 	if IsAlwaysSkipRetryStatusCode(code) {
 		return false
+	}
+	if IsAlwaysRetryStatusCode(code) {
+		return true
 	}
 	return shouldMatchStatusCodeRanges(AutomaticRetryStatusCodeRanges, code)
 }

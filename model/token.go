@@ -57,25 +57,12 @@ func (token *Token) GetMaskedKey() string {
 }
 
 func (token *Token) GetIpLimits() []string {
-	// delete empty spaces
-	//split with \n
-	ipLimits := make([]string, 0)
 	if token.AllowIps == nil {
-		return ipLimits
+		return []string{}
 	}
-	cleanIps := strings.ReplaceAll(*token.AllowIps, " ", "")
-	if cleanIps == "" {
-		return ipLimits
-	}
-	ips := strings.Split(cleanIps, "\n")
-	for _, ip := range ips {
-		ip = strings.TrimSpace(ip)
-		ip = strings.ReplaceAll(ip, ",", "")
-		if ip != "" {
-			ipLimits = append(ipLimits, ip)
-		}
-	}
-	return ipLimits
+	return splitAccessRestrictionValues(*token.AllowIps, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r'
+	})
 }
 
 func GetAllUserTokens(userId int, startIdx int, num int) ([]*Token, error) {
@@ -337,7 +324,9 @@ func (token *Token) GetModelLimits() []string {
 	if token.ModelLimits == "" {
 		return []string{}
 	}
-	return strings.Split(token.ModelLimits, ",")
+	return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\r'
+	})
 }
 
 func (token *Token) GetModelLimitsMap() map[string]bool {
@@ -347,6 +336,23 @@ func (token *Token) GetModelLimitsMap() map[string]bool {
 		limitsMap[limit] = true
 	}
 	return limitsMap
+}
+
+func splitAccessRestrictionValues(raw string, isSeparator func(rune) bool) []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, value := range strings.FieldsFunc(raw, isSeparator) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }
 
 func DisableModelLimits(tokenId int) error {
