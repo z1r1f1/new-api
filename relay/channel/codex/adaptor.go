@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
@@ -99,6 +100,23 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if isCompact {
 		return request, nil
 	}
+
+	// Codex backend only accepts streaming responses. Treat an omitted stream
+	// field as stream=true so Claude/OpenAI-compatible clients that rely on
+	// API defaults do not get an upstream 400. Explicit stream=false is still
+	// preserved as client intent.
+	if request.Stream == nil {
+		request.Stream = common.GetPointer(true)
+	}
+	if request.Stream != nil && *request.Stream {
+		if info != nil {
+			info.IsStream = true
+		}
+		if c != nil {
+			c.Set(string(constant.ContextKeyIsStream), true)
+		}
+	}
+
 	// codex: store must be false
 	request.Store = json.RawMessage("false")
 	// rm max_output_tokens

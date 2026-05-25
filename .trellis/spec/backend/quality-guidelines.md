@@ -620,6 +620,70 @@ Regression tests:
 - `service/channel_affinity_template_test.go` covers clearing the current
   affinity cache key.
 
+
+### Codex responses stream default
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to the Codex channel adaptor, `/v1/responses`, `/v1/chat/completions` to Responses compatibility, or `/v1/messages` to Responses compatibility when the selected upstream channel is `ChannelTypeCodex`.
+- Codex backend responses endpoints are streaming-only; omitting `stream` on compatible client requests can produce upstream HTTP 400 errors such as `stream must set to be true`.
+
+#### 2. Signatures
+
+- Adaptor hook: `relay/channel/codex.Adaptor.ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error)`.
+- Request field: `dto.OpenAIResponsesRequest.Stream *bool \`json:"stream,omitempty"\``.
+- Runtime stream flag: `relaycommon.RelayInfo.IsStream` plus Gin context key `constant.ContextKeyIsStream`.
+
+#### 3. Contracts
+
+- For Codex normal Responses requests (`RelayModeResponses`), an omitted `stream` field must be normalized to `stream:true` before sending to upstream.
+- When the adaptor normalizes or receives `stream:true`, it must also mark `RelayInfo.IsStream=true` and update `ContextKeyIsStream`, so response handling, stream status tracking, and consume logs all use streaming semantics.
+- `RelayModeResponsesCompact` must not get this default; compact requests keep their own endpoint semantics.
+- Explicit `stream:false` remains explicit client intent and must not be silently reinterpreted as an omitted value.
+
+#### 4. Validation & Error Matrix
+
+- `RelayModeResponses`, `stream` omitted -> upstream body includes `"stream":true`; downstream handled as stream.
+- `RelayModeResponses`, `stream:true` -> preserve true and downstream handled as stream.
+- `RelayModeResponses`, `stream:false` -> preserve false; upstream may reject according to Codex backend rules.
+- `RelayModeResponsesCompact`, `stream` omitted -> leave omitted.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: Claude-compatible `/v1/messages` request without `stream` is converted through OpenAI Responses and Codex adaptor adds `stream:true` before upstream.
+- Good: OpenAI-compatible `/v1/responses` request without `stream` on Codex does not fail with upstream `stream must set to be true`.
+- Base: compact request to `/v1/responses/compact` remains non-stream-defaulted.
+- Bad: adding only `request.Stream=true` without syncing `RelayInfo.IsStream`; response code can parse the upstream SSE with a non-stream handler or log incorrect stream state.
+
+#### 6. Tests Required
+
+- `relay/channel/codex`: regression test that omitted `stream` defaults to true for `RelayModeResponses`.
+- `relay/channel/codex`: regression test that `RelayInfo.IsStream` and `ContextKeyIsStream` are true after the default is applied.
+- `relay/channel/codex`: regression test that compact requests do not receive the default.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if request.Stream == nil {
+    request.Stream = common.GetPointer(true)
+}
+// info.IsStream remains false; response handling/logging are inconsistent.
+```
+
+Correct:
+
+```go
+if request.Stream == nil {
+    request.Stream = common.GetPointer(true)
+}
+if request.Stream != nil && *request.Stream {
+    info.IsStream = true
+    c.Set(string(constant.ContextKeyIsStream), true)
+}
+```
+
 ### Codex account type cache during channel tests
 
 #### 1. Scope / Trigger
