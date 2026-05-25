@@ -621,6 +621,57 @@ Regression tests:
   affinity cache key.
 
 
+
+### Claude messages route compatibility alias
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to relay route registration for Claude-compatible Messages endpoints.
+- Some clients may accidentally use `/v1/message` while the canonical Anthropic-compatible endpoint is `/v1/messages`.
+
+#### 2. Signatures
+
+- Canonical route: `POST /v1/messages` -> `controller.Relay(c, types.RelayFormatClaude)`.
+- Compatibility alias: `POST /v1/message` -> `controller.Relay(c, types.RelayFormatClaude)`.
+
+#### 3. Contracts
+
+- `/v1/message` must be a pure alias of `/v1/messages`; both must share the same auth, distribution, relay format, and downstream processing chain.
+- Do not implement a separate handler for the alias; separate logic can drift from canonical Claude behavior.
+- The alias exists for client compatibility only. New clients should still prefer `/v1/messages`.
+
+#### 4. Validation & Error Matrix
+
+- `POST /v1/messages` -> Claude relay handler path.
+- `POST /v1/message` -> same Claude relay handler path.
+- Unsupported methods or other singular/plural variants -> unchanged router behavior.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a client configured with `/v1/message` can reach the same Claude-to-Codex conversion path as `/v1/messages`.
+- Base: standards-compliant clients continue using `/v1/messages` with no behavior change.
+- Bad: adding `/v1/message` under a different middleware group, bypassing token auth, distribution, or rate limiting.
+
+#### 6. Tests Required
+
+- `router`: regression test that both `POST /v1/messages` and `POST /v1/message` are registered.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+router.POST("/v1/message", customHandler)
+```
+
+Correct:
+
+```go
+httpRouter.POST("/message", func(c *gin.Context) {
+    controller.Relay(c, types.RelayFormatClaude)
+})
+```
+
 ### Codex responses stream default
 
 #### 1. Scope / Trigger

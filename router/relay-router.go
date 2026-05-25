@@ -110,6 +110,10 @@ func SetRelayRouter(router *gin.Engine) {
 		httpRouter.POST("/messages", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatClaude)
 		})
+		// Compatibility alias for clients that accidentally use the singular path.
+		httpRouter.POST("/message", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatClaude)
+		})
 
 		// chat related routes
 		httpRouter.POST("/completions", func(c *gin.Context) {
