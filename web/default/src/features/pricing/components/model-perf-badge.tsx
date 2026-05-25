@@ -38,6 +38,24 @@ function formatCompactThroughput(tps: number): string {
   return formatThroughput(tps).replace(' t/s', 'tps')
 }
 
+const STATUS_SEGMENTS = 5
+
+function getStatusColour(successRate: number): string {
+  if (successRate >= 99.9) return 'bg-emerald-500'
+  if (successRate >= 99) return 'bg-emerald-400'
+  if (successRate >= 95) return 'bg-amber-500'
+  if (successRate >= 90) return 'bg-amber-600'
+  return 'bg-rose-500'
+}
+
+function getActiveStatusSegments(successRate: number): number {
+  if (successRate >= 99.9) return 5
+  if (successRate >= 99) return 4
+  if (successRate >= 95) return 3
+  if (successRate >= 90) return 2
+  return 1
+}
+
 export const ModelPerfBadge = memo(function ModelPerfBadge(
   props: ModelPerfBadgeProps
 ) {
@@ -48,18 +66,13 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
   }
 
   const { avg_latency_ms, avg_tps, success_rate } = props.perf
-
-  let statusColor = 'bg-emerald-500'
-  if (success_rate < 99) {
-    statusColor = 'bg-red-500'
-  } else if (success_rate < 99.9) {
-    statusColor = 'bg-amber-500'
-  }
+  const statusColour = getStatusColour(success_rate)
+  const activeStatusSegments = getActiveStatusSegments(success_rate)
 
   return (
     <div
       className={cn(
-        'hidden w-[132px] grid-cols-[38px_48px_30px] gap-x-2 text-right tabular-nums min-[460px]:grid',
+        'hidden w-[142px] grid-cols-[38px_48px_40px] gap-x-2 text-right tabular-nums min-[460px]:grid',
         props.className
       )}
     >
@@ -86,10 +99,19 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
         <div className='text-muted-foreground/55 truncate text-[10px] leading-4'>
           {t('Status short')}
         </div>
-        <div className='flex h-4 items-center justify-end gap-0.5'>
-          <span className='bg-muted-foreground/10 h-2 w-1 rounded-full' />
-          <span className='bg-muted-foreground/15 h-2.5 w-1 rounded-full' />
-          <span className={cn('h-3 w-1 rounded-full', statusColor)} />
+        <div className='flex h-4 items-end justify-end gap-0.5'>
+          {Array.from({ length: STATUS_SEGMENTS }, (_, index) => {
+            const isActive = index < activeStatusSegments
+            return (
+              <span
+                key={index}
+                className={cn(
+                  'h-3 w-1 rounded-full',
+                  isActive ? statusColour : 'bg-muted-foreground/15'
+                )}
+              />
+            )
+          })}
         </div>
       </div>
     </div>
