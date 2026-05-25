@@ -41,6 +41,8 @@ export interface PlaygroundSessionState {
   activeSessionId: string
 }
 
+export type PlaygroundStorageScope = string | number | null | undefined
+
 const maxStoredSessions = 30
 
 function parseJSON(value: string | null): unknown {
@@ -59,6 +61,79 @@ function generateSessionId(): string {
   return `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function normalizeStorageScope(scope: PlaygroundStorageScope): string | null {
+  if (scope === undefined) return null
+  if (scope === null || scope === '') return 'anonymous'
+  return `user:${String(scope)}`
+}
+
+function getStorageKey(key: string, scope?: PlaygroundStorageScope): string {
+  const normalizedScope = normalizeStorageScope(scope)
+  return normalizedScope ? `${key}:${normalizedScope}` : key
+}
+
+function removeLegacyStorageKey(
+  key: string,
+  scope?: PlaygroundStorageScope
+): void {
+  if (normalizeStorageScope(scope) !== null) {
+    localStorage.removeItem(key)
+  }
+}
+
+function getStorageItem(
+  key: string,
+  scope?: PlaygroundStorageScope
+): string | null {
+  const storageKey = getStorageKey(key, scope)
+
+  if (storageKey === key) {
+    return localStorage.getItem(key)
+  }
+
+  const scopedValue = localStorage.getItem(storageKey)
+  if (scopedValue !== null) {
+    removeLegacyStorageKey(key, scope)
+    return scopedValue
+  }
+
+  const legacyValue = localStorage.getItem(key)
+  if (legacyValue !== null) {
+    localStorage.setItem(storageKey, legacyValue)
+    removeLegacyStorageKey(key, scope)
+    return legacyValue
+  }
+
+  return null
+}
+
+function setStorageItem(
+  key: string,
+  value: string,
+  scope?: PlaygroundStorageScope
+): void {
+  localStorage.setItem(getStorageKey(key, scope), value)
+  removeLegacyStorageKey(key, scope)
+}
+
+function removeStorageItem(key: string, scope?: PlaygroundStorageScope): void {
+  const normalizedScope = normalizeStorageScope(scope)
+
+  if (normalizedScope !== null) {
+    localStorage.removeItem(getStorageKey(key, scope))
+    localStorage.removeItem(key)
+    return
+  }
+
+  localStorage.removeItem(key)
+  for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+    const storageKey = localStorage.key(index)
+    if (storageKey?.startsWith(`${key}:`)) {
+      localStorage.removeItem(storageKey)
+    }
+  }
+}
+
 export function buildSessionTitle(messages: Message[]): string {
   const firstUserMessage = messages.find((message) => message.from === 'user')
   const content = firstUserMessage
@@ -69,14 +144,17 @@ export function buildSessionTitle(messages: Message[]): string {
   return content.length > 28 ? `${content.slice(0, 28)}...` : content
 }
 
-function loadPendingImageMessageKeys(): string[] {
-  return loadPendingImageTasks().map((task) => task.messageKey)
+function loadPendingImageMessageKeys(scope?: PlaygroundStorageScope): string[] {
+  return loadPendingImageTasks(scope).map((task) => task.messageKey)
 }
 
-function normalizeSession(value: unknown): PlaygroundSession | null {
+function normalizeSession(
+  value: unknown,
+  scope?: PlaygroundStorageScope
+): PlaygroundSession | null {
   if (!isRecord(value)) return null
 
-  const pendingMessageKeys = loadPendingImageMessageKeys()
+  const pendingMessageKeys = loadPendingImageMessageKeys(scope)
   const messages = Array.isArray(value.messages)
     ? sanitizeMessagesOnLoad(value.messages as Message[], pendingMessageKeys)
     : []
@@ -233,9 +311,13 @@ function normalizePendingImageTask(
 /**
  * Load playground config from localStorage
  */
-export function loadConfig(): Partial<PlaygroundConfig> {
+export function loadConfig(
+  scope?: PlaygroundStorageScope
+): Partial<PlaygroundConfig> {
   try {
-    return normalizeConfig(parseJSON(localStorage.getItem(STORAGE_KEYS.CONFIG)))
+    return normalizeConfig(
+      parseJSON(getStorageItem(STORAGE_KEYS.CONFIG, scope))
+    )
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to load config:', error)
@@ -246,11 +328,15 @@ export function loadConfig(): Partial<PlaygroundConfig> {
 /**
  * Save playground config to localStorage
  */
-export function saveConfig(config: Partial<PlaygroundConfig>): void {
+export function saveConfig(
+  config: Partial<PlaygroundConfig>,
+  scope?: PlaygroundStorageScope
+): void {
   try {
-    localStorage.setItem(
+    setStorageItem(
       STORAGE_KEYS.CONFIG,
-      JSON.stringify({ ...config, timestamp: new Date().toISOString() })
+      JSON.stringify({ ...config, timestamp: new Date().toISOString() }),
+      scope
     )
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -261,10 +347,12 @@ export function saveConfig(config: Partial<PlaygroundConfig>): void {
 /**
  * Load parameter enabled state from localStorage
  */
-export function loadParameterEnabled(): Partial<ParameterEnabled> {
+export function loadParameterEnabled(
+  scope?: PlaygroundStorageScope
+): Partial<ParameterEnabled> {
   try {
     return normalizeParameterEnabled(
-      parseJSON(localStorage.getItem(STORAGE_KEYS.PARAMETER_ENABLED))
+      parseJSON(getStorageItem(STORAGE_KEYS.PARAMETER_ENABLED, scope))
     )
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -277,12 +365,14 @@ export function loadParameterEnabled(): Partial<ParameterEnabled> {
  * Save parameter enabled state to localStorage
  */
 export function saveParameterEnabled(
-  parameterEnabled: Partial<ParameterEnabled>
+  parameterEnabled: Partial<ParameterEnabled>,
+  scope?: PlaygroundStorageScope
 ): void {
   try {
-    localStorage.setItem(
+    setStorageItem(
       STORAGE_KEYS.PARAMETER_ENABLED,
-      JSON.stringify(parameterEnabled)
+      JSON.stringify(parameterEnabled),
+      scope
     )
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -290,12 +380,14 @@ export function saveParameterEnabled(
   }
 }
 
-export function loadWorkbenchState(): PlaygroundWorkbenchState {
+export function loadWorkbenchState(
+  scope?: PlaygroundStorageScope
+): PlaygroundWorkbenchState {
   try {
     const saved = normalizeWorkbenchState(
-      parseJSON(localStorage.getItem(STORAGE_KEYS.WORKBENCH))
+      parseJSON(getStorageItem(STORAGE_KEYS.WORKBENCH, scope))
     )
-    const legacyConfig = parseJSON(localStorage.getItem(STORAGE_KEYS.CONFIG))
+    const legacyConfig = parseJSON(getStorageItem(STORAGE_KEYS.CONFIG, scope))
     const legacyWorkbench = normalizeWorkbenchState(legacyConfig)
     return { ...defaultWorkbenchState, ...legacyWorkbench, ...saved }
   } catch (error) {
@@ -306,15 +398,17 @@ export function loadWorkbenchState(): PlaygroundWorkbenchState {
 }
 
 export function saveWorkbenchState(
-  workbenchState: Partial<PlaygroundWorkbenchState>
+  workbenchState: Partial<PlaygroundWorkbenchState>,
+  scope?: PlaygroundStorageScope
 ): void {
   try {
-    localStorage.setItem(
+    setStorageItem(
       STORAGE_KEYS.WORKBENCH,
       JSON.stringify({
         ...workbenchState,
         timestamp: new Date().toISOString(),
-      })
+      }),
+      scope
     )
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -322,12 +416,14 @@ export function saveWorkbenchState(
   }
 }
 
-export function loadSessions(): PlaygroundSession[] {
+export function loadSessions(
+  scope?: PlaygroundStorageScope
+): PlaygroundSession[] {
   try {
-    const saved = parseJSON(localStorage.getItem(STORAGE_KEYS.SESSIONS))
+    const saved = parseJSON(getStorageItem(STORAGE_KEYS.SESSIONS, scope))
     const savedSessions = Array.isArray(saved)
       ? saved
-          .map(normalizeSession)
+          .map((session) => normalizeSession(session, scope))
           .filter((session): session is PlaygroundSession => session !== null)
       : []
 
@@ -335,7 +431,7 @@ export function loadSessions(): PlaygroundSession[] {
       return trimSessions(savedSessions)
     }
 
-    const legacyMessages = loadMessages()
+    const legacyMessages = loadMessages(scope)
     return [createSession(legacyMessages || [])]
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -345,11 +441,15 @@ export function loadSessions(): PlaygroundSession[] {
   return [createSession()]
 }
 
-export function saveSessions(sessions: PlaygroundSession[]): void {
+export function saveSessions(
+  sessions: PlaygroundSession[],
+  scope?: PlaygroundStorageScope
+): void {
   try {
-    localStorage.setItem(
+    setStorageItem(
       STORAGE_KEYS.SESSIONS,
-      JSON.stringify(trimSessions(sessions))
+      JSON.stringify(trimSessions(sessions)),
+      scope
     )
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -357,23 +457,28 @@ export function saveSessions(sessions: PlaygroundSession[]): void {
   }
 }
 
-export function saveActiveSessionId(sessionId: string): void {
+export function saveActiveSessionId(
+  sessionId: string,
+  scope?: PlaygroundStorageScope
+): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.ACTIVE_SESSION_ID, sessionId)
+    setStorageItem(STORAGE_KEYS.ACTIVE_SESSION_ID, sessionId, scope)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save active playground session:', error)
   }
 }
 
-export function loadSessionState(): PlaygroundSessionState {
-  const sessions = loadSessions()
-  const storedActiveId = localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION_ID)
+export function loadSessionState(
+  scope?: PlaygroundStorageScope
+): PlaygroundSessionState {
+  const sessions = loadSessions(scope)
+  const storedActiveId = getStorageItem(STORAGE_KEYS.ACTIVE_SESSION_ID, scope)
   const activeSession =
     sessions.find((session) => session.id === storedActiveId) || sessions[0]
 
-  saveSessions(sessions)
-  saveActiveSessionId(activeSession.id)
+  saveSessions(sessions, scope)
+  saveActiveSessionId(activeSession.id, scope)
 
   return {
     sessions,
@@ -385,10 +490,12 @@ export function createPlaygroundSession(): PlaygroundSession {
   return createSession()
 }
 
-export function loadPendingImageTasks(): PendingImageGenerationTask[] {
+export function loadPendingImageTasks(
+  scope?: PlaygroundStorageScope
+): PendingImageGenerationTask[] {
   try {
     const saved = parseJSON(
-      localStorage.getItem(STORAGE_KEYS.PENDING_IMAGE_TASKS)
+      getStorageItem(STORAGE_KEYS.PENDING_IMAGE_TASKS, scope)
     )
     if (!Array.isArray(saved)) {
       return []
@@ -404,12 +511,14 @@ export function loadPendingImageTasks(): PendingImageGenerationTask[] {
 }
 
 export function savePendingImageTasks(
-  tasks: PendingImageGenerationTask[]
+  tasks: PendingImageGenerationTask[],
+  scope?: PlaygroundStorageScope
 ): void {
   try {
-    localStorage.setItem(
+    setStorageItem(
       STORAGE_KEYS.PENDING_IMAGE_TASKS,
-      JSON.stringify(tasks)
+      JSON.stringify(tasks),
+      scope
     )
   } catch (error) {
     // eslint-disable-next-line no-console
@@ -417,34 +526,46 @@ export function savePendingImageTasks(
   }
 }
 
-export function upsertPendingImageTask(task: PendingImageGenerationTask): void {
-  const tasks = loadPendingImageTasks().filter(
+export function upsertPendingImageTask(
+  task: PendingImageGenerationTask,
+  scope?: PlaygroundStorageScope
+): void {
+  const tasks = loadPendingImageTasks(scope).filter(
     (item) => item.taskId !== task.taskId
   )
-  savePendingImageTasks([
-    ...tasks,
-    {
-      ...task,
-      updatedAt: new Date().toISOString(),
-    },
-  ])
+  savePendingImageTasks(
+    [
+      ...tasks,
+      {
+        ...task,
+        updatedAt: new Date().toISOString(),
+      },
+    ],
+    scope
+  )
 }
 
-export function removePendingImageTask(taskId: string): void {
+export function removePendingImageTask(
+  taskId: string,
+  scope?: PlaygroundStorageScope
+): void {
   const trimmedTaskId = taskId.trim()
   if (!trimmedTaskId) return
 
   savePendingImageTasks(
-    loadPendingImageTasks().filter((task) => task.taskId !== trimmedTaskId)
+    loadPendingImageTasks(scope).filter(
+      (task) => task.taskId !== trimmedTaskId
+    ),
+    scope
   )
 }
 
 /**
  * Load messages from localStorage
  */
-export function loadMessages(): Message[] | null {
+export function loadMessages(scope?: PlaygroundStorageScope): Message[] | null {
   try {
-    const saved = localStorage.getItem(STORAGE_KEYS.MESSAGES)
+    const saved = getStorageItem(STORAGE_KEYS.MESSAGES, scope)
     if (saved) {
       const parsed = parseJSON(saved)
       const messages = Array.isArray(parsed)
@@ -453,15 +574,15 @@ export function loadMessages(): Message[] | null {
           ? parsed.messages
           : null
       if (!messages) {
-        localStorage.removeItem(STORAGE_KEYS.MESSAGES)
+        removeStorageItem(STORAGE_KEYS.MESSAGES, scope)
         return null
       }
       const sanitized = sanitizeMessagesOnLoad(
         messages as Message[],
-        loadPendingImageMessageKeys()
+        loadPendingImageMessageKeys(scope)
       )
       // Persist sanitized result to avoid re-sanitizing legacy shapes on subsequent loads
-      saveMessages(sanitized)
+      saveMessages(sanitized, scope)
       return sanitized
     }
   } catch (error) {
@@ -474,9 +595,12 @@ export function loadMessages(): Message[] | null {
 /**
  * Save messages to localStorage
  */
-export function saveMessages(messages: Message[]): void {
+export function saveMessages(
+  messages: Message[],
+  scope?: PlaygroundStorageScope
+): void {
   try {
-    localStorage.setItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages))
+    setStorageItem(STORAGE_KEYS.MESSAGES, JSON.stringify(messages), scope)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save messages:', error)
@@ -486,15 +610,15 @@ export function saveMessages(messages: Message[]): void {
 /**
  * Clear all playground data
  */
-export function clearPlaygroundData(): void {
+export function clearPlaygroundData(scope?: PlaygroundStorageScope): void {
   try {
-    localStorage.removeItem(STORAGE_KEYS.CONFIG)
-    localStorage.removeItem(STORAGE_KEYS.PARAMETER_ENABLED)
-    localStorage.removeItem(STORAGE_KEYS.MESSAGES)
-    localStorage.removeItem(STORAGE_KEYS.SESSIONS)
-    localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION_ID)
-    localStorage.removeItem(STORAGE_KEYS.WORKBENCH)
-    localStorage.removeItem(STORAGE_KEYS.PENDING_IMAGE_TASKS)
+    removeStorageItem(STORAGE_KEYS.CONFIG, scope)
+    removeStorageItem(STORAGE_KEYS.PARAMETER_ENABLED, scope)
+    removeStorageItem(STORAGE_KEYS.MESSAGES, scope)
+    removeStorageItem(STORAGE_KEYS.SESSIONS, scope)
+    removeStorageItem(STORAGE_KEYS.ACTIVE_SESSION_ID, scope)
+    removeStorageItem(STORAGE_KEYS.WORKBENCH, scope)
+    removeStorageItem(STORAGE_KEYS.PENDING_IMAGE_TASKS, scope)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to clear playground data:', error)
@@ -554,7 +678,7 @@ export function importPlaygroundData(
             : undefined,
           sessions: Array.isArray(parsed.sessions)
             ? parsed.sessions
-                .map(normalizeSession)
+                .map((session) => normalizeSession(session))
                 .filter(
                   (session): session is PlaygroundSession => session !== null
                 )

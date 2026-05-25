@@ -28,6 +28,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { useAuthStore } from '@/stores/auth-store'
 import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { Button } from '@/components/ui/button'
@@ -60,6 +61,7 @@ import {
   exportPlaygroundData,
   importPlaygroundData,
   parseCustomRequestBody,
+  type PlaygroundStorageScope,
 } from './lib'
 import type { Message as MessageType, PlaygroundWorkbenchState } from './types'
 
@@ -72,8 +74,21 @@ const defaultWorkbenchState: PlaygroundWorkbenchState = {
 }
 
 export function Playground() {
+  const storageUserId = useAuthStore((state) => state.auth.user?.id ?? null)
+  const storageKey =
+    storageUserId === null ? 'anonymous' : String(storageUserId)
+
+  return <PlaygroundContent key={storageKey} storageUserId={storageUserId} />
+}
+
+interface PlaygroundContentProps {
+  storageUserId: PlaygroundStorageScope
+}
+
+function PlaygroundContent(props: PlaygroundContentProps) {
   const { t } = useTranslation()
   const isMobile = useIsMobile()
+  const storageUserId = props.storageUserId
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false)
   const [mobileDebugOpen, setMobileDebugOpen] = useState(false)
   const {
@@ -105,13 +120,14 @@ export function Playground() {
     renameSession,
     deleteSession,
     replaceSessions,
-  } = usePlaygroundState()
+  } = usePlaygroundState(storageUserId)
 
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
     config,
     parameterEnabled,
     messages,
     activeSessionId,
+    storageUserId,
     onMessageUpdate: updateMessages,
     onDebugUpdate: setDebugData,
     onDebugTabChange: setActiveDebugTab,
@@ -369,7 +385,7 @@ export function Playground() {
 
   const handleReset = useCallback(() => {
     if (!window.confirm(t('Reset Playground settings and messages?'))) return
-    clearPlaygroundData()
+    clearPlaygroundData(storageUserId)
     resetConfig()
     replaceConfig(DEFAULT_CONFIG)
     replaceParameterEnabled(DEFAULT_PARAMETER_ENABLED)
@@ -384,6 +400,7 @@ export function Playground() {
     replaceWorkbenchState,
     replaceSessions,
     resetDebugData,
+    storageUserId,
     t,
   ])
 

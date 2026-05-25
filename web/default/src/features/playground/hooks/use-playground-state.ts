@@ -35,6 +35,8 @@ import {
   loadSessionState,
   saveActiveSessionId,
   saveSessions,
+  type PlaygroundStorageScope,
+  type PlaygroundSessionState,
 } from '../lib'
 import type {
   Message,
@@ -60,34 +62,42 @@ const initialDebugData: PlaygroundDebugData = {
   isStreaming: false,
 }
 
+function getActiveSessionMessages(
+  sessionState: PlaygroundSessionState
+): Message[] {
+  const activeSession =
+    sessionState.sessions.find(
+      (session) => session.id === sessionState.activeSessionId
+    ) || sessionState.sessions[0]
+  return activeSession?.messages || []
+}
+
 /**
  * Main state management hook for playground
  */
-export function usePlaygroundState() {
-  const [sessionState, setSessionState] = useState(() => loadSessionState())
+export function usePlaygroundState(storageUserId: PlaygroundStorageScope) {
+  const [sessionState, setSessionState] = useState(() =>
+    loadSessionState(storageUserId)
+  )
 
   // Load initial state from localStorage
   const [config, setConfig] = useState<PlaygroundConfig>(() => {
-    const savedConfig = loadConfig()
+    const savedConfig = loadConfig(storageUserId)
     return { ...DEFAULT_CONFIG, ...savedConfig }
   })
 
   const [parameterEnabled, setParameterEnabled] = useState<ParameterEnabled>(
     () => {
-      const saved = loadParameterEnabled()
+      const saved = loadParameterEnabled(storageUserId)
       return { ...DEFAULT_PARAMETER_ENABLED, ...saved }
     }
   )
 
   const [workbenchState, setWorkbenchState] =
-    useState<PlaygroundWorkbenchState>(() => loadWorkbenchState())
+    useState<PlaygroundWorkbenchState>(() => loadWorkbenchState(storageUserId))
 
   const [messages, setMessages] = useState<Message[]>(() => {
-    const activeSession =
-      sessionState.sessions.find(
-        (session) => session.id === sessionState.activeSessionId
-      ) || sessionState.sessions[0]
-    return activeSession?.messages || []
+    return getActiveSessionMessages(sessionState)
   })
 
   const [models, setModels] = useState<ModelOption[]>([])
@@ -103,11 +113,11 @@ export function usePlaygroundState() {
     <K extends keyof PlaygroundConfig>(key: K, value: PlaygroundConfig[K]) => {
       setConfig((prev) => {
         const updated = { ...prev, [key]: value }
-        saveConfig(updated)
+        saveConfig(updated, storageUserId)
         return updated
       })
     },
-    []
+    [storageUserId]
   )
 
   // Update parameter enabled with automatic save
@@ -115,11 +125,11 @@ export function usePlaygroundState() {
     (key: keyof ParameterEnabled, value: boolean) => {
       setParameterEnabled((prev) => {
         const updated = { ...prev, [key]: value }
-        saveParameterEnabled(updated)
+        saveParameterEnabled(updated, storageUserId)
         return updated
       })
     },
-    []
+    [storageUserId]
   )
 
   const updateWorkbenchState = useCallback(
@@ -129,22 +139,22 @@ export function usePlaygroundState() {
     ) => {
       setWorkbenchState((prev) => {
         const updated = { ...prev, [key]: value }
-        saveWorkbenchState(updated)
+        saveWorkbenchState(updated, storageUserId)
         return updated
       })
     },
-    []
+    [storageUserId]
   )
 
   const replaceWorkbenchState = useCallback(
     (next: Partial<PlaygroundWorkbenchState>) => {
       setWorkbenchState((prev) => {
         const updated = { ...prev, ...next }
-        saveWorkbenchState(updated)
+        saveWorkbenchState(updated, storageUserId)
         return updated
       })
     },
-    []
+    [storageUserId]
   )
 
   // Update messages with automatic save
@@ -168,17 +178,17 @@ export function usePlaygroundState() {
               updatedAt: now,
             }
           })
-          saveSessions(updatedSessions)
+          saveSessions(updatedSessions, storageUserId)
           return {
             ...prevSessionState,
             sessions: updatedSessions,
           }
         })
-        saveMessages(newMessages)
+        saveMessages(newMessages, storageUserId)
         return newMessages
       })
     },
-    []
+    [storageUserId]
   )
 
   // Clear all messages
@@ -190,27 +200,30 @@ export function usePlaygroundState() {
   const resetConfig = useCallback(() => {
     setConfig(DEFAULT_CONFIG)
     setParameterEnabled(DEFAULT_PARAMETER_ENABLED)
-    saveConfig(DEFAULT_CONFIG)
-    saveParameterEnabled(DEFAULT_PARAMETER_ENABLED)
-  }, [])
+    saveConfig(DEFAULT_CONFIG, storageUserId)
+    saveParameterEnabled(DEFAULT_PARAMETER_ENABLED, storageUserId)
+  }, [storageUserId])
 
-  const replaceConfig = useCallback((next: Partial<PlaygroundConfig>) => {
-    setConfig((prev) => {
-      const updated = { ...prev, ...next }
-      saveConfig(updated)
-      return updated
-    })
-  }, [])
+  const replaceConfig = useCallback(
+    (next: Partial<PlaygroundConfig>) => {
+      setConfig((prev) => {
+        const updated = { ...prev, ...next }
+        saveConfig(updated, storageUserId)
+        return updated
+      })
+    },
+    [storageUserId]
+  )
 
   const replaceParameterEnabled = useCallback(
     (next: Partial<ParameterEnabled>) => {
       setParameterEnabled((prev) => {
         const updated = { ...prev, ...next }
-        saveParameterEnabled(updated)
+        saveParameterEnabled(updated, storageUserId)
         return updated
       })
     },
-    []
+    [storageUserId]
   )
 
   const resetDebugData = useCallback(() => {
@@ -218,109 +231,124 @@ export function usePlaygroundState() {
     setActiveDebugTab(DEBUG_TABS.PREVIEW)
   }, [])
 
-  const switchSession = useCallback((sessionId: string) => {
-    setSessionState((prev) => {
-      const targetSession = prev.sessions.find(
-        (session) => session.id === sessionId
-      )
-      if (!targetSession) return prev
+  const switchSession = useCallback(
+    (sessionId: string) => {
+      setSessionState((prev) => {
+        const targetSession = prev.sessions.find(
+          (session) => session.id === sessionId
+        )
+        if (!targetSession) return prev
 
-      saveActiveSessionId(sessionId)
-      saveMessages(targetSession.messages)
-      setMessages(targetSession.messages)
-      setDebugData(initialDebugData)
-      setActiveDebugTab(DEBUG_TABS.PREVIEW)
-      return {
-        ...prev,
-        activeSessionId: sessionId,
-      }
-    })
-  }, [])
+        saveActiveSessionId(sessionId, storageUserId)
+        saveMessages(targetSession.messages, storageUserId)
+        setMessages(targetSession.messages)
+        setDebugData(initialDebugData)
+        setActiveDebugTab(DEBUG_TABS.PREVIEW)
+        return {
+          ...prev,
+          activeSessionId: sessionId,
+        }
+      })
+    },
+    [storageUserId]
+  )
 
   const createSession = useCallback(() => {
     const nextSession = createPlaygroundSession()
     setSessionState((prev) => {
       const sessions = [nextSession, ...prev.sessions]
-      saveSessions(sessions)
-      saveActiveSessionId(nextSession.id)
+      saveSessions(sessions, storageUserId)
+      saveActiveSessionId(nextSession.id, storageUserId)
       return {
         sessions,
         activeSessionId: nextSession.id,
       }
     })
     setMessages([])
-    saveMessages([])
+    saveMessages([], storageUserId)
     setDebugData(initialDebugData)
     setActiveDebugTab(DEBUG_TABS.PREVIEW)
-  }, [])
+  }, [storageUserId])
 
-  const renameSession = useCallback((sessionId: string, title: string) => {
-    const trimmedTitle = title.trim()
-    if (!trimmedTitle) return
+  const renameSession = useCallback(
+    (sessionId: string, title: string) => {
+      const trimmedTitle = title.trim()
+      if (!trimmedTitle) return
 
-    setSessionState((prev) => {
-      const sessions = prev.sessions.map((session) =>
-        session.id === sessionId
-          ? { ...session, title: trimmedTitle, updatedAt: new Date().toISOString() }
-          : session
-      )
-      saveSessions(sessions)
-      return { ...prev, sessions }
-    })
-  }, [])
+      setSessionState((prev) => {
+        const sessions = prev.sessions.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                title: trimmedTitle,
+                updatedAt: new Date().toISOString(),
+              }
+            : session
+        )
+        saveSessions(sessions, storageUserId)
+        return { ...prev, sessions }
+      })
+    },
+    [storageUserId]
+  )
 
-  const deleteSession = useCallback((sessionId: string) => {
-    setSessionState((prev) => {
-      const remainingSessions = prev.sessions.filter(
-        (session) => session.id !== sessionId
-      )
-      const sessions =
-        remainingSessions.length > 0
-          ? remainingSessions
-          : [createPlaygroundSession()]
-      const activeSession =
-        prev.activeSessionId === sessionId
-          ? sessions[0]
-          : sessions.find((session) => session.id === prev.activeSessionId) ||
-            sessions[0]
+  const deleteSession = useCallback(
+    (sessionId: string) => {
+      setSessionState((prev) => {
+        const remainingSessions = prev.sessions.filter(
+          (session) => session.id !== sessionId
+        )
+        const sessions =
+          remainingSessions.length > 0
+            ? remainingSessions
+            : [createPlaygroundSession()]
+        const activeSession =
+          prev.activeSessionId === sessionId
+            ? sessions[0]
+            : sessions.find((session) => session.id === prev.activeSessionId) ||
+              sessions[0]
 
-      saveSessions(sessions)
-      saveActiveSessionId(activeSession.id)
-      setMessages(activeSession.messages)
-      saveMessages(activeSession.messages)
-      setDebugData(initialDebugData)
-      setActiveDebugTab(DEBUG_TABS.PREVIEW)
+        saveSessions(sessions, storageUserId)
+        saveActiveSessionId(activeSession.id, storageUserId)
+        setMessages(activeSession.messages)
+        saveMessages(activeSession.messages, storageUserId)
+        setDebugData(initialDebugData)
+        setActiveDebugTab(DEBUG_TABS.PREVIEW)
 
-      return {
-        sessions,
-        activeSessionId: activeSession.id,
-      }
-    })
-  }, [])
+        return {
+          sessions,
+          activeSessionId: activeSession.id,
+        }
+      })
+    },
+    [storageUserId]
+  )
 
   const replaceSessions = useCallback(
     (sessions: PlaygroundSession[], activeSessionId?: string) => {
       if (sessions.length === 0) return
 
       const activeSession =
-        sessions.find((session) => session.id === activeSessionId) || sessions[0]
+        sessions.find((session) => session.id === activeSessionId) ||
+        sessions[0]
 
       setSessionState({
         sessions,
         activeSessionId: activeSession.id,
       })
-      saveSessions(sessions)
-      saveActiveSessionId(activeSession.id)
+      saveSessions(sessions, storageUserId)
+      saveActiveSessionId(activeSession.id, storageUserId)
       setMessages(activeSession.messages)
-      saveMessages(activeSession.messages)
+      saveMessages(activeSession.messages, storageUserId)
       setDebugData(initialDebugData)
       setActiveDebugTab(DEBUG_TABS.PREVIEW)
     },
-    []
+    [storageUserId]
   )
 
   return {
     // State
+    storageUserId: storageUserId as PlaygroundStorageScope,
     config,
     parameterEnabled,
     workbenchState,

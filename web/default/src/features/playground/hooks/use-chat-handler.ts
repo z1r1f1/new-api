@@ -45,6 +45,7 @@ import {
   processStreamingContent,
   finalizeMessage,
   upsertPendingImageTask,
+  type PlaygroundStorageScope,
 } from '../lib'
 import type {
   ImageGenerationRequest,
@@ -65,6 +66,7 @@ interface UseChatHandlerOptions {
   parameterEnabled: ParameterEnabled
   messages: Message[]
   activeSessionId: string
+  storageUserId?: PlaygroundStorageScope
   onMessageUpdate: (updater: (prev: Message[]) => Message[]) => void
   onDebugUpdate: (
     updater: (prev: PlaygroundDebugData) => PlaygroundDebugData
@@ -157,6 +159,7 @@ export function useChatHandler({
   parameterEnabled,
   messages: currentMessages,
   activeSessionId,
+  storageUserId,
   onMessageUpdate,
   onDebugUpdate,
   onDebugTabChange,
@@ -594,7 +597,7 @@ export function useChatHandler({
   }, [])
 
   useEffect(() => {
-    const pendingTask = loadPendingImageTasks().find(
+    const pendingTask = loadPendingImageTasks(storageUserId).find(
       (task) => task.sessionId === activeSessionId
     )
     if (!pendingTask) return
@@ -603,7 +606,7 @@ export function useChatHandler({
       (message) => message.key === pendingTask.messageKey
     )
     if (!isPendingImageAssistantMessage(pendingMessage)) {
-      removePendingImageTask(pendingTask.taskId)
+      removePendingImageTask(pendingTask.taskId, storageUserId)
       return
     }
     if (currentImageTaskRef.current?.taskId === pendingTask.taskId) {
@@ -639,7 +642,7 @@ export function useChatHandler({
           await fetchAndUpdateDebugUpstreamRequest(task.debugId)
         }
         completeDebugResponse(taskResult)
-        removePendingImageTask(task.taskId)
+        removePendingImageTask(task.taskId, storageUserId)
         currentImageTaskRef.current = null
         completeImageGenerationMessage(
           task.messageKey,
@@ -652,7 +655,7 @@ export function useChatHandler({
         if (task.debugId) {
           await fetchAndUpdateDebugUpstreamRequest(task.debugId)
         }
-        removePendingImageTask(task.taskId)
+        removePendingImageTask(task.taskId, storageUserId)
         currentImageTaskRef.current = null
         const errorMessage = readImageErrorMessage(
           error,
@@ -687,6 +690,7 @@ export function useChatHandler({
     handleImageGenerationError,
     isAbortError,
     pollImageGenerationTask,
+    storageUserId,
     t,
     updateImageGenerationMessage,
   ])
@@ -694,7 +698,10 @@ export function useChatHandler({
   const sendImageGenerationChat = useCallback(
     async (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
       if (currentImageTaskRef.current?.taskId) {
-        removePendingImageTask(currentImageTaskRef.current.taskId)
+        removePendingImageTask(
+          currentImageTaskRef.current.taskId,
+          storageUserId
+        )
       }
       imageAbortControllerRef.current?.abort()
 
@@ -719,14 +726,17 @@ export function useChatHandler({
 
         if (taskId) {
           currentImageTaskRef.current = { taskId, messageKey }
-          upsertPendingImageTask({
-            taskId,
-            messageKey,
-            sessionId: activeSessionId,
-            debugId,
-            startedAt,
-            updatedAt: new Date().toISOString(),
-          })
+          upsertPendingImageTask(
+            {
+              taskId,
+              messageKey,
+              sessionId: activeSessionId,
+              debugId,
+              startedAt,
+              updatedAt: new Date().toISOString(),
+            },
+            storageUserId
+          )
           updateImageGenerationMessage(
             messageKey,
             taskId,
@@ -742,7 +752,7 @@ export function useChatHandler({
           )
           await fetchAndUpdateDebugUpstreamRequest(debugId)
           completeDebugResponse(taskResult)
-          removePendingImageTask(taskId)
+          removePendingImageTask(taskId, storageUserId)
           currentImageTaskRef.current = null
           completeImageGenerationMessage(
             messageKey,
@@ -765,7 +775,10 @@ export function useChatHandler({
         await fetchAndUpdateDebugUpstreamRequest(debugId)
 
         if (currentImageTaskRef.current?.taskId) {
-          removePendingImageTask(currentImageTaskRef.current.taskId)
+          removePendingImageTask(
+            currentImageTaskRef.current.taskId,
+            storageUserId
+          )
           currentImageTaskRef.current = null
         }
         const errorMessage = readImageErrorMessage(
@@ -793,6 +806,7 @@ export function useChatHandler({
       completeImageGenerationMessage,
       isAbortError,
       handleImageGenerationError,
+      storageUserId,
       t,
     ]
   )
@@ -829,7 +843,7 @@ export function useChatHandler({
   // Stop generation
   const stopGeneration = useCallback(() => {
     if (currentImageTaskRef.current?.taskId) {
-      removePendingImageTask(currentImageTaskRef.current.taskId)
+      removePendingImageTask(currentImageTaskRef.current.taskId, storageUserId)
       currentImageTaskRef.current = null
     }
     imageAbortControllerRef.current?.abort()
@@ -851,7 +865,7 @@ export function useChatHandler({
           : message
       )
     )
-  }, [stopStream, onDebugUpdate, onMessageUpdate])
+  }, [stopStream, onDebugUpdate, onMessageUpdate, storageUserId])
 
   return {
     sendChat,

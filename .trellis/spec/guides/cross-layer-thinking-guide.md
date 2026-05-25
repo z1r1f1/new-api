@@ -46,6 +46,17 @@ For each boundary:
 - What is the exact output format?
 - What errors can occur?
 
+### Step 4: Scope Browser-Persisted User State
+
+For frontend state persisted in `localStorage` / `sessionStorage`, decide whether
+the data belongs to the browser, the anonymous visitor, or the authenticated user.
+
+If the state can contain user-specific data (sessions, messages, pending tasks,
+selected groups/models, debug workbench state), the storage key must include a
+stable user scope such as `user:<id>` and must reload/remount when the user
+changes. Keep anonymous data under a separate anonymous scope; do not let a later
+login or a different account read the same browser-global key.
+
 ---
 
 ## Common Cross-Layer Mistakes
@@ -82,6 +93,8 @@ After implementation:
 - [ ] Tested with edge cases (null, empty, invalid)
 - [ ] Verified error handling at each boundary
 - [ ] Checked data survives round-trip
+- [ ] Confirmed browser-persisted user state is scoped by user identity when it
+      can expose account-specific data
 
 ---
 
