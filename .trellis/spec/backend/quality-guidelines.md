@@ -1165,6 +1165,100 @@ Correct:
 
 ---
 
+### ChatGPT Web latency observability and client reuse
+
+#### 1. Scope / Trigger
+
+Trigger: changes to `relay/channel/chatgptimg` request setup, ChatGPT Web
+requirements/PoW flow, image polling/materialization, or consume-log `Other`
+generation for ChatGPT Web channels.
+
+#### 2. Signatures
+
+- Request-scoped timing container:
+  `service.NewChatGPTWebTiming()`,
+  `service.SetChatGPTWebTiming(ctx, timing)`.
+- Consume-log append point:
+  `service.GenerateTextOtherInfo(...)` writes `other.chatgpt_web_timing`
+  when a ChatGPT Web adapter installed timing data on the Gin context.
+- Client reuse helper:
+  `getCachedClient(opt ClientOptions) (*Client, bool, error)`.
+- Requirements flow:
+  `(*Client).ChatRequirementsV2(ctx, timings ...*service.ChatGPTWebTiming)`.
+
+#### 3. Contracts
+
+- Timing fields must be coarse diagnostics only: phase durations in
+  milliseconds, booleans, counts, request kind, model name, and non-sensitive
+  status labels.
+- Timing fields must not include prompts, access tokens, refresh/session
+  tokens, cookies, auth headers, signed download URLs, full upstream request
+  bodies, or full upstream response bodies.
+- Client cache keys must isolate credentials and browser identity. At minimum
+  include base URL, proxy, access-token fingerprint, device id, session id,
+  user-agent/client version/language, and timeout settings.
+- Reuse a proof token returned by `ChatRequirementsV2` for the following
+  conversation request. Do not solve the same PoW twice in the normal V2 path.
+- Preserve fallback behavior: if prepare/finalize fails, fall back to the
+  legacy requirements endpoint and allow the caller to solve PoW when the
+  fallback response requires it.
+
+#### 4. Validation & Error Matrix
+
+- Missing timing container -> request behavior is unchanged and no
+  `chatgpt_web_timing` field is logged.
+- Cache miss or expired entry -> create a fresh `Client` and log
+  `client_cache_hit=false` when timing exists.
+- Matching active cache entry -> reuse `Client` and log
+  `client_cache_hit=true` when timing exists.
+- Different access token/device/session/proxy/base URL -> must not reuse the
+  cached client from another account or browser identity.
+- V2 prepare/finalize error -> fallback to legacy requirements and record
+  fallback timing/status when timing exists.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: an image request records `requirements_*`, `stream_open_ms`,
+  `image_poll_ms`, `image_fetch_ms`, and `image_run_total_ms` without logging
+  the prompt or signed URLs.
+- Good: repeated requests for the same ChatGPT Web credential reuse the
+  transport/cookie jar while different credentials remain isolated.
+- Base: non-ChatGPT Web channels have no `chatgpt_web_timing` in consume-log
+  `Other`.
+- Bad: using a process-global client keyed only by base URL; that can mix
+  cookies across accounts.
+- Bad: adding prompt text or upstream signed image URLs to timing fields; that
+  violates log-safety rules.
+
+#### 6. Tests Required
+
+- `service`: `GenerateTextOtherInfo` includes `chatgpt_web_timing` only when a
+  timing container was attached to the Gin context.
+- `relay/channel/chatgptimg`: client-cache test proves matching options reuse
+  the same client and changed auth token creates an isolated client.
+- `relay/channel/chatgptimg`: keep existing ChatGPT Web conversion and image
+  materialization tests passing after adding timing parameters.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+other["chatgpt_web_debug"] = map[string]any{
+    "prompt": prompt,
+    "signed_url": signedURL,
+}
+```
+
+Correct:
+
+```go
+timing.ObserveSince("image_poll_ms", pollStart)
+timing.Set("image_ref_count", len(fileRefs))
+```
+
+---
+
 ### Billing expression changes
 
 Before changing expression-based/tiered billing, read `pkg/billingexpr/expr.md`. It documents expression variables, token normalization, pre-consume/settlement flow, quota conversion, and expression versioning.

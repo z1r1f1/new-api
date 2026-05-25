@@ -88,6 +88,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendFastServiceTierInfo(ctx, relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	appendChatGPTWebTimingInfo(ctx, other)
 	return other
 }
 

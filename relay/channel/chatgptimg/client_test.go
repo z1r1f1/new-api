@@ -35,6 +35,51 @@ func TestNoRelayRetryErrorIncludesHTTPStatusInMessage(t *testing.T) {
 	}
 }
 
+func TestGetCachedClientReusesMatchingOptions(t *testing.T) {
+	resetChatGPTWebClientCacheForTest()
+	t.Cleanup(resetChatGPTWebClientCacheForTest)
+
+	opt := ClientOptions{
+		BaseURL:   "https://chatgpt.com",
+		AuthToken: "access-token-1",
+		DeviceID:  "device-1",
+		ProxyURL:  "",
+		Timeout:   2 * time.Second,
+	}
+
+	first, hit, err := getCachedClient(opt)
+	if err != nil {
+		t.Fatalf("getCachedClient first returned error: %v", err)
+	}
+	if hit {
+		t.Fatal("first client creation must not be reported as cache hit")
+	}
+
+	second, hit, err := getCachedClient(opt)
+	if err != nil {
+		t.Fatalf("getCachedClient second returned error: %v", err)
+	}
+	if !hit {
+		t.Fatal("second matching client should be served from cache")
+	}
+	if first != second {
+		t.Fatal("expected matching options to reuse the same client")
+	}
+
+	changed := opt
+	changed.AuthToken = "access-token-2"
+	third, hit, err := getCachedClient(changed)
+	if err != nil {
+		t.Fatalf("getCachedClient changed token returned error: %v", err)
+	}
+	if hit {
+		t.Fatal("different access token must not reuse cached client")
+	}
+	if third == first {
+		t.Fatal("different access token must create an isolated client")
+	}
+}
+
 func TestRelayStatusErrorDoesNotSkipRelayRetry(t *testing.T) {
 	err := relayStatusError(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
 	if err == nil {

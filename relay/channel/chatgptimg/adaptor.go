@@ -589,25 +589,32 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 }
 
 func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (any, error) {
+	timing := service.NewChatGPTWebTiming()
+	service.SetChatGPTWebTiming(c, timing)
+	timing.Set("request_kind", "image")
 	var req generationRequest
 	if err := common.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("chatgpt web channel: invalid image request json: %w", err)
 	}
 	normalizeGenerationRequestModelAndResponseFormat(&req, info)
+	timing.Set("model", strings.TrimSpace(req.Model))
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("chatgpt web channel: prompt is required")
 	}
 
-	client, err := newClientFromRelayInfo(c.Request.Context(), info)
+	client, err := newClientFromRelayInfo(c.Request.Context(), info, timing)
 	if err != nil {
 		return nil, err
 	}
+	uploadStart := time.Now()
 	refs, err := uploadReferenceImages(c.Request.Context(), client, req.ReferenceImages)
+	timing.ObserveSince("reference_upload_ms", uploadStart)
+	timing.Set("reference_count", len(refs))
 	if err != nil {
 		return nil, err
 	}
 	testMode := info != nil && info.IsChannelTest
-	res, err := runImageGeneration(c.Request.Context(), client, req, refs, testMode)
+	res, err := runImageGeneration(c.Request.Context(), client, req, refs, testMode, timing)
 	if err != nil {
 		return nil, err
 	}
@@ -624,7 +631,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 		}
 	}
 
-	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res, testMode, info, requestPublicBaseURLForImages(c, info))
+	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res, testMode, info, requestPublicBaseURLForImages(c, info), timing)
 	if err != nil {
 		return nil, err
 	}
@@ -649,6 +656,9 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 }
 
 func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, body []byte) (any, error) {
+	timing := service.NewChatGPTWebTiming()
+	service.SetChatGPTWebTiming(c, timing)
+	timing.Set("request_kind", "chat")
 	var req chatRequest
 	if err := common.Unmarshal(body, &req); err != nil {
 		return nil, fmt.Errorf("chatgpt web channel: invalid chat request json: %w", err)
@@ -662,16 +672,18 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = "auto"
 	}
+	timing.Set("model", strings.TrimSpace(req.Model))
 	prompt := buildChatPrompt(req)
+	timing.Set("image_intent", shouldPollChatGeneratedImages(req, prompt, "", false))
 	if strings.TrimSpace(prompt) == "" {
 		return nil, errors.New("chatgpt web channel: chat prompt is empty")
 	}
-	client, err := newClientFromRelayInfo(c.Request.Context(), info)
+	client, err := newClientFromRelayInfo(c.Request.Context(), info, timing)
 	if err != nil {
 		return nil, err
 	}
 	if info != nil && info.IsChannelTest {
-		content, conversationID, usedPrompt, err := runChatCompletionProbe(c.Request.Context(), client, req, prompt)
+		content, conversationID, usedPrompt, err := runChatCompletionProbe(c.Request.Context(), client, req, prompt, timing)
 		if err != nil {
 			return nil, err
 		}
@@ -725,22 +737,25 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		}, nil
 	}
 	if req.Stream != nil && *req.Stream {
-		started, err := startChatStream(c.Request.Context(), client, req, prompt)
+		started, err := startChatStream(c.Request.Context(), client, req, prompt, timing)
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info, requestPublicBaseURLForImages(c, info)), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info, requestPublicBaseURLForImages(c, info), timing), nil
 	}
-	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt)
+	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt, timing)
 	if err != nil {
 		return nil, err
 	}
+	materializeStart := time.Now()
 	content = materializePlaygroundInlineDataImages(content, info, usedPrompt, req.Model)
-	content = materializeChatGPTContentImageURLs(c.Request.Context(), client, content, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info))
+	content = materializeChatGPTContentImageURLs(c.Request.Context(), client, content, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing)
+	timing.ObserveSince("chat_materialize_ms", materializeStart)
 	textContent := content
 	hasInlineDataImage := chatContentHasInlineDataImage(content)
 	allowImagePoll := !hasInlineDataImage && shouldPollChatGeneratedImages(req, usedPrompt, textContent, hasImageGeneration)
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info)); err != nil {
+	timing.Set("allow_image_poll", allowImagePoll)
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
 		return nil, err
 	} else if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
@@ -792,7 +807,8 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	}, nil
 }
 
-func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo) (*Client, error) {
+func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo, timings ...*service.ChatGPTWebTiming) (*Client, error) {
+	timing := firstChatGPTWebTiming(timings...)
 	if info == nil {
 		return nil, errors.New("chatgpt web channel: relay info is required")
 	}
@@ -800,11 +816,16 @@ func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo) (*
 	if err != nil {
 		return nil, err
 	}
+	resolveStart := time.Now()
 	accessToken, err := ResolveAccessToken(ctx, oauthKey, info.ChannelSetting.Proxy)
+	if timing != nil {
+		timing.ObserveSince("resolve_access_token_ms", resolveStart)
+	}
 	if err != nil {
 		return nil, err
 	}
-	return NewClient(ClientOptions{
+	clientStart := time.Now()
+	client, cacheHit, err := getCachedClient(ClientOptions{
 		BaseURL:    chooseBaseURL(info),
 		AuthToken:  accessToken,
 		DeviceID:   strings.TrimSpace(oauthKey.DeviceID),
@@ -813,6 +834,11 @@ func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo) (*
 		Timeout:    150 * time.Second,
 		SSETimeout: 300 * time.Second,
 	})
+	if timing != nil {
+		timing.ObserveSince("client_init_ms", clientStart)
+		timing.Set("client_cache_hit", cacheHit)
+	}
+	return client, err
 }
 
 func buildChatPrompt(req chatRequest) string {
@@ -893,14 +919,21 @@ type chatStreamStart struct {
 	Prompt   string
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, imageBaseline, bool, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string, timings ...*service.ChatGPTWebTiming) (string, string, string, imageBaseline, bool, error) {
+	timing := firstChatGPTWebTiming(timings...)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	started, err := startChatStream(ctx, client, req, prompt)
+	started, err := startChatStream(ctx, client, req, prompt, timing)
 	if err != nil {
 		return "", "", "", imageBaseline{}, false, err
 	}
+	parseStart := time.Now()
 	result := ParseChatSSE(started.Stream)
+	if timing != nil {
+		timing.ObserveSince("chat_stream_parse_ms", parseStart)
+		timing.Set("has_image_generation", result.HasImageGeneration)
+		timing.Set("has_inline_image", result.HasInlineImage)
+	}
 	if result.Err != nil {
 		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, result.Err
 	}
@@ -913,14 +946,21 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 	return result.Content, result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, nil
 }
 
-func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string) (string, string, string, error) {
+func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string, timings ...*service.ChatGPTWebTiming) (string, string, string, error) {
+	timing := firstChatGPTWebTiming(timings...)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	started, err := startChatStream(ctx, client, req, prompt)
+	started, err := startChatStream(ctx, client, req, prompt, timing)
 	if err != nil {
 		return "", "", "", err
 	}
+	probeStart := time.Now()
 	result := ParseChatSSEUntilReady(started.Stream, 3*time.Second)
+	if timing != nil {
+		timing.ObserveSince("chat_probe_parse_ms", probeStart)
+		timing.Set("has_image_generation", result.HasImageGeneration)
+		timing.Set("has_inline_image", result.HasInlineImage)
+	}
 	if result.Err != nil {
 		return "", result.ConversationID, started.Prompt, result.Err
 	}
@@ -933,7 +973,8 @@ func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest
 	return result.Content, result.ConversationID, started.Prompt, nil
 }
 
-func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) (string, error) {
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) (string, error) {
+	timing := firstChatGPTWebTiming(timings...)
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
 		return "", nil
@@ -944,7 +985,11 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
+	mappingStart := time.Now()
 	mapping, err := client.getMappingRaw(ctx, conversationID)
+	if timing != nil {
+		timing.ObserveSince("chat_image_mapping_ms", mappingStart)
+	}
 	if err != nil {
 		return "", nil
 	}
@@ -966,6 +1011,7 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		if !allowPoll && len(toolMsgs) == 0 {
 			return "", nil
 		}
+		pollStart := time.Now()
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
 			MaxWait:             60 * time.Second,
 			Interval:            2 * time.Second,
@@ -975,6 +1021,10 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 			BaselineFileIDs:     baseline.FileIDs,
 			BaselineSedimentIDs: baseline.SedimentIDs,
 		})
+		if timing != nil {
+			timing.ObserveSince("chat_image_poll_ms", pollStart)
+			timing.Set("chat_image_poll_status", string(pollStatus))
+		}
 		switch pollStatus {
 		case PollStatusIMG2, PollStatusPreviewOnly:
 			fileRefs = append(fileRefs, fids...)
@@ -988,7 +1038,13 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 	if len(fileRefs) == 0 {
 		return "", nil
 	}
-	return imageRefsToMarkdown(ctx, client, conversationID, fileRefs, info, prompt, modelName, publicBaseURL), nil
+	markdownStart := time.Now()
+	markdown := imageRefsToMarkdown(ctx, client, conversationID, fileRefs, info, prompt, modelName, publicBaseURL, timing)
+	if timing != nil {
+		timing.ObserveSince("chat_image_markdown_ms", markdownStart)
+		timing.Set("chat_image_ref_count", len(fileRefs))
+	}
+	return markdown, nil
 }
 
 func shouldPollChatGeneratedImages(req chatRequest, prompt, content string, hasImageGeneration bool) bool {
@@ -1063,18 +1119,23 @@ func imageRefsFromToolMsgs(toolMsgs []ImageToolMsg) ([]string, bool) {
 	return dedupeStrings(fileRefs), hasFileRefs
 }
 
-func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID string, fileRefs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) string {
+func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID string, fileRefs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) string {
+	timing := firstChatGPTWebTiming(timings...)
 	refs := dedupeStrings(fileRefs)
 	if len(refs) == 0 {
 		return ""
 	}
-	publicURLs, ok := materializeImageRefsToPublicURLs(ctx, client, conversationID, refs, info, prompt, modelName, publicBaseURL)
+	publicURLs, ok := materializeImageRefsToPublicURLs(ctx, client, conversationID, refs, info, prompt, modelName, publicBaseURL, timing)
 	if ok {
 		return imageURLsToMarkdown(publicURLs)
 	}
 	var b strings.Builder
 	for index, ref := range refs {
+		downloadURLStart := time.Now()
 		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
+		if timing != nil {
+			timing.ObserveSince("chat_image_download_url_ms", downloadURLStart)
+		}
 		if err != nil || strings.TrimSpace(signedURL) == "" {
 			continue
 		}
@@ -1105,16 +1166,24 @@ func chatContentHasChatGPTImageURL(content string) bool {
 	return len(extractChatGPTImageURLs(content)) > 0
 }
 
-func materializeChatGPTContentImageURLs(ctx context.Context, client *Client, content string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) string {
+func materializeChatGPTContentImageURLs(ctx context.Context, client *Client, content string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) string {
+	timing := firstChatGPTWebTiming(timings...)
 	urls := extractChatGPTImageURLs(content)
 	if len(urls) == 0 || client == nil || info == nil || info.UserId <= 0 {
 		return content
+	}
+	if timing != nil {
+		timing.Set("content_image_url_count", len(urls))
 	}
 	data := make([]dto.ImageData, 0, len(urls))
 	replacements := make(map[string]string, len(urls))
 	for _, imageURL := range urls {
 		fetchURL := strings.ReplaceAll(strings.TrimSpace(imageURL), "&amp;", "&")
+		fetchStart := time.Now()
 		imageBytes, _, err := client.FetchImage(ctx, fetchURL, 20*1024*1024)
+		if timing != nil {
+			timing.ObserveSince("content_image_fetch_ms", fetchStart)
+		}
 		if err != nil || len(imageBytes) == 0 {
 			replacements[imageURL] = ""
 			continue
@@ -1126,7 +1195,11 @@ func materializeChatGPTContentImageURLs(ctx context.Context, client *Client, con
 	if len(data) == 0 {
 		return replaceChatGPTImageURLs(content, replacements)
 	}
+	taskStart := time.Now()
 	publicURLs, ok := createPublicPlaygroundImageTask(info, prompt, modelName, data, publicBaseURL)
+	if timing != nil {
+		timing.ObserveSince("content_image_task_insert_ms", taskStart)
+	}
 	if !ok || len(publicURLs) == 0 {
 		for original := range replacements {
 			replacements[original] = ""
@@ -1235,17 +1308,26 @@ func isMarkdownDestination(content string, start, end int) bool {
 	return start >= 2 && content[start-2:start] == "](" && end < len(content) && content[end] == ')'
 }
 
-func materializeImageRefsToPublicURLs(ctx context.Context, client *Client, conversationID string, refs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string) ([]string, bool) {
+func materializeImageRefsToPublicURLs(ctx context.Context, client *Client, conversationID string, refs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) ([]string, bool) {
+	timing := firstChatGPTWebTiming(timings...)
 	if client == nil || info == nil || info.UserId <= 0 || len(refs) == 0 {
 		return nil, false
 	}
 	data := make([]dto.ImageData, 0, len(refs))
 	for _, ref := range refs {
+		downloadURLStart := time.Now()
 		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
+		if timing != nil {
+			timing.ObserveSince("image_ref_download_url_ms", downloadURLStart)
+		}
 		if err != nil || strings.TrimSpace(signedURL) == "" {
 			continue
 		}
+		fetchStart := time.Now()
 		imageBytes, _, err := client.FetchImage(ctx, signedURL, 20*1024*1024)
+		if timing != nil {
+			timing.ObserveSince("image_ref_fetch_ms", fetchStart)
+		}
 		if err != nil || len(imageBytes) == 0 {
 			continue
 		}
@@ -1254,7 +1336,12 @@ func materializeImageRefsToPublicURLs(ctx context.Context, client *Client, conve
 	if len(data) == 0 {
 		return nil, false
 	}
-	return createPublicPlaygroundImageTask(info, prompt, modelName, data, publicBaseURL)
+	taskStart := time.Now()
+	urls, ok := createPublicPlaygroundImageTask(info, prompt, modelName, data, publicBaseURL)
+	if timing != nil {
+		timing.ObserveSince("image_ref_task_insert_ms", taskStart)
+	}
+	return urls, ok
 }
 
 func createPublicPlaygroundImageTask(info *relaycommon.RelayInfo, prompt, modelName string, data []dto.ImageData, publicBaseURL string) ([]string, bool) {
@@ -1638,16 +1725,30 @@ func splitInlineDataImageURL(dataURL string) (contentType, b64 string, ok bool) 
 	return contentType, b64, true
 }
 
-func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string) (*chatStreamStart, error) {
-	cr, err := client.ChatRequirementsV2(ctx)
+func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string, timings ...*service.ChatGPTWebTiming) (*chatStreamStart, error) {
+	timing := firstChatGPTWebTiming(timings...)
+	cr, err := client.ChatRequirementsV2(ctx, timing)
 	if err != nil {
 		return nil, err
 	}
-	proofToken := ""
+	proofToken := strings.TrimSpace(cr.ProofToken)
 	if cr.Proofofwork.Required {
-		proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+		if proofToken == "" {
+			proofStart := time.Now()
+			proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+			if timing != nil {
+				timing.ObserveSince("conversation_proof_ms", proofStart)
+			}
+		} else if timing != nil {
+			timing.Set("conversation_proof_reused", true)
+		}
 	}
+	continuationStart := time.Now()
 	continuation := prepareConversationContinuation(ctx, client, req.ConversationID)
+	if timing != nil {
+		timing.ObserveSince("conversation_mapping_ms", continuationStart)
+		timing.Set("conversation_continuation", continuation.Available)
+	}
 	convID := ""
 	if continuation.Available {
 		convID = continuation.ConvID
@@ -1666,10 +1767,18 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 		ProofToken:    proofToken,
 		SSETimeout:    300 * time.Second,
 	}
+	prepareStart := time.Now()
 	if conduitToken, conduitErr := client.PrepareChatConversation(ctx, convOpt); conduitErr == nil {
 		convOpt.ConduitToken = conduitToken
 	}
+	if timing != nil {
+		timing.ObserveSince("prepare_conversation_ms", prepareStart)
+	}
+	streamOpenStart := time.Now()
 	stream, err := client.StreamChatConversation(ctx, convOpt)
+	if timing != nil {
+		timing.ObserveSince("stream_open_ms", streamOpenStart)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1684,12 +1793,13 @@ func chatModelForWeb(model string) string {
 	return model
 }
 
-func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, timings ...*service.ChatGPTWebTiming) *http.Response {
+	timing := firstChatGPTWebTiming(timings...)
 	pr, pw := io.Pipe()
 	if isResponsesRelay(info) {
-		go streamResponsesCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw)
+		go streamResponsesCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw, timing)
 	} else {
-		go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw)
+		go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw, timing)
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -1698,8 +1808,11 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 	}
 }
 
-func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, pw *io.PipeWriter) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, pw *io.PipeWriter, timings ...*service.ChatGPTWebTiming) {
+	timing := firstChatGPTWebTiming(timings...)
 	defer pw.Close()
+	streamStart := time.Now()
+	firstEventSeen := false
 	id := buildTransientChatCompletionID()
 	created := time.Now().Unix()
 	model := strings.TrimSpace(req.Model)
@@ -1710,7 +1823,16 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	state := &ChatSSEState{}
 	streamedContent := ""
 	bufferImageResponse := shouldPollChatGeneratedImages(req, prompt, "", false)
+	if timing != nil {
+		timing.Set("stream_buffer_image_response", bufferImageResponse)
+	}
 	for ev := range stream {
+		if !firstEventSeen {
+			firstEventSeen = true
+			if timing != nil {
+				timing.ObserveSince("stream_first_event_ms", streamStart)
+			}
+		}
 		delta, done, collectErr := CollectChatSSEEvent(ev, state)
 		if state.ConversationID != "" {
 			id = buildChatCompletionID(state.ConversationID)
@@ -1734,7 +1856,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		return
 	}
 	finalContent := materializePlaygroundInlineDataImages(state.Content, info, prompt, model)
-	finalContent = materializeChatGPTContentImageURLs(ctx, client, finalContent, info, prompt, model, publicBaseURL)
+	finalContent = materializeChatGPTContentImageURLs(ctx, client, finalContent, info, prompt, model, publicBaseURL, timing)
 	if finalContent != "" && finalContent != streamedContent {
 		delta := finalContent
 		if strings.HasPrefix(finalContent, streamedContent) {
@@ -1746,7 +1868,12 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		}
 	}
 	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL); err != nil {
+	if timing != nil {
+		timing.Set("allow_image_poll", allowImagePoll)
+		timing.Set("has_image_generation", state.HasImageGeneration)
+		timing.Set("has_inline_image", state.HasInlineImage)
+	}
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {
@@ -1759,10 +1886,16 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	usage := buildChatUsage(prompt, streamedContent, model)
 	writeChatStreamChunk(pw, id, created, model, "", "", &finish, &usage)
 	writeChatDone(pw)
+	if timing != nil {
+		timing.ObserveSince("stream_total_ms", streamStart)
+	}
 }
 
-func streamResponsesCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, pw *io.PipeWriter) {
+func streamResponsesCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, pw *io.PipeWriter, timings ...*service.ChatGPTWebTiming) {
+	timing := firstChatGPTWebTiming(timings...)
 	defer pw.Close()
+	streamStart := time.Now()
+	firstEventSeen := false
 	responseID := buildTransientResponsesResponseID()
 	messageID := buildResponsesMessageID("")
 	created := time.Now().Unix()
@@ -1784,7 +1917,16 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 
 	state := &ChatSSEState{}
 	bufferImageResponse := shouldPollChatGeneratedImages(req, prompt, "", false)
+	if timing != nil {
+		timing.Set("stream_buffer_image_response", bufferImageResponse)
+	}
 	for ev := range stream {
+		if !firstEventSeen {
+			firstEventSeen = true
+			if timing != nil {
+				timing.ObserveSince("stream_first_event_ms", streamStart)
+			}
+		}
 		delta, done, collectErr := CollectChatSSEEvent(ev, state)
 		if state.ConversationID != "" {
 			responseID = buildResponsesResponseID(state.ConversationID)
@@ -1809,7 +1951,7 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		return
 	}
 	finalContent := materializePlaygroundInlineDataImages(state.Content, info, prompt, model)
-	finalContent = materializeChatGPTContentImageURLs(ctx, client, finalContent, info, prompt, model, publicBaseURL)
+	finalContent = materializeChatGPTContentImageURLs(ctx, client, finalContent, info, prompt, model, publicBaseURL, timing)
 	if finalContent != "" && finalContent != outputText {
 		delta := finalContent
 		if strings.HasPrefix(finalContent, outputText) {
@@ -1821,7 +1963,12 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		}
 	}
 	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL); err != nil {
+	if timing != nil {
+		timing.Set("allow_image_poll", allowImagePoll)
+		timing.Set("has_image_generation", state.HasImageGeneration)
+		timing.Set("has_inline_image", state.HasInlineImage)
+	}
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
 		_ = pw.CloseWithError(err)
 		return
 	} else if imageMarkdown != "" {
@@ -1849,6 +1996,9 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		Response: buildResponsesResponse(responseID, messageID, created, model, outputText, usage),
 	})
 	writeChatDone(pw)
+	if timing != nil {
+		timing.ObserveSince("stream_total_ms", streamStart)
+	}
 }
 
 func writeChatStreamChunk(w io.Writer, id string, created int64, model, role, content string, finishReason *string, usage *dto.Usage) {
@@ -2507,7 +2657,14 @@ func guessExtensionFromDataURLMeta(meta string) string {
 	}
 }
 
-func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool) (*imageRunResult, error) {
+func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool, timings ...*service.ChatGPTWebTiming) (*imageRunResult, error) {
+	timing := firstChatGPTWebTiming(timings...)
+	runStart := time.Now()
+	defer func() {
+		if timing != nil {
+			timing.ObserveSince("image_run_total_ms", runStart)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
 	defer cancel()
 
@@ -2519,13 +2676,21 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 		pollMaxWait = 45 * time.Second
 	}
 
-	cr, err := client.ChatRequirementsV2(ctx)
+	cr, err := client.ChatRequirementsV2(ctx, timing)
 	if err != nil {
 		return nil, err
 	}
-	proofToken := ""
+	proofToken := strings.TrimSpace(cr.ProofToken)
 	if cr.Proofofwork.Required {
-		proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+		if proofToken == "" {
+			proofStart := time.Now()
+			proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+			if timing != nil {
+				timing.ObserveSince("conversation_proof_ms", proofStart)
+			}
+		} else if timing != nil {
+			timing.Set("conversation_proof_reused", true)
+		}
 	}
 	var convID string
 	parentID := uuid.NewString()
@@ -2539,17 +2704,33 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 
 attemptLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if timing != nil {
+			timing.Set("image_attempt", attempt)
+		}
 		if attempt > 1 {
-			cr, err = client.ChatRequirementsV2(ctx)
+			cr, err = client.ChatRequirementsV2(ctx, timing)
 			if err != nil {
 				return nil, err
 			}
-			proofToken = ""
+			proofToken = strings.TrimSpace(cr.ProofToken)
 			if cr.Proofofwork.Required {
-				proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+				if proofToken == "" {
+					proofStart := time.Now()
+					proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+					if timing != nil {
+						timing.ObserveSince("conversation_proof_ms", proofStart)
+					}
+				} else if timing != nil {
+					timing.Set("conversation_proof_reused", true)
+				}
 			}
 		}
+		continuationStart := time.Now()
 		continuation := prepareConversationContinuation(ctx, client, req.ConversationID)
+		if timing != nil {
+			timing.ObserveSince("conversation_mapping_ms", continuationStart)
+			timing.Set("conversation_continuation", continuation.Available)
+		}
 		convID = ""
 		if continuation.Available {
 			convID = continuation.ConvID
@@ -2569,7 +2750,12 @@ attemptLoop:
 			}
 			if len(req.FallbackReferenceImages) > 0 {
 				if !fallbackRefsLoaded {
+					fallbackUploadStart := time.Now()
 					fallbackRefs, err = uploadReferenceImages(ctx, client, req.FallbackReferenceImages)
+					if timing != nil {
+						timing.ObserveSince("fallback_reference_upload_ms", fallbackUploadStart)
+						timing.Set("fallback_reference_count", len(fallbackRefs))
+					}
 					if err != nil {
 						return nil, err
 					}
@@ -2583,14 +2769,25 @@ attemptLoop:
 
 		for turn := 1; turn <= sameConvMax; turn++ {
 			result.TurnsInConv = turn
+			if timing != nil {
+				timing.Set("image_turn", turn)
+			}
 			if turn > 1 {
-				cr, err = client.ChatRequirementsV2(ctx)
+				cr, err = client.ChatRequirementsV2(ctx, timing)
 				if err != nil {
 					return nil, err
 				}
-				proofToken = ""
+				proofToken = strings.TrimSpace(cr.ProofToken)
 				if cr.Proofofwork.Required {
-					proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+					if proofToken == "" {
+						proofStart := time.Now()
+						proofToken = SolveProofToken(cr.Proofofwork.Seed, cr.Proofofwork.Difficulty, defaultUserAgent)
+						if timing != nil {
+							timing.ObserveSince("conversation_proof_ms", proofStart)
+						}
+					} else if timing != nil {
+						timing.Set("conversation_proof_reused", true)
+					}
 				}
 			}
 			convOpt := ImageConvOpts{
@@ -2606,11 +2803,19 @@ attemptLoop:
 			if turn > 1 {
 				convOpt.MessageID = uuid.NewString()
 			}
+			prepareStart := time.Now()
 			if conduitToken, conduitErr := client.PrepareFConversation(ctx, convOpt); conduitErr == nil {
 				convOpt.ConduitToken = conduitToken
 			}
+			if timing != nil {
+				timing.ObserveSince("prepare_conversation_ms", prepareStart)
+			}
 			streamCtx, cancelStream := context.WithCancel(ctx)
+			streamOpenStart := time.Now()
 			stream, err := client.StreamFConversation(streamCtx, convOpt)
+			if timing != nil {
+				timing.ObserveSince("stream_open_ms", streamOpenStart)
+			}
 			if err != nil {
 				cancelStream()
 				if ue, ok := err.(*UpstreamError); ok && ue.IsRateLimited() && attempt < maxAttempts {
@@ -2619,10 +2824,14 @@ attemptLoop:
 				return nil, err
 			}
 			var sseResult ImageSSEResult
+			parseStart := time.Now()
 			if testMode {
 				sseResult = ParseImageSSEUntilConversationReady(stream, 3*time.Second)
 			} else {
 				sseResult = ParseImageSSE(stream)
+			}
+			if timing != nil {
+				timing.ObserveSince("image_sse_parse_ms", parseStart)
 			}
 			cancelStream()
 			if sseResult.Err != nil {
@@ -2653,6 +2862,7 @@ attemptLoop:
 			if convID == "" {
 				return nil, errors.New("chatgpt web channel: missing conversation id from SSE")
 			}
+			pollStart := time.Now()
 			pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{
 				MaxWait:             pollMaxWait,
 				Interval:            2 * time.Second,
@@ -2663,6 +2873,10 @@ attemptLoop:
 				BaselineSedimentIDs: baseline.SedimentIDs,
 				ExcludedFileIDs:     excludedFileIDs,
 			})
+			if timing != nil {
+				timing.ObserveSince("image_poll_ms", pollStart)
+				timing.Set("image_poll_status", string(pollStatus))
+			}
 			switch pollStatus {
 			case PollStatusIMG2:
 				fileRefs = append(fileRefs, fids...)
@@ -2733,8 +2947,16 @@ attemptLoop:
 		return nil, errors.New("chatgpt web channel: no image result returned")
 	}
 	result.FileRefs = fileRefs
+	if timing != nil {
+		timing.Set("image_ref_count", len(fileRefs))
+		timing.Set("image_preview", result.IsPreview)
+	}
 	for _, ref := range fileRefs {
+		downloadURLStart := time.Now()
 		signedURL, err := client.ImageDownloadURL(ctx, convID, ref)
+		if timing != nil {
+			timing.ObserveSince("image_download_url_ms", downloadURLStart)
+		}
 		if err != nil {
 			continue
 		}
@@ -2742,6 +2964,9 @@ attemptLoop:
 	}
 	if len(result.SignedURLs) == 0 {
 		return nil, errors.New("chatgpt web channel: no downloadable image url returned")
+	}
+	if timing != nil {
+		timing.Set("signed_url_count", len(result.SignedURLs))
 	}
 	return result, nil
 }
@@ -2821,7 +3046,8 @@ func uploadedFileIDSet(files []*UploadedFile) map[string]struct{} {
 	return out
 }
 
-func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult, testMode bool, info *relaycommon.RelayInfo, publicBaseURL string) (*generationResponse, error) {
+func buildGenerationResponse(ctx context.Context, client *Client, req generationRequest, run *imageRunResult, testMode bool, info *relaycommon.RelayInfo, publicBaseURL string, timings ...*service.ChatGPTWebTiming) (*generationResponse, error) {
+	timing := firstChatGPTWebTiming(timings...)
 	responseFormat := strings.TrimSpace(req.ResponseFormat)
 	forceB64JSON := shouldForceB64JSONImageResponse(req.Model)
 	if !forceB64JSON && info != nil && info.ChannelMeta != nil {
@@ -2837,11 +3063,19 @@ func buildGenerationResponse(ctx context.Context, client *Client, req generation
 			data = append(data, dto.ImageData{Url: signedURL})
 			continue
 		}
+		fetchStart := time.Now()
 		imageBytes, _, err := client.FetchImage(ctx, signedURL, 20*1024*1024)
+		if timing != nil {
+			timing.ObserveSince("image_fetch_ms", fetchStart)
+		}
 		if err != nil {
 			return nil, err
 		}
+		base64Start := time.Now()
 		b64 := base64.StdEncoding.EncodeToString(imageBytes)
+		if timing != nil {
+			timing.ObserveSince("image_base64_ms", base64Start)
+		}
 		item := dto.ImageData{B64Json: b64}
 		if responseFormat != "b64_json" {
 			item.Url = signedURL
@@ -2849,12 +3083,16 @@ func buildGenerationResponse(ctx context.Context, client *Client, req generation
 		data = append(data, item)
 	}
 	if !testMode && responseFormat != "b64_json" {
+		taskStart := time.Now()
 		if publicURLs, ok := createPublicPlaygroundImageTask(info, req.Prompt, req.Model, data, publicBaseURL); ok {
 			for index := range data {
 				if index < len(publicURLs) {
 					data[index].Url = publicURLs[index]
 				}
 			}
+		}
+		if timing != nil {
+			timing.ObserveSince("image_task_insert_ms", taskStart)
 		}
 	}
 	return &generationResponse{

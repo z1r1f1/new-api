@@ -26,6 +26,32 @@ func TestGenerateTextOtherInfoRecordsFastServiceTierOnWhenRequestHasFast(t *test
 	}
 }
 
+func TestGenerateTextOtherInfoRecordsChatGPTWebTiming(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.5-thinking"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	timing := NewChatGPTWebTiming()
+	timing.Set("request_kind", "chat")
+	timing.AddDuration("stream_open_ms", 12*time.Millisecond)
+	SetChatGPTWebTiming(ctx, timing)
+	now := time.Now()
+	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+
+	rawTiming, ok := other["chatgpt_web_timing"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected chatgpt_web_timing map, got %#v", other["chatgpt_web_timing"])
+	}
+	if rawTiming["request_kind"] != "chat" {
+		t.Fatalf("expected request_kind=chat, got %#v", rawTiming["request_kind"])
+	}
+	if rawTiming["stream_open_ms"] != int64(12) {
+		t.Fatalf("expected stream_open_ms=12, got %#v", rawTiming["stream_open_ms"])
+	}
+}
+
 func TestGenerateTextOtherInfoRecordsFastServiceTierOffWhenRequestDoesNotHaveFast(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())

@@ -518,6 +518,7 @@ func firstInt(ps ...*int) *int {
 type ChatRequirementsResp struct {
 	Token       string `json:"token"`
 	Persona     string `json:"persona"`
+	ProofToken  string `json:"-"`
 	Proofofwork struct {
 		Required   bool   `json:"required"`
 		Seed       string `json:"seed"`
@@ -642,12 +643,34 @@ func (c *Client) ChatRequirementsFinalize(ctx context.Context, prepareToken, pro
 	return out.Token, out.Persona, nil
 }
 
-func (c *Client) ChatRequirementsV2(ctx context.Context) (*ChatRequirementsResp, error) {
+func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.ChatGPTWebTiming) (*ChatRequirementsResp, error) {
+	timing := firstChatGPTWebTiming(timings...)
+	totalStart := time.Now()
+	prepareStart := time.Now()
 	prep, err := c.ChatRequirementsPrepare(ctx)
+	if timing != nil {
+		timing.ObserveSince("requirements_prepare_ms", prepareStart)
+	}
 	if err != nil {
+		if timing != nil {
+			timing.Set("requirements_fallback", true)
+			fallbackStart := time.Now()
+			resp, fallbackErr := c.ChatRequirements(ctx)
+			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
+			timing.ObserveSince("requirements_total_ms", totalStart)
+			return resp, fallbackErr
+		}
 		return c.ChatRequirements(ctx)
 	}
 	if prep.Turnstile.Required {
+		if timing != nil {
+			timing.Set("requirements_turnstile_fallback", true)
+			fallbackStart := time.Now()
+			resp, fallbackErr := c.ChatRequirements(ctx)
+			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
+			timing.ObserveSince("requirements_total_ms", totalStart)
+			return resp, fallbackErr
+		}
 		return c.ChatRequirements(ctx)
 	}
 	resp := &ChatRequirementsResp{Persona: prep.Persona}
@@ -657,15 +680,35 @@ func (c *Client) ChatRequirementsV2(ctx context.Context) (*ChatRequirementsResp,
 	resp.Proofofwork.Difficulty = prep.Proofofwork.Difficulty
 	proofToken := ""
 	if prep.Proofofwork.Required {
+		proofStart := time.Now()
 		proofToken = SolveProofToken(prep.Proofofwork.Seed, prep.Proofofwork.Difficulty, c.opts.UserAgent)
+		resp.ProofToken = proofToken
+		if timing != nil {
+			timing.ObserveSince("requirements_proof_ms", proofStart)
+		}
 	}
+	finalizeStart := time.Now()
 	token, persona, err := c.ChatRequirementsFinalize(ctx, prep.PrepareToken, proofToken)
+	if timing != nil {
+		timing.ObserveSince("requirements_finalize_ms", finalizeStart)
+	}
 	if err != nil {
+		if timing != nil {
+			timing.Set("requirements_finalize_fallback", true)
+			fallbackStart := time.Now()
+			fallbackResp, fallbackErr := c.ChatRequirements(ctx)
+			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
+			timing.ObserveSince("requirements_total_ms", totalStart)
+			return fallbackResp, fallbackErr
+		}
 		return c.ChatRequirements(ctx)
 	}
 	resp.Token = token
 	if persona != "" {
 		resp.Persona = persona
+	}
+	if timing != nil {
+		timing.ObserveSince("requirements_total_ms", totalStart)
 	}
 	return resp, nil
 }
