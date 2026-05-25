@@ -622,6 +622,67 @@ Regression tests:
 
 
 
+
+### OpenAI/Responses to Claude SSE terminal events
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to `service.StreamResponseOpenAI2Claude`, OpenAI chat streaming, or Responses-to-chat streaming paths that emit Claude-compatible SSE.
+- Claude clients require a complete SSE state machine. A HTTP 200 stream that emits text deltas but omits terminal events is treated as an empty or malformed gateway response.
+
+#### 2. Signatures
+
+- Converter: `service.StreamResponseOpenAI2Claude(openAIResponse *dto.ChatCompletionsStreamResponse, info *relaycommon.RelayInfo) []*dto.ClaudeResponse`.
+- Responses stream bridge: `openai.OaiResponsesToChatStreamHandler(c, info, resp)`.
+- Required terminal Claude events after content/tool blocks: `content_block_stop`, `message_delta`, `message_stop`.
+
+#### 3. Contracts
+
+- Once Claude streaming has emitted `content_block_start` / `content_block_delta`, it must close the active block with `content_block_stop` before ending the message.
+- A finish chunk without embedded `usage` may use `info.ClaudeConvertInfo.Usage` when available; it must not defer forever when fallback usage has already been set.
+- Only defer closing on a finish chunk when both the chunk usage and `info.ClaudeConvertInfo.Usage` are nil and a later usage-only chunk may still arrive.
+- Responses streams that end with `[DONE]`, EOF, or `response.completed` must still produce terminal Claude events.
+
+#### 4. Validation & Error Matrix
+
+- Finish chunk with `openAIResponse.Usage != nil` -> emit `content_block_stop`, `message_delta`, `message_stop`.
+- Finish chunk with `openAIResponse.Usage == nil` and `info.ClaudeConvertInfo.Usage != nil` -> emit terminal events using fallback usage.
+- Finish chunk with both usage sources nil -> defer terminal close for a later usage-only chunk.
+- Stream ends without explicit completed event -> bridge computes fallback usage and emits terminal events.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `/v1/message` or `/v1/messages` via Codex/Responses returns a full Claude SSE sequence ending with `message_stop`.
+- Base: native Claude channels that already emit Anthropic SSE remain unchanged.
+- Bad: returning HTTP 200 with only `message_start` and `content_block_delta`; Claude clients report malformed response even though billing logs show success.
+
+#### 6. Tests Required
+
+- `relay/channel/openai`: regression tests for Responses-to-Claude streams ending via `[DONE]`, `response.completed` without usage, and `response.completed` with usage.
+- Tests must assert that the body contains `content_block_stop`, `message_delta`, and `message_stop`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if oaiUsage == nil {
+    oaiUsage = info.ClaudeConvertInfo.Usage
+    return claudeResponses // returns even when fallback usage exists
+}
+```
+
+Correct:
+
+```go
+if oaiUsage == nil {
+    oaiUsage = info.ClaudeConvertInfo.Usage
+    if oaiUsage == nil {
+        return claudeResponses
+    }
+}
+```
+
 ### Claude messages route compatibility alias
 
 #### 1. Scope / Trigger
