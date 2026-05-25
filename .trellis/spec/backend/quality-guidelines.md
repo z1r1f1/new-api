@@ -595,6 +595,122 @@ Correct:
 data["prompt_cache_key"] = normalizePromptCacheKeyValue(headerSessionID)
 ```
 
+### Claude/Codex Responses cache routing parity
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to Claude-compatible `/v1/messages` or `/v1/message` conversion into OpenAI Responses, native `/v1/responses` compatibility parameters, Codex channel affinity defaults, or parameter override templates for Codex/ChatGPT Web style upstreams.
+- This is a cache-routing boundary contract: Claude Code CLI request body/headers -> OpenAI-compatible intermediate request -> final Responses JSON body -> upstream headers.
+- The working reference for Claude Code CLI cache routing is `claude-code-proxy`: it forwards a stable `prompt_cache_key`, mirrors it into the `Session_id` upstream header, and defaults Claude Code CLI fast/service-tier behavior to the configured priority tier.
+
+#### 2. Signatures
+
+- Compatibility extraction:
+  - `service.ApplyOpenAICompatRequestParamsFromRawBody(req *dto.GeneralOpenAIRequest, body []byte, headers map[string]string)`
+  - `service.ApplyOpenAIResponsesCompatRequestParamsFromRawBody(req *dto.OpenAIResponsesRequest, body []byte, headers map[string]string)`
+- Cache/session extraction helpers:
+  - `extractOpenAICompatPromptCacheKey(data map[string]json.RawMessage, headers map[string]string) string`
+  - `extractOpenAICompatServiceTier(data map[string]json.RawMessage, headers map[string]string) string`
+- Channel affinity setting:
+  - `setting/operation_setting.GetChannelAffinitySetting()`
+  - Codex rule name: `codex cli trace`
+  - Codex param override operation: `sync_fields` from `json:prompt_cache_key` to `header:session_id`.
+- Runtime header propagation:
+  - `relay/common.ApplyParamOverrideWithRelayInfo(jsonData []byte, info *RelayInfo)`
+  - `RelayInfo.RuntimeHeadersOverride` / `RelayInfo.UseRuntimeHeadersOverride`.
+
+#### 3. Contracts
+
+- For Claude Code CLI traffic routed to OpenAI/Codex Responses, keep cache identity consistent across body and headers:
+  - final JSON body must include the stable `prompt_cache_key` when a supported session/cache source exists;
+  - final upstream headers must include `Session_id` with the same normalized value when it was missing from incoming headers.
+- Prompt cache key extraction order must stay aligned with `claude-code-proxy`:
+  1. top-level `prompt_cache_key`;
+  2. top-level `openai_prompt_cache_key`;
+  3. `metadata.prompt_cache_key`;
+  4. `metadata.openai_prompt_cache_key`;
+  5. `metadata.user_id`, deriving nested `session_id` / `sessionId` / `conversation_id` / `conversationId` when the value is a JSON string, otherwise using the full `metadata.user_id` string;
+  6. broader new-api session/header aliases only as fallbacks.
+- Claude Code CLI requests that omit explicit service tier / fast parameters must default to `service_tier:"priority"` for OpenAI-compatible Responses dispatch. This mirrors the deployment behavior of `claude-code-proxy` with `CLAUDE_CODE_DEFAULT_FAST=true` and `OPENAI_SERVICE_TIER=priority`.
+- Explicit `fast:false` must disable the Claude Code CLI default priority behavior; explicit client intent wins.
+- Literal `service_tier:"fast"` must be normalized to `service_tier:"priority"` before upstream dispatch, because the upstream rejects unsupported literal `fast`.
+- `X-Claude-Code-Session-Id` is a valid fallback session/cache source and must be treated like `X-Claude-Session-Id` / `X-Codex-Session-Id`.
+- Do not enable `previous_response_id` / Responses state reuse by default as a cache-hit workaround. The stable cache path is prompt cache key + session header + service-tier parity, not stateful upstream response chaining.
+
+#### 4. Validation & Error Matrix
+
+- No cache/session source in body or supported headers -> do not invent a `prompt_cache_key`.
+- Body contains stable cache key but incoming request lacks `Session_id` -> param override must set runtime upstream header `session_id` from `prompt_cache_key`.
+- Incoming `Session_id` exists and body lacks `prompt_cache_key` -> sync may populate JSON `prompt_cache_key`, then normal prompt-cache length normalization applies.
+- Any `prompt_cache_key` / `Session_id` value over the 64-character upstream limit -> normalize to deterministic SHA-256 as described in the prompt-cache normalization section.
+- Claude Code CLI request with no explicit fast/service tier -> request service tier becomes `priority`.
+- Claude Code CLI request with `fast:false` -> no default priority service tier is added.
+- Client sends `service_tier:"fast"` -> gateway sends `service_tier:"priority"`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a Claude Code CLI `/v1/messages` request with `metadata.user_id="{\"session_id\":\"abc\"}"` becomes a final Responses request with `prompt_cache_key:"abc"`, `Session_id: abc`, and `service_tier:"priority"`.
+- Good: a native `/v1/responses` Codex request with only `prompt_cache_key` gets the upstream `Session_id` header synthesized by the Codex channel affinity param override template.
+- Good: request logs show `request_service_tier=priority`, `request_fast=true`, and `final_request_debug.service_tier=priority` for Claude Code CLI traffic that did not explicitly opt out.
+- Base: non-Claude Code clients without fast/service-tier hints keep legacy behavior and do not receive a synthetic cache key.
+- Bad: only routing by channel affinity while omitting either `service_tier:"priority"` or the `Session_id` header; upstream may hit a different internal cache lane despite using the same selected channel.
+- Bad: relying only on `prompt_cache_key` in body and assuming upstream treats it identically to `Session_id`; observed proxy parity showed the header mirror materially improves cache hit stability.
+- Bad: using `previous_response_id` to force continuity; some upstreams reject it and it changes the compatibility contract.
+
+#### 6. Tests Required
+
+- `service`: regression tests that Claude Code CLI user-agent or `X-Claude-Code-Session-Id` defaults to `service_tier:"priority"`.
+- `service`: regression test that explicit `fast:false` prevents the Claude Code CLI default priority service tier.
+- `service`: regression test that `X-Claude-Code-Session-Id` can become the fallback prompt cache key.
+- `service`: regression tests that prompt cache key extraction order matches `claude-code-proxy` priority, especially `metadata.user_id` before broader session aliases.
+- `setting/operation_setting`: regression tests that default and legacy `codex cli trace` rules include `sync_fields` from `json:prompt_cache_key` to `header:session_id`.
+- `service` or `relay/common`: regression test that applying the Codex channel affinity template to a request with only body `prompt_cache_key` enables `RelayInfo.UseRuntimeHeadersOverride` and sets `RuntimeHeadersOverride["session_id"]`.
+- Live/debug validation after deployment: inspect recent logs for `request_service_tier=priority`, `request_fast=true`, `final_request_debug.service_tier=priority`, stable `prompt_cache_key` fingerprint, stable channel ID, and increasing upstream `cached_tokens`.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Body key exists, but upstream header routing is left to chance.
+request.PromptCacheKey = derivedSessionID
+// no runtime Session_id header sync
+```
+
+Correct:
+
+```go
+// Codex affinity template mirrors the final body cache key into upstream headers.
+ParamOverrideTemplate: map[string]interface{}{
+    "operations": []map[string]interface{}{
+        {"mode": "pass_headers", "value": codexCliPassThroughHeaders, "keep_origin": true},
+        {"mode": "sync_fields", "from": "json:prompt_cache_key", "to": "header:session_id"},
+    },
+}
+```
+
+Wrong:
+
+```go
+// Claude Code CLI request omitted fast, so no service tier is sent.
+if fast, ok := extractFast(body); ok && fast {
+    req.ServiceTier = "priority"
+}
+```
+
+Correct:
+
+```go
+// Match claude-code-proxy default behavior unless the client explicitly opts out.
+if fast, ok := extractFast(body); ok {
+    if fast {
+        req.ServiceTier = "priority"
+    }
+} else if isClaudeCodeCLIRequest(headers) {
+    req.ServiceTier = "priority"
+}
+```
+
 ### Claude Messages to OpenAI Responses tool schema normalization
 
 #### 1. Scope / Trigger
