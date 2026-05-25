@@ -23,11 +23,15 @@ import {
   formatLatency,
   formatThroughput,
 } from '@/features/performance-metrics/lib/format'
+import type { PerformanceSeriesPoint } from '@/features/performance-metrics/types'
+import { type UptimeDayPoint } from '../lib/mock-stats'
+import { UptimeSparkline } from './model-details-uptime-sparkline'
 
 export type ModelPerfBadgeData = {
   avg_latency_ms: number
   success_rate: number
   avg_tps: number
+  series?: PerformanceSeriesPoint[]
 }
 
 export interface ModelPerfBadgeProps extends React.HTMLAttributes<HTMLDivElement> {
@@ -38,22 +42,13 @@ function formatCompactThroughput(tps: number): string {
   return formatThroughput(tps).replace(' t/s', 'tps')
 }
 
-const STATUS_SEGMENTS = 5
-
-function getStatusColour(successRate: number): string {
-  if (successRate >= 99.9) return 'bg-emerald-500'
-  if (successRate >= 99) return 'bg-emerald-400'
-  if (successRate >= 95) return 'bg-amber-500'
-  if (successRate >= 90) return 'bg-amber-600'
-  return 'bg-rose-500'
-}
-
-function getActiveStatusSegments(successRate: number): number {
-  if (successRate >= 99.9) return 5
-  if (successRate >= 99) return 4
-  if (successRate >= 95) return 3
-  if (successRate >= 90) return 2
-  return 1
+function toUptimeSeries(series: PerformanceSeriesPoint[] = []): UptimeDayPoint[] {
+  return series.map((point) => ({
+    date: new Date(point.ts * 1000).toISOString(),
+    uptime_pct: Math.round(point.success_rate * 100) / 100,
+    incidents: point.success_rate < 100 ? 1 : 0,
+    outage_minutes: 0,
+  }))
 }
 
 export const ModelPerfBadge = memo(function ModelPerfBadge(
@@ -65,14 +60,13 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
     return null
   }
 
-  const { avg_latency_ms, avg_tps, success_rate } = props.perf
-  const statusColour = getStatusColour(success_rate)
-  const activeStatusSegments = getActiveStatusSegments(success_rate)
+  const { avg_latency_ms, avg_tps, series, success_rate } = props.perf
+  const statusSeries = toUptimeSeries(series).slice(-12)
 
   return (
     <div
       className={cn(
-        'hidden w-[142px] grid-cols-[38px_48px_40px] gap-x-2 text-right tabular-nums min-[460px]:grid',
+        'hidden w-[150px] grid-cols-[38px_48px_48px] gap-x-2 text-right tabular-nums min-[460px]:grid',
         props.className
       )}
     >
@@ -99,20 +93,13 @@ export const ModelPerfBadge = memo(function ModelPerfBadge(
         <div className='text-muted-foreground/55 truncate text-[10px] leading-4'>
           {t('Status short')}
         </div>
-        <div className='flex h-4 items-end justify-end gap-0.5'>
-          {Array.from({ length: STATUS_SEGMENTS }, (_, index) => {
-            const isActive = index < activeStatusSegments
-            return (
-              <span
-                key={index}
-                className={cn(
-                  'h-3 w-1 rounded-full',
-                  isActive ? statusColour : 'bg-muted-foreground/15'
-                )}
-              />
-            )
-          })}
-        </div>
+        <UptimeSparkline
+          size='sm'
+          showOverall={false}
+          series={statusSeries}
+          emptyLabel='—'
+          className='justify-end gap-0'
+        />
       </div>
     </div>
   )

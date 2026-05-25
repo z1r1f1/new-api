@@ -673,8 +673,8 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		req.Model = "auto"
 	}
 	timing.Set("model", strings.TrimSpace(req.Model))
-	prompt := buildChatPrompt(req)
-	timing.Set("image_intent", shouldPollChatGeneratedImages(req, prompt, "", false))
+	prompt := buildChatPromptForRelay(req, info)
+	timing.Set("image_intent", shouldPollChatGeneratedImagesForRelay(info, req, prompt, "", false))
 	if strings.TrimSpace(prompt) == "" {
 		return nil, errors.New("chatgpt web channel: chat prompt is empty")
 	}
@@ -753,7 +753,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	timing.ObserveSince("chat_materialize_ms", materializeStart)
 	textContent := content
 	hasInlineDataImage := chatContentHasInlineDataImage(content)
-	allowImagePoll := !hasInlineDataImage && shouldPollChatGeneratedImages(req, usedPrompt, textContent, hasImageGeneration)
+	allowImagePoll := !hasInlineDataImage && shouldPollChatGeneratedImagesForRelay(info, req, usedPrompt, textContent, hasImageGeneration)
 	timing.Set("allow_image_poll", allowImagePoll)
 	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
 		return nil, err
@@ -842,6 +842,14 @@ func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo, ti
 }
 
 func buildChatPrompt(req chatRequest) string {
+	return buildChatPromptWithTextImageIntent(req, true)
+}
+
+func buildChatPromptForRelay(req chatRequest, info *relaycommon.RelayInfo) string {
+	return buildChatPromptWithTextImageIntent(req, allowTextImageIntent(info))
+}
+
+func buildChatPromptWithTextImageIntent(req chatRequest, allowTextIntent bool) string {
 	var b strings.Builder
 	for _, msg := range req.Messages {
 		role := strings.TrimSpace(msg.Role)
@@ -868,7 +876,7 @@ func buildChatPrompt(req chatRequest) string {
 		b.WriteString(content)
 	}
 
-	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || chatTextRequestsImageGeneration(b.String())
+	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || (allowTextIntent && chatTextRequestsImageGeneration(b.String()))
 	if req.ResponseFormat != nil && !imageGenerationIntent {
 		switch req.ResponseFormat.Type {
 		case "json_object":
@@ -1048,13 +1056,28 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 }
 
 func shouldPollChatGeneratedImages(req chatRequest, prompt, content string, hasImageGeneration bool) bool {
+	return shouldPollChatGeneratedImagesWithTextIntent(req, prompt, content, hasImageGeneration, true)
+}
+
+func shouldPollChatGeneratedImagesForRelay(info *relaycommon.RelayInfo, req chatRequest, prompt, content string, hasImageGeneration bool) bool {
+	return shouldPollChatGeneratedImagesWithTextIntent(req, prompt, content, hasImageGeneration, allowTextImageIntent(info))
+}
+
+func shouldPollChatGeneratedImagesWithTextIntent(req chatRequest, prompt, content string, hasImageGeneration bool, allowTextIntent bool) bool {
 	if hasImageGeneration {
 		return true
 	}
 	if common.IsImageGenerationModel(req.Model) {
 		return true
 	}
+	if !allowTextIntent {
+		return false
+	}
 	return chatTextRequestsImageGeneration(prompt) || chatTextRequestsImageGeneration(content)
+}
+
+func allowTextImageIntent(info *relaycommon.RelayInfo) bool {
+	return !isResponsesRelay(info)
 }
 
 func chatTextRequestsImageGeneration(text string) bool {
@@ -1916,7 +1939,7 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 	})
 
 	state := &ChatSSEState{}
-	bufferImageResponse := shouldPollChatGeneratedImages(req, prompt, "", false)
+	bufferImageResponse := shouldPollChatGeneratedImagesForRelay(info, req, prompt, "", false)
 	if timing != nil {
 		timing.Set("stream_buffer_image_response", bufferImageResponse)
 	}
@@ -1962,7 +1985,7 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 			writeResponsesTextDelta(pw, delta)
 		}
 	}
-	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)
+	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImagesForRelay(info, req, prompt, state.Content, state.HasImageGeneration)
 	if timing != nil {
 		timing.Set("allow_image_poll", allowImagePoll)
 		timing.Set("has_image_generation", state.HasImageGeneration)

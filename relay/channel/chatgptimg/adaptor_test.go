@@ -56,6 +56,62 @@ func TestBuildChatPromptAddsImageGenerationInstruction(t *testing.T) {
 	}
 }
 
+func TestResponsesTextPromptDoesNotTriggerImageHeuristic(t *testing.T) {
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeResponses}
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "分析为什么生成图片任务很慢"},
+		},
+	}
+
+	prompt := buildChatPromptForRelay(req, info)
+	if strings.Contains(prompt, chatImageGenerationInstruction) {
+		t.Fatalf("responses text prompt must not inject image generation instruction: %q", prompt)
+	}
+	if shouldPollChatGeneratedImagesForRelay(info, req, prompt, "", false) {
+		t.Fatalf("responses text prompt must not enable image polling heuristic: %q", prompt)
+	}
+}
+
+func TestChatTextPromptStillTriggersImageHeuristic(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "生成一张小猫图片"},
+		},
+	}
+
+	prompt := buildChatPromptForRelay(req, nil)
+	if !strings.Contains(prompt, chatImageGenerationInstruction) {
+		t.Fatalf("chat prompt should still inject image generation instruction: %q", prompt)
+	}
+	if !shouldPollChatGeneratedImagesForRelay(nil, req, prompt, "", false) {
+		t.Fatalf("chat prompt should still enable image polling heuristic: %q", prompt)
+	}
+}
+
+func TestResponsesImageModelStillTriggersImagePolling(t *testing.T) {
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeResponses}
+	req := chatRequest{
+		Model: "gpt-image-2",
+		Messages: []dto.Message{
+			{Role: "user", Content: "生成一张小猫图片"},
+		},
+	}
+
+	prompt := buildChatPromptForRelay(req, info)
+	if !strings.Contains(prompt, chatImageGenerationInstruction) {
+		t.Fatalf("responses image model should keep image generation instruction: %q", prompt)
+	}
+	if !shouldPollChatGeneratedImagesForRelay(info, req, prompt, "", false) {
+		t.Fatalf("responses image model should enable image polling")
+	}
+	if !shouldPollChatGeneratedImagesForRelay(info, chatRequest{Model: "gpt-5.5-thinking"}, "User: hello", "", true) {
+		t.Fatalf("responses relay should poll when upstream explicitly reports image generation")
+	}
+}
+
 func TestConvertOpenAIRequestAllowsChat(t *testing.T) {
 	stream := false
 	converted, err := (&Adaptor{}).ConvertOpenAIRequest(nil, nil, &dto.GeneralOpenAIRequest{

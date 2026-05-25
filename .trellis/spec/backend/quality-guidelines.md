@@ -1116,6 +1116,12 @@ Responses contract locally instead of returning "endpoint not supported".
   `chatcmpl-chatgptimg-*`).
 - Return `/v1/responses` shaped JSON/SSE to clients; do not leak
   `chat.completion` bodies on a Responses endpoint.
+- Do not use plain text image-intent keyword heuristics for `/v1/responses`
+  text models. Responses clients often discuss image generation as a text task;
+  treating those words as a generation request buffers the stream and can wait
+  on ChatGPT Web image polling for about a minute. Responses mode should only
+  poll for chat-generated images when the model itself is an image model or the
+  upstream SSE explicitly reports image generation.
 
 #### 4. Validation & Error Matrix
 
@@ -1125,6 +1131,11 @@ Responses contract locally instead of returning "endpoint not supported".
   text conversion unless the existing chat prompt path rejects the request.
 - Upstream ChatGPT Web stream/poll errors -> propagate through the existing
   ChatGPT Web error path and relay-compatible renderer.
+- `/v1/responses` text model prompt contains words such as "generate image" or
+  "生成图片", but upstream does not report image generation -> stream text
+  normally and skip image polling.
+- `/v1/responses` image model, or upstream SSE reports image generation ->
+  preserve image generation instructions and image polling.
 
 #### 5. Good/Base/Bad Cases
 
@@ -1136,6 +1147,8 @@ Responses contract locally instead of returning "endpoint not supported".
   completion chunks.
 - Bad: returning raw `chat.completion` JSON/SSE from a `/v1/responses` request;
   Responses clients will treat it as malformed.
+- Bad: using the chat-completions text keyword heuristic for Responses text
+  models; this makes ordinary text analysis prompts wait for image polling.
 
 #### 6. Tests Required
 
@@ -1145,6 +1158,10 @@ Responses contract locally instead of returning "endpoint not supported".
   `OaiResponsesHandler` and returns usage from `input_tokens/output_tokens`.
 - `relay/channel/chatgptimg`: stream test proving emitted chunks are Responses
   events, not chat completion chunks.
+- `relay/channel/chatgptimg`: regression tests proving Responses text prompts
+  do not inject image-generation instructions or enable image polling purely
+  from text keywords, while chat-completions text prompts and Responses image
+  models still do.
 
 #### 7. Wrong vs Correct
 
@@ -1256,6 +1273,47 @@ Correct:
 timing.ObserveSince("image_poll_ms", pollStart)
 timing.Set("image_ref_count", len(fileRefs))
 ```
+
+---
+
+### Performance metrics summary and model square status
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `pkg/perf_metrics`, `model/perf_metric.go`,
+  `controller/perf_metrics.go`, `/api/perf-metrics/summary`, or the default
+  frontend model square/status rendering.
+
+#### 2. Contracts
+
+- The model square status indicator and the model details performance chart
+  must use the same bucketed success-rate semantics. Do not recreate a
+  different "health bar" from only the aggregate `success_rate`.
+- `/api/perf-metrics/summary` should include a per-model `series` array of
+  bucket points when bucketed data exists. Aggregate fields such as
+  `avg_latency_ms`, `success_rate`, and `avg_tps` remain the card summary, but
+  the miniature status chart uses `series`.
+- Bucket series must be sorted by bucket timestamp ascending before reaching
+  frontend chart components.
+- Hot in-memory buckets and persisted DB buckets must merge by
+  `{model_name, bucket_ts}` before model totals and chart series are derived.
+
+#### 3. Good/Base/Bad Cases
+
+- Good: the model square shows the same recent success-rate trend as the
+  details performance uptime/success chart, just in a compact form.
+- Base: when no bucket series exists, the compact chart renders the existing
+  empty placeholder instead of fabricating status segments from aggregate data.
+- Bad: a five-segment status strip based only on the last 24h aggregate success
+  rate; it can disagree with the details page and hides bucket-level failures.
+
+#### 4. Tests Required
+
+- `pkg/perf_metrics`: unit test proving summary models include sorted bucket
+  `series`, aggregate success rate is still calculated from totals, and models
+  remain ordered by request count.
+- `web/default`: typecheck/lint/build after changing summary API types or model
+  square rendering.
 
 ---
 

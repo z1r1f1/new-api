@@ -133,20 +133,23 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	startTs := endTs - int64(hours)*3600
 	allowedGroups := allowedGroupSet(groups)
 
-	rows, err := model.GetPerfMetricsSummaryAll(startTs, endTs, groups)
+	rows, err := model.GetPerfMetricsSummaryBuckets(startTs, endTs, groups)
 	if err != nil {
 		return SummaryAllResult{}, err
 	}
 
-	totals := map[string]counters{}
+	buckets := map[bucketKey]counters{}
 	for _, row := range rows {
-		totals[row.ModelName] = counters{
+		mergeCounters(buckets, bucketKey{
+			model:    row.ModelName,
+			bucketTs: row.BucketTs,
+		}, counters{
 			requestCount:   row.RequestCount,
 			successCount:   row.SuccessCount,
 			totalLatencyMs: row.TotalLatencyMs,
 			outputTokens:   row.OutputTokens,
 			generationMs:   row.GenerationMs,
-		}
+		})
 	}
 
 	hotBuckets.Range(func(key, value any) bool {
@@ -163,15 +166,44 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		if snap.requestCount == 0 {
 			return true
 		}
-		cur := totals[k.model]
-		cur.requestCount += snap.requestCount
-		cur.successCount += snap.successCount
-		cur.totalLatencyMs += snap.totalLatencyMs
-		cur.outputTokens += snap.outputTokens
-		cur.generationMs += snap.generationMs
-		totals[k.model] = cur
+		mergeCounters(buckets, bucketKey{
+			model:    k.model,
+			bucketTs: k.bucketTs,
+		}, snap)
 		return true
 	})
+
+	return SummaryAllResult{Models: buildSummaryModels(buckets)}, nil
+}
+
+func buildSummaryModels(buckets map[bucketKey]counters) []ModelSummary {
+	totals := map[string]counters{}
+	series := map[string][]BucketPoint{}
+	keys := make([]bucketKey, 0, len(buckets))
+	for key := range buckets {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].model == keys[j].model {
+			return keys[i].bucketTs < keys[j].bucketTs
+		}
+		return keys[i].model < keys[j].model
+	})
+
+	for _, key := range keys {
+		value := buckets[key]
+		if value.requestCount == 0 {
+			continue
+		}
+		total := totals[key.model]
+		total.requestCount += value.requestCount
+		total.successCount += value.successCount
+		total.totalLatencyMs += value.totalLatencyMs
+		total.outputTokens += value.outputTokens
+		total.generationMs += value.generationMs
+		totals[key.model] = total
+		series[key.model] = append(series[key.model], bucketPoint(key.bucketTs, value))
+	}
 
 	models := make([]ModelSummary, 0, len(totals))
 	for name, total := range totals {
@@ -189,14 +221,17 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 			AvgLatencyMs: avgLatency,
 			SuccessRate:  math.Round(successRate*100) / 100,
 			AvgTps:       math.Round(avgTps*100) / 100,
+			Series:       series[name],
 			RequestCount: total.requestCount,
 		})
 	}
 	sort.Slice(models, func(i, j int) bool {
+		if models[i].RequestCount == models[j].RequestCount {
+			return models[i].ModelName < models[j].ModelName
+		}
 		return models[i].RequestCount > models[j].RequestCount
 	})
-
-	return SummaryAllResult{Models: models}, nil
+	return models
 }
 
 func allowedGroupSet(groups []string) map[string]struct{} {
