@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,6 +74,113 @@ func TestConvertOpenAIRequestAllowsChat(t *testing.T) {
 	}
 	if req.Model != "gpt-5" || len(req.Messages) != 1 || req.Stream == nil || *req.Stream {
 		t.Fatalf("unexpected converted request: %#v", req)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestAllowsChat(t *testing.T) {
+	stream := true
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5-thinking"},
+	}, dto.OpenAIResponsesRequest{
+		Model:              "gpt-5.5-thinking",
+		Instructions:       json.RawMessage(`"be concise"`),
+		Input:              json.RawMessage(`[{"role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_image","image_url":"https://example.com/cat.png"}]}]`),
+		Stream:             &stream,
+		Text:               json.RawMessage(`{"format":{"type":"json_object"}}`),
+		PreviousResponseID: "resp_chatgptimg-conv-123",
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+	req, ok := converted.(chatRequest)
+	if !ok {
+		t.Fatalf("expected chatRequest, got %T", converted)
+	}
+	if req.Model != "gpt-5.5-thinking" || req.Stream == nil || !*req.Stream {
+		t.Fatalf("unexpected converted request basics: %#v", req)
+	}
+	if req.ConversationID != "conv-123" {
+		t.Fatalf("expected previous response id to recover conversation id, got %q", req.ConversationID)
+	}
+	if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_object" {
+		t.Fatalf("expected responses text format to map to chat response_format, got %#v", req.ResponseFormat)
+	}
+	if len(req.Messages) != 2 {
+		t.Fatalf("expected system + user messages, got %#v", req.Messages)
+	}
+	prompt := buildChatPrompt(req)
+	if !strings.Contains(prompt, "System: be concise") ||
+		!strings.Contains(prompt, "User: hello") ||
+		!strings.Contains(prompt, "[image_url: https://example.com/cat.png]") {
+		t.Fatalf("unexpected prompt from converted responses request: %q", prompt)
+	}
+}
+
+func TestDoResponseResponsesRelayUsesResponsesHandler(t *testing.T) {
+	payload := buildResponsesResponse("resp_chatgptimg-conv-1", "msg_chatgptimg-conv-1", time.Now().Unix(), "gpt-5.5-thinking", "hello", dto.Usage{
+		PromptTokens:     2,
+		CompletionTokens: 3,
+		TotalTokens:      5,
+	})
+	body, err := common.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal response payload failed: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	usage, apiErr := (&Adaptor{}).DoResponse(c, &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(bytes.NewReader(body)),
+	}, &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5-thinking"},
+	})
+	if apiErr != nil {
+		t.Fatalf("DoResponse returned error: %v", apiErr)
+	}
+	gotUsage, ok := usage.(*dto.Usage)
+	if !ok {
+		t.Fatalf("expected *dto.Usage, got %T", usage)
+	}
+	if gotUsage.PromptTokens != 2 || gotUsage.CompletionTokens != 3 || gotUsage.TotalTokens != 5 {
+		t.Fatalf("unexpected usage: %#v", gotUsage)
+	}
+	out := w.Body.String()
+	if !strings.Contains(out, `"object":"response"`) || strings.Contains(out, `"chat.completion"`) {
+		t.Fatalf("expected responses-compatible body, got %s", out)
+	}
+}
+
+func TestStreamResponsesCompletionEmitsResponsesEvents(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["hello"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	pr, pw := io.Pipe()
+	go streamResponsesCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read responses stream output failed: %v", err)
+	}
+	body := string(out)
+	for _, want := range []string{
+		`"type":"response.created"`,
+		`"type":"response.output_text.delta"`,
+		`"type":"response.completed"`,
+		`"id":"resp_chatgptimg-conv-1"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("responses stream missing %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "chat.completion.chunk") {
+		t.Fatalf("responses stream must not emit chat completion chunks:\n%s", body)
 	}
 }
 

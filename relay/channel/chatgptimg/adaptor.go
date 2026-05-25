@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -136,8 +137,26 @@ func (a *Adaptor) ConvertEmbeddingRequest(*gin.Context, *relaycommon.RelayInfo, 
 	return nil, errors.New("chatgpt web channel: /v1/embeddings endpoint not supported")
 }
 
-func (a *Adaptor) ConvertOpenAIResponsesRequest(*gin.Context, *relaycommon.RelayInfo, dto.OpenAIResponsesRequest) (any, error) {
-	return nil, errors.New("chatgpt web channel: /v1/responses endpoint not supported")
+func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
+	messages := messagesFromResponsesRequest(request)
+	if len(messages) == 0 {
+		return nil, errors.New("chatgpt web channel: responses input is required")
+	}
+	model := strings.TrimSpace(request.Model)
+	if model == "" && info != nil {
+		model = strings.TrimSpace(info.UpstreamModelName)
+	}
+	if model == "" {
+		model = "auto"
+	}
+	return chatRequest{
+		Model:          model,
+		Messages:       messages,
+		Stream:         request.Stream,
+		ResponseFormat: responseFormatFromResponsesText(request.Text),
+		FallbackPrompt: extractFallbackPromptFromRawBody(c),
+		ConversationID: extractConversationIDFromResponsesRequest(c, request),
+	}, nil
 }
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
@@ -262,6 +281,287 @@ func extractStringFromRawBody(c *gin.Context, field string) string {
 	return strings.TrimSpace(value)
 }
 
+func messagesFromResponsesRequest(request dto.OpenAIResponsesRequest) []dto.Message {
+	messages := make([]dto.Message, 0)
+	if instruction := stringFromRawJSON(request.Instructions); instruction != "" {
+		messages = append(messages, dto.Message{Role: "system", Content: instruction})
+	}
+	messages = append(messages, messagesFromResponsesInput(request.Input)...)
+	return messages
+}
+
+func messagesFromResponsesInput(raw json.RawMessage) []dto.Message {
+	if len(raw) == 0 {
+		return nil
+	}
+	switch common.GetJsonType(raw) {
+	case "string":
+		if text := stringFromRawJSON(raw); text != "" {
+			return []dto.Message{{Role: "user", Content: text}}
+		}
+	case "object":
+		if msg, ok := messageFromResponsesInputObject(raw); ok {
+			return []dto.Message{msg}
+		}
+	case "array":
+		var items []json.RawMessage
+		if err := common.Unmarshal(raw, &items); err != nil {
+			return nil
+		}
+		messages := make([]dto.Message, 0, len(items))
+		for _, item := range items {
+			if msg, ok := messageFromResponsesInputObject(item); ok {
+				messages = append(messages, msg)
+			}
+		}
+		return messages
+	}
+	return nil
+}
+
+func messageFromResponsesInputObject(raw json.RawMessage) (dto.Message, bool) {
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &obj); err != nil {
+		return dto.Message{}, false
+	}
+	itemType := stringFromRawJSON(obj["type"])
+	role := stringFromRawJSON(obj["role"])
+	if role == "" {
+		role = "user"
+	}
+
+	switch itemType {
+	case "input_text":
+		text := stringFromRawJSON(obj["text"])
+		if text == "" {
+			return dto.Message{}, false
+		}
+		return dto.Message{Role: role, Content: text}, true
+	case "input_image":
+		imageURL := imageURLFromResponsesInput(obj["image_url"])
+		if imageURL == "" {
+			return dto.Message{}, false
+		}
+		return dto.Message{Role: role, Content: []any{map[string]any{
+			"type": "image_url",
+			"image_url": map[string]any{
+				"url": imageURL,
+			},
+		}}}, true
+	case "input_file":
+		fileURL := imageURLFromResponsesInput(obj["file_url"])
+		if fileURL == "" {
+			return dto.Message{}, false
+		}
+		return dto.Message{Role: role, Content: fmt.Sprintf("[file_url: %s]", fileURL)}, true
+	case "function_call_output":
+		output := stringFromRawJSON(obj["output"])
+		if output == "" {
+			output = string(obj["output"])
+		}
+		return dto.Message{Role: "tool", Content: output, ToolCallId: stringFromRawJSON(obj["call_id"])}, output != ""
+	case "function_call":
+		name := stringFromRawJSON(obj["name"])
+		args := stringFromRawJSON(obj["arguments"])
+		if args == "" && len(obj["arguments"]) > 0 {
+			args = string(obj["arguments"])
+		}
+		text := strings.TrimSpace(fmt.Sprintf("[function_call] %s %s", name, args))
+		return dto.Message{Role: "assistant", Content: text}, text != "[function_call]"
+	}
+
+	if contentRaw, ok := obj["content"]; ok && len(contentRaw) > 0 {
+		content := responsesContentToMessageContent(contentRaw, role)
+		if content == nil {
+			return dto.Message{}, false
+		}
+		return dto.Message{Role: role, Content: content}, true
+	}
+	return dto.Message{}, false
+}
+
+func responsesContentToMessageContent(raw json.RawMessage, role string) any {
+	switch common.GetJsonType(raw) {
+	case "string":
+		return stringFromRawJSON(raw)
+	case "array":
+		var parts []json.RawMessage
+		if err := common.Unmarshal(raw, &parts); err != nil {
+			return nil
+		}
+		converted := make([]any, 0, len(parts))
+		for _, partRaw := range parts {
+			var part map[string]json.RawMessage
+			if err := common.Unmarshal(partRaw, &part); err != nil {
+				continue
+			}
+			partType := stringFromRawJSON(part["type"])
+			switch partType {
+			case "input_text", "output_text", "text":
+				if text := stringFromRawJSON(part["text"]); text != "" {
+					converted = append(converted, map[string]any{"type": "text", "text": text})
+				}
+			case "input_image", "image_url":
+				if imageURL := imageURLFromResponsesInput(part["image_url"]); imageURL != "" {
+					converted = append(converted, map[string]any{
+						"type": "image_url",
+						"image_url": map[string]any{
+							"url": imageURL,
+						},
+					})
+				}
+			case "input_file":
+				if fileURL := imageURLFromResponsesInput(part["file_url"]); fileURL != "" {
+					converted = append(converted, map[string]any{"type": "text", "text": fmt.Sprintf("[file_url: %s]", fileURL)})
+				}
+			}
+		}
+		if len(converted) == 0 {
+			return nil
+		}
+		if role == "assistant" {
+			var b strings.Builder
+			for _, part := range converted {
+				partMap, _ := part.(map[string]any)
+				if text, _ := partMap["text"].(string); text != "" {
+					if b.Len() > 0 {
+						b.WriteByte('\n')
+					}
+					b.WriteString(text)
+				}
+			}
+			if b.Len() > 0 {
+				return b.String()
+			}
+		}
+		return converted
+	default:
+		if len(raw) > 0 {
+			return string(raw)
+		}
+	}
+	return nil
+}
+
+func imageURLFromResponsesInput(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if common.GetJsonType(raw) == "string" {
+		return stringFromRawJSON(raw)
+	}
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	return stringFromRawJSON(obj["url"])
+}
+
+func stringFromRawJSON(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if err := common.Unmarshal(raw, &value); err == nil {
+		return strings.TrimSpace(value)
+	}
+	if common.GetJsonType(raw) == "object" || common.GetJsonType(raw) == "array" {
+		return strings.TrimSpace(string(raw))
+	}
+	return ""
+}
+
+func responseFormatFromResponsesText(raw json.RawMessage) *dto.ResponseFormat {
+	if len(raw) == 0 || common.GetJsonType(raw) != "object" {
+		return nil
+	}
+	var textObj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &textObj); err != nil {
+		return nil
+	}
+	formatRaw := textObj["format"]
+	if len(formatRaw) == 0 || common.GetJsonType(formatRaw) != "object" {
+		return nil
+	}
+	var formatObj map[string]json.RawMessage
+	if err := common.Unmarshal(formatRaw, &formatObj); err != nil {
+		return nil
+	}
+	formatType := stringFromRawJSON(formatObj["type"])
+	switch formatType {
+	case "json_object", "json_schema":
+		return &dto.ResponseFormat{Type: formatType, JsonSchema: formatRaw}
+	default:
+		return nil
+	}
+}
+
+func extractConversationIDFromResponsesRequest(c *gin.Context, request dto.OpenAIResponsesRequest) string {
+	if conversationID := extractConversationIDFromRawBody(c); conversationID != "" {
+		return normalizeChatGPTWebConversationID(conversationID)
+	}
+	if conversationID := conversationIDFromResponsesConversation(request.Conversation); conversationID != "" {
+		return conversationID
+	}
+	if conversationID := conversationIDFromResponsesMetadata(request.Metadata); conversationID != "" {
+		return conversationID
+	}
+	return normalizeChatGPTWebConversationID(request.PreviousResponseID)
+}
+
+func conversationIDFromResponsesConversation(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	if common.GetJsonType(raw) == "string" {
+		value := stringFromRawJSON(raw)
+		if strings.EqualFold(value, "auto") {
+			return ""
+		}
+		return normalizeChatGPTWebConversationID(value)
+	}
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	for _, key := range []string{"id", "conversation_id", "conversationId"} {
+		if value := stringFromRawJSON(obj[key]); value != "" {
+			return normalizeChatGPTWebConversationID(value)
+		}
+	}
+	return ""
+}
+
+func conversationIDFromResponsesMetadata(raw json.RawMessage) string {
+	if len(raw) == 0 || common.GetJsonType(raw) != "object" {
+		return ""
+	}
+	var obj map[string]json.RawMessage
+	if err := common.Unmarshal(raw, &obj); err != nil {
+		return ""
+	}
+	for _, key := range []string{"conversation_id", "conversationId", "previous_response_id"} {
+		if value := stringFromRawJSON(obj[key]); value != "" {
+			return normalizeChatGPTWebConversationID(value)
+		}
+	}
+	return ""
+}
+
+func normalizeChatGPTWebConversationID(value string) string {
+	value = strings.TrimSpace(value)
+	for _, prefix := range []string{
+		"resp_chatgptimg-",
+		"resp_chatgptimg_",
+		"chatcmpl-chatgptimg-",
+	} {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(value, prefix))
+		}
+	}
+	return value
+}
+
 func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	baseURL := defaultBaseURL
 	if info != nil && strings.TrimSpace(info.ChannelBaseUrl) != "" {
@@ -379,6 +679,25 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 			content = "ok"
 		}
 		usage := buildChatUsage(usedPrompt, content, req.Model)
+		if isResponsesRelay(info) {
+			respPayload := buildResponsesResponse(
+				buildResponsesResponseID(conversationID),
+				buildResponsesMessageID(conversationID),
+				time.Now().Unix(),
+				strings.TrimSpace(req.Model),
+				content,
+				usage,
+			)
+			payloadBytes, err := common.Marshal(respPayload)
+			if err != nil {
+				return nil, fmt.Errorf("chatgpt web channel: marshal responses test response failed: %w", err)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
+			}, nil
+		}
 		respPayload := chatResponse{
 			Id:      buildChatCompletionID(conversationID),
 			Object:  "chat.completion",
@@ -427,6 +746,25 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		content = appendMarkdownBlock(content, imageMarkdown)
 	}
 	usage := buildChatUsage(usedPrompt, textContent, req.Model)
+	if isResponsesRelay(info) {
+		respPayload := buildResponsesResponse(
+			buildResponsesResponseID(conversationID),
+			buildResponsesMessageID(conversationID),
+			time.Now().Unix(),
+			strings.TrimSpace(req.Model),
+			content,
+			usage,
+		)
+		payloadBytes, err := common.Marshal(respPayload)
+		if err != nil {
+			return nil, fmt.Errorf("chatgpt web channel: marshal responses response failed: %w", err)
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
+		}, nil
+	}
 	respPayload := chatResponse{
 		Id:      buildChatCompletionID(conversationID),
 		Object:  "chat.completion",
@@ -1348,7 +1686,11 @@ func chatModelForWeb(model string) string {
 
 func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string) *http.Response {
 	pr, pw := io.Pipe()
-	go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw)
+	if isResponsesRelay(info) {
+		go streamResponsesCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw)
+	} else {
+		go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, pw)
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -1419,6 +1761,96 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	writeChatDone(pw)
 }
 
+func streamResponsesCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, pw *io.PipeWriter) {
+	defer pw.Close()
+	responseID := buildTransientResponsesResponseID()
+	messageID := buildResponsesMessageID("")
+	created := time.Now().Unix()
+	model := strings.TrimSpace(req.Model)
+	if model == "" {
+		model = "auto"
+	}
+
+	outputText := ""
+	writeResponsesStreamEvent(pw, "response.created", &dto.ResponsesStreamResponse{
+		Type:     "response.created",
+		Response: buildResponsesStatusResponse(responseID, created, model, "in_progress", nil),
+	})
+	writeResponsesStreamEvent(pw, "response.output_item.added", &dto.ResponsesStreamResponse{
+		Type:        "response.output_item.added",
+		OutputIndex: common.GetPointer(0),
+		Item:        buildResponsesMessageItem(messageID, "", "in_progress"),
+	})
+
+	state := &ChatSSEState{}
+	bufferImageResponse := shouldPollChatGeneratedImages(req, prompt, "", false)
+	for ev := range stream {
+		delta, done, collectErr := CollectChatSSEEvent(ev, state)
+		if state.ConversationID != "" {
+			responseID = buildResponsesResponseID(state.ConversationID)
+			messageID = buildResponsesMessageID(state.ConversationID)
+		}
+		if collectErr != nil {
+			_ = pw.CloseWithError(collectErr)
+			return
+		}
+		if delta != "" {
+			if !bufferImageResponse && !state.HasImageGeneration && !chatContentHasChatGPTImageURL(delta) && !chatContentHasChatGPTImageURL(state.Content) && !state.HasInlineImage && !chatContentHasInlineDataImage(delta) && !chatContentHasInlineDataImage(state.Content) {
+				outputText += delta
+				writeResponsesTextDelta(pw, delta)
+			}
+		}
+		if done {
+			break
+		}
+	}
+	if containsImageGenerationUpstreamErrorText(state.Content) {
+		_ = pw.CloseWithError(imageGenerationUpstreamError())
+		return
+	}
+	finalContent := materializePlaygroundInlineDataImages(state.Content, info, prompt, model)
+	finalContent = materializeChatGPTContentImageURLs(ctx, client, finalContent, info, prompt, model, publicBaseURL)
+	if finalContent != "" && finalContent != outputText {
+		delta := finalContent
+		if strings.HasPrefix(finalContent, outputText) {
+			delta = finalContent[len(outputText):]
+		}
+		if delta != "" {
+			outputText += delta
+			writeResponsesTextDelta(pw, delta)
+		}
+	}
+	allowImagePoll := !state.HasInlineImage && !chatContentHasInlineDataImage(state.Content) && shouldPollChatGeneratedImages(req, prompt, state.Content, state.HasImageGeneration)
+	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL); err != nil {
+		_ = pw.CloseWithError(err)
+		return
+	} else if imageMarkdown != "" {
+		if strings.TrimSpace(outputText) != "" {
+			imageMarkdown = "\n\n" + imageMarkdown
+		}
+		outputText += imageMarkdown
+		writeResponsesTextDelta(pw, imageMarkdown)
+	}
+
+	usage := buildChatUsage(prompt, outputText, model)
+	writeResponsesStreamEvent(pw, "response.output_text.done", &dto.ResponsesStreamResponse{
+		Type:         "response.output_text.done",
+		OutputIndex:  common.GetPointer(0),
+		ContentIndex: common.GetPointer(0),
+		ItemID:       messageID,
+	})
+	writeResponsesStreamEvent(pw, dto.ResponsesOutputTypeItemDone, &dto.ResponsesStreamResponse{
+		Type:        dto.ResponsesOutputTypeItemDone,
+		OutputIndex: common.GetPointer(0),
+		Item:        buildResponsesMessageItem(messageID, outputText, "completed"),
+	})
+	writeResponsesStreamEvent(pw, "response.completed", &dto.ResponsesStreamResponse{
+		Type:     "response.completed",
+		Response: buildResponsesResponse(responseID, messageID, created, model, outputText, usage),
+	})
+	writeChatDone(pw)
+}
+
 func writeChatStreamChunk(w io.Writer, id string, created int64, model, role, content string, finishReason *string, usage *dto.Usage) {
 	chunk := dto.ChatCompletionsStreamResponse{
 		Id:      id,
@@ -1441,6 +1873,29 @@ func writeChatStreamChunk(w io.Writer, id string, created int64, model, role, co
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
+func writeResponsesTextDelta(w io.Writer, delta string) {
+	if delta == "" {
+		return
+	}
+	writeResponsesStreamEvent(w, "response.output_text.delta", &dto.ResponsesStreamResponse{
+		Type:         "response.output_text.delta",
+		Delta:        delta,
+		OutputIndex:  common.GetPointer(0),
+		ContentIndex: common.GetPointer(0),
+	})
+}
+
+func writeResponsesStreamEvent(w io.Writer, eventName string, event *dto.ResponsesStreamResponse) {
+	if event == nil {
+		return
+	}
+	if event.Type == "" {
+		event.Type = eventName
+	}
+	data, _ := common.Marshal(event)
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventName, data)
+}
+
 func writeChatDone(w io.Writer) {
 	_, _ = io.WriteString(w, "data: [DONE]\n\n")
 }
@@ -1458,6 +1913,110 @@ func buildChatUsage(prompt, content, model string) dto.Usage {
 	}
 }
 
+func isResponsesRelay(info *relaycommon.RelayInfo) bool {
+	return info != nil && info.RelayMode == relayconstant.RelayModeResponses
+}
+
+func buildResponsesResponse(id, messageID string, created int64, model, content string, usage dto.Usage) *dto.OpenAIResponsesResponse {
+	resp := buildResponsesStatusResponse(id, created, model, "completed", &dto.ResponsesOutput{
+		Type:    "message",
+		ID:      messageID,
+		Status:  "completed",
+		Role:    "assistant",
+		Content: []dto.ResponsesOutputContent{buildResponsesOutputText(content)},
+		Quality: "",
+		Size:    "",
+	})
+	resp.Usage = responsesUsageFromChatUsage(usage)
+	return resp
+}
+
+func buildResponsesStatusResponse(id string, created int64, model string, status string, output *dto.ResponsesOutput) *dto.OpenAIResponsesResponse {
+	resp := &dto.OpenAIResponsesResponse{
+		ID:                 id,
+		Object:             "response",
+		CreatedAt:          int(created),
+		Status:             rawJSONString(status),
+		Error:              nil,
+		IncompleteDetails:  nil,
+		Instructions:       rawJSONNull(),
+		Model:              model,
+		Output:             []dto.ResponsesOutput{},
+		ParallelToolCalls:  false,
+		PreviousResponseID: rawJSONNull(),
+		Reasoning:          nil,
+		Store:              false,
+		ToolChoice:         rawJSONString("auto"),
+		Tools:              []map[string]any{},
+		Truncation:         rawJSONString("disabled"),
+		Usage:              nil,
+		User:               rawJSONNull(),
+		Metadata:           rawJSONNull(),
+	}
+	if output != nil {
+		resp.Output = []dto.ResponsesOutput{*output}
+	}
+	return resp
+}
+
+func responsesUsageFromChatUsage(usage dto.Usage) *dto.Usage {
+	out := usage
+	if out.InputTokens == 0 {
+		out.InputTokens = out.PromptTokens
+	}
+	if out.OutputTokens == 0 {
+		out.OutputTokens = out.CompletionTokens
+	}
+	if out.PromptTokens == 0 {
+		out.PromptTokens = out.InputTokens
+	}
+	if out.CompletionTokens == 0 {
+		out.CompletionTokens = out.OutputTokens
+	}
+	if out.TotalTokens == 0 {
+		out.TotalTokens = out.InputTokens + out.OutputTokens
+	}
+	if out.InputTokensDetails == nil {
+		out.InputTokensDetails = &dto.InputTokenDetails{
+			CachedTokens: out.PromptTokensDetails.CachedTokens,
+			TextTokens:   out.PromptTokens,
+			ImageTokens:  out.PromptTokensDetails.ImageTokens,
+			AudioTokens:  out.PromptTokensDetails.AudioTokens,
+		}
+	}
+	return &out
+}
+
+func buildResponsesMessageItem(messageID string, content string, status string) *dto.ResponsesOutput {
+	return &dto.ResponsesOutput{
+		Type:    "message",
+		ID:      messageID,
+		Status:  status,
+		Role:    "assistant",
+		Content: []dto.ResponsesOutputContent{buildResponsesOutputText(content)},
+	}
+}
+
+func buildResponsesOutputText(content string) dto.ResponsesOutputContent {
+	return dto.ResponsesOutputContent{
+		Type:        "output_text",
+		Text:        content,
+		Annotations: []interface{}{},
+	}
+}
+
+func rawJSONString(value string) json.RawMessage {
+	data, err := common.Marshal(value)
+	if err != nil {
+		return rawJSONNull()
+	}
+	return data
+}
+
+func rawJSONNull() json.RawMessage {
+	return json.RawMessage("null")
+}
+
 func buildTransientChatCompletionID() string {
 	return "chatcmpl-" + uuid.NewString()
 }
@@ -1468,6 +2027,26 @@ func buildChatCompletionID(conversationID string) string {
 		conversationID = uuid.NewString()
 	}
 	return "chatcmpl-chatgptimg-" + conversationID
+}
+
+func buildTransientResponsesResponseID() string {
+	return "resp_chatgptimg-" + uuid.NewString()
+}
+
+func buildResponsesResponseID(conversationID string) string {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		conversationID = uuid.NewString()
+	}
+	return "resp_chatgptimg-" + conversationID
+}
+
+func buildResponsesMessageID(conversationID string) string {
+	conversationID = strings.TrimSpace(conversationID)
+	if conversationID == "" {
+		conversationID = uuid.NewString()
+	}
+	return "msg_chatgptimg-" + conversationID
 }
 
 type conversationContinuation struct {
@@ -1582,6 +2161,12 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 	if info != nil && (info.RelayMode == relayconstant.RelayModeImagesGenerations || info.RelayMode == relayconstant.RelayModeImagesEdits) {
 		return openai.OpenaiHandlerWithUsage(c, info, resp)
+	}
+	if isResponsesRelay(info) {
+		if info.IsStream {
+			return openai.OaiResponsesStreamHandler(c, info, resp)
+		}
+		return openai.OaiResponsesHandler(c, info, resp)
 	}
 	if info != nil && info.IsStream {
 		return openai.OaiStreamHandler(c, info, resp)

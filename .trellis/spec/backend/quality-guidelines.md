@@ -1085,6 +1085,86 @@ URL and token-exchange `redirect_uri` byte-for-byte compatible.
 
 ---
 
+### ChatGPT Web Responses endpoint compatibility
+
+#### 1. Scope / Trigger
+
+ChatGPT Web (`relay/channel/chatgptimg`) is backed by the ChatGPT web
+conversation API, not a native OpenAI Responses upstream. When a selected
+ChatGPT Web channel receives `/v1/responses`, the adapter must emulate the
+Responses contract locally instead of returning "endpoint not supported".
+
+#### 2. Signatures
+
+- Request converter:
+  `Adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest)`.
+- Response handler branch:
+  `Adaptor.DoResponse(c, resp, info)` with
+  `info.RelayMode == relayconstant.RelayModeResponses`.
+- Synthetic response stream events use `dto.ResponsesStreamResponse`.
+
+#### 3. Contracts
+
+- Convert `input` and `instructions` into the existing ChatGPT Web
+  `chatRequest.Messages` format so `buildChatPrompt` remains the single prompt
+  construction path.
+- Preserve `stream` and map `text.format` to chat `response_format` when it is
+  `json_object` or `json_schema`.
+- Recover ChatGPT Web conversation continuity from `conversation_id`,
+  `conversation.id`, metadata conversation fields, or the synthetic
+  `previous_response_id` prefixes (`resp_chatgptimg-*`,
+  `chatcmpl-chatgptimg-*`).
+- Return `/v1/responses` shaped JSON/SSE to clients; do not leak
+  `chat.completion` bodies on a Responses endpoint.
+
+#### 4. Validation & Error Matrix
+
+- Empty `input` and empty `instructions` -> converter returns
+  `chatgpt web channel: responses input is required`.
+- Unsupported Responses-only features (tools/background/etc.) -> best-effort
+  text conversion unless the existing chat prompt path rejects the request.
+- Upstream ChatGPT Web stream/poll errors -> propagate through the existing
+  ChatGPT Web error path and relay-compatible renderer.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `/v1/responses` with `input: "hello"` on a ChatGPT Web text model
+  returns an OpenAI Responses object with `output_text`.
+- Good: streaming `/v1/responses` emits `response.output_text.delta`,
+  `response.output_item.done`, `response.completed`, then `[DONE]`.
+- Base: `/v1/chat/completions` behavior stays unchanged and still returns chat
+  completion chunks.
+- Bad: returning raw `chat.completion` JSON/SSE from a `/v1/responses` request;
+  Responses clients will treat it as malformed.
+
+#### 6. Tests Required
+
+- `relay/channel/chatgptimg`: converter test for instructions, multimodal
+  input, `text.format`, stream flag, and synthetic previous response id.
+- `relay/channel/chatgptimg`: response handler test proving Responses mode uses
+  `OaiResponsesHandler` and returns usage from `input_tokens/output_tokens`.
+- `relay/channel/chatgptimg`: stream test proving emitted chunks are Responses
+  events, not chat completion chunks.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+func (a *Adaptor) ConvertOpenAIResponsesRequest(...) (any, error) {
+    return nil, errors.New("chatgpt web channel: /v1/responses endpoint not supported")
+}
+```
+
+Correct:
+
+```go
+// Convert Responses input to chatRequest, send it through ChatGPT Web chat,
+// then wrap the synthetic result back into Responses JSON/SSE before billing.
+```
+
+---
+
 ### Billing expression changes
 
 Before changing expression-based/tiered billing, read `pkg/billingexpr/expr.md`. It documents expression variables, token normalization, pre-consume/settlement flow, quota conversion, and expression versioning.
