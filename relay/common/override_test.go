@@ -2198,6 +2198,20 @@ func TestRemoveDisabledFieldsKeepsShortPromptCacheKey(t *testing.T) {
 	assertJSONEqual(t, `{"prompt_cache_key":"short-session","store":true}`, string(out))
 }
 
+func TestRemoveDisabledFieldsNormalizesLiteralFastServiceTierWhenAllowed(t *testing.T) {
+	input := `{
+		"service_tier":"fast",
+		"prompt_cache_key":"short-session"
+	}`
+	settings := dto.ChannelOtherSettings{AllowServiceTier: true}
+
+	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	if err != nil {
+		t.Fatalf("RemoveDisabledFields returned error: %v", err)
+	}
+	assertJSONEqual(t, `{"service_tier":"priority","prompt_cache_key":"short-session"}`, string(out))
+}
+
 func TestRemoveDisabledFieldsAllowInferenceGeo(t *testing.T) {
 	input := `{
 		"inference_geo":"eu",

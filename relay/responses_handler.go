@@ -64,6 +64,7 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	if err != nil {
 		return types.NewError(err, types.ErrorCodeChannelModelMappedError, types.ErrOptionWithSkipRetry())
 	}
+	service.ApplyOpenAIResponsesCompatRequestParamsFromRawBody(request, rawJSONBodyForResponsesCompat(c), info.RequestHeaders)
 
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {

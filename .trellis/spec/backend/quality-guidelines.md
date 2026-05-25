@@ -595,6 +595,82 @@ Correct:
 data["prompt_cache_key"] = normalizePromptCacheKeyValue(headerSessionID)
 ```
 
+### Claude Messages to OpenAI Responses tool schema normalization
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to Claude-compatible `/v1/messages` conversion, OpenAI chat-to-Responses conversion, native `/v1/responses` forwarding, or function/tool schema forwarding.
+- This is a relay boundary contract: Claude `tools[].input_schema` -> OpenAI-compatible chat `tools[].function.parameters` -> OpenAI Responses `tools[].parameters`, and native OpenAI Responses `tools` -> upstream OpenAI/Codex Responses `tools`.
+- Claude Code system tools such as `Read`, `Edit`, `Grep`, and `Bash` must not receive schema-external parameters after conversion.
+
+#### 2. Signatures
+
+- Claude converter: `service.ClaudeToOpenAIRequest(claudeRequest dto.ClaudeRequest, info *relaycommon.RelayInfo) (*dto.GeneralOpenAIRequest, error)`
+- Chat-to-Responses converter: `openaicompat.ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error)`
+- Native Responses normalizer: `openaicompat.NormalizeResponsesToolSchemas(raw json.RawMessage) json.RawMessage`
+- Codex adaptor boundary: `codex.Adaptor.ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error)`
+- OpenAI adaptor boundary: `openai.Adaptor.ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error)`
+- Function tool parameter field: `dto.FunctionRequest.Parameters any`
+- Responses tool payload field: `dto.OpenAIResponsesRequest.Tools json.RawMessage`
+
+#### 3. Contracts
+
+- Claude `tools[].input_schema` must be carried as OpenAI chat `function.parameters`.
+- Before marshalling function tools into Responses `tools`, parameter schemas must be normalized with project JSON wrappers (`common.Marshal` / `common.Unmarshal`).
+- `nil`, non-object, or malformed function parameter schemas must become a closed empty object schema: `{"type":"object","properties":{},"additionalProperties":false}`.
+- Object schemas with `properties` and no explicit `additionalProperties` must gain `additionalProperties:false` recursively, including nested `properties`, `items`, `anyOf`, `oneOf`, and `allOf`.
+- Schema entries with `nil` values must be removed before upstream forwarding.
+- `required` must be preserved only when it is a JSON array; `required:null` or scalar `required` values must be removed.
+- For the local/Codex `Read` function tool, remove the `pages` parameter from the JSON schema and from `required`. The upstream model otherwise tends to send an empty PDF-only `pages` argument for normal text files after Responses schema normalization.
+- Do not force optional tool parameters into `required`; tools such as `Read` may have optional `offset`/`limit` fields and local tool runners expect them to remain optional.
+
+#### 4. Validation & Error Matrix
+
+- `parameters == nil` -> closed empty object schema.
+- `parameters` cannot be decoded as an object -> closed empty object schema.
+- Object schema has `properties` and lacks `additionalProperties` -> add `additionalProperties:false`.
+- Nested object schema has `properties` and lacks `additionalProperties` -> add `additionalProperties:false` recursively.
+- `required == nil` or non-array -> remove it.
+- Function tool name is `Read` and schema has `properties.pages` -> remove `pages` from both `properties` and `required`.
+- Existing explicit `additionalProperties` -> preserve the caller-provided value.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: Claude Code `Read` schema with `file_path`, optional `offset`, and optional `limit` reaches Responses with `additionalProperties:false`, without `required:null`, and without the PDF-only `pages` field.
+- Base: a valid chat function schema with an existing `additionalProperties:false` remains valid and stable.
+- Bad: forwarding `required:null`, scalar `required`, open object schemas, or `Read.pages`; upstream/model may emit invalid system-tool arguments such as empty PDF `pages` or schema-external page/line parameters.
+- Bad: blindly marking every property as required to satisfy strict schema mode; this can break optional local tool inputs.
+
+#### 6. Tests Required
+
+- `service/openaicompat`: regression test that chat function tool parameters gain `additionalProperties:false`.
+- `service/openaicompat`: regression test that nil values and invalid `required` values are stripped recursively.
+- `service/openaicompat`: regression test that non-object function parameters default to a closed empty object schema.
+- `service`: end-to-end conversion test from `ClaudeToOpenAIRequest` through `ChatCompletionsRequestToResponsesRequest` asserting the final Responses tools are normalized.
+- `relay/channel/codex`: regression test that native `/v1/responses` `Read` tools remove `pages` before the upstream Codex request is sent.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+tools = append(tools, map[string]any{
+    "type":       "function",
+    "name":       tool.Function.Name,
+    "parameters": tool.Function.Parameters, // forwards required:null / open schemas
+})
+```
+
+Correct:
+
+```go
+tools = append(tools, map[string]any{
+    "type":       "function",
+    "name":       tool.Function.Name,
+    "parameters": closeFunctionToolParametersForResponses(tool.Function.Parameters),
+})
+```
+
 ### Channel affinity and stream completion
 
 Channel affinity cache entries represent a successfully usable channel for a

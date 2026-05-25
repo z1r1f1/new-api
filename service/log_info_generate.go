@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"encoding/json"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -190,7 +191,22 @@ func getStringValue(source map[string]interface{}, key string) string {
 }
 
 func extractRequestServiceTier(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) string {
-	return extractStringParamFromRequestBody(ctx, relayInfo, "service_tier")
+	body := requestBodyForLogParamExtraction(ctx, relayInfo)
+	if len(body) == 0 {
+		return ""
+	}
+	var data map[string]json.RawMessage
+	if err := common.Unmarshal(body, &data); err != nil {
+		return ""
+	}
+	headers := map[string]string(nil)
+	if relayInfo != nil {
+		headers = relayInfo.RequestHeaders
+	}
+	if serviceTier := extractOpenAICompatServiceTier(data, headers); serviceTier != "" {
+		return serviceTier
+	}
+	return stringFieldFromRawMap(data, "service_tier")
 }
 
 func extractRequestEffort(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) string {
@@ -248,9 +264,28 @@ func extractEffortFromMap(data map[string]interface{}) string {
 			return effort
 		}
 	}
+	if thinking := getMapValue(data, "thinking"); thinking != nil {
+		if effort := getStringValue(thinking, "effort"); effort != "" {
+			return effort
+		}
+	}
+	if outputConfig := getMapValue(data, "output_config"); outputConfig != nil {
+		for _, key := range []string{"effort", "think_effort", "reasoning_effort", "model_reasoning_effort"} {
+			if effort := getStringValue(outputConfig, key); effort != "" {
+				return effort
+			}
+		}
+	}
 	for _, key := range []string{"effort", "think_effort", "model_reasoning_effort", "reasoning_effort"} {
 		if effort := getStringValue(data, key); effort != "" {
 			return effort
+		}
+	}
+	if metadata := getMapValue(data, "metadata"); metadata != nil {
+		for _, key := range []string{"effort", "think_effort", "model_reasoning_effort", "reasoning_effort", "effortLevel"} {
+			if effort := getStringValue(metadata, key); effort != "" {
+				return effort
+			}
 		}
 	}
 	return ""
@@ -342,7 +377,17 @@ func extractRequestFastParam(ctx *gin.Context, relayInfo *relaycommon.RelayInfo)
 	if err := common.Unmarshal(body, &data); err != nil {
 		return false, false
 	}
-	return getBoolishValue(data, "fast")
+	if fast, ok := getBoolishValue(data, "fast"); ok {
+		return fast, true
+	}
+	if fast, ok := getBoolishValue(data, "fastMode"); ok {
+		return fast, true
+	}
+	metadata := getMapValue(data, "metadata")
+	if fast, ok := getBoolishValue(metadata, "fast"); ok {
+		return fast, true
+	}
+	return getBoolishValue(metadata, "fastMode")
 }
 
 func extractRequestFastServiceTier(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, other map[string]interface{}, requestFast bool) string {

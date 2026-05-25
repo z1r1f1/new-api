@@ -335,6 +335,180 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	require.False(t, exists)
 	_, exists = info.RuntimeHeadersOverride["x-codex-turn-metadata"]
 	require.False(t, exists)
+
+	infoWithoutIncomingSession := &relaycommon.RelayInfo{
+		RequestHeaders: map[string]string{
+			"Originator": "Codex CLI",
+			"User-Agent": "codex-cli-test",
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: mergedOverride,
+		},
+	}
+	_, err = relaycommon.ApplyParamOverrideWithRelayInfo([]byte(fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":%q}`, affinityValue)), infoWithoutIncomingSession)
+	require.NoError(t, err)
+	require.True(t, infoWithoutIncomingSession.UseRuntimeHeadersOverride)
+	require.Equal(t, affinityValue, infoWithoutIncomingSession.RuntimeHeadersOverride["session_id"])
+}
+
+func TestCodexChannelAffinityDefaultRuleMatchesClaudeMessageWithMetadataSession(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	var codexRule *operation_setting.ChannelAffinityRule
+	for i := range setting.Rules {
+		rule := &setting.Rules[i]
+		if strings.EqualFold(strings.TrimSpace(rule.Name), "codex cli trace") {
+			codexRule = rule
+			break
+		}
+	}
+	require.NotNil(t, codexRule)
+
+	affinityValue := fmt.Sprintf("session-%d", time.Now().UnixNano())
+	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(*codexRule, "gpt-5.5", "vip", affinityValue)
+
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9627, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
+	})
+
+	nestedUserID := fmt.Sprintf(`{"device_id":"device-1","session_id":%q}`, affinityValue)
+	bodyBytes, err := common.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"user_id": nestedUserID,
+		},
+	})
+	require.NoError(t, err)
+	body := string(bodyBytes)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/message", strings.NewReader(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5.5", "vip")
+	require.True(t, found)
+	require.Equal(t, 9627, channelID)
+
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	require.Equal(t, "gjson", meta.KeySourceType)
+	require.Equal(t, "metadata.user_id", meta.KeySourcePath)
+	require.Equal(t, affinityFingerprint(affinityValue), meta.KeyFingerprint)
+}
+
+func TestCodexChannelAffinityDefaultRulePrefersProxyPromptCacheOrder(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	var codexRule *operation_setting.ChannelAffinityRule
+	for i := range setting.Rules {
+		rule := &setting.Rules[i]
+		if strings.EqualFold(strings.TrimSpace(rule.Name), "codex cli trace") {
+			codexRule = rule
+			break
+		}
+	}
+	require.NotNil(t, codexRule)
+
+	affinityValue := fmt.Sprintf("metadata-user-session-%d", time.Now().UnixNano())
+	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(*codexRule, "gpt-5.5", "vip", affinityValue)
+
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9630, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
+	})
+
+	nestedUserID := fmt.Sprintf(`{"device_id":"device-1","session_id":%q}`, affinityValue)
+	bodyBytes, err := common.Marshal(map[string]interface{}{
+		"session_id": "top-session-should-not-win",
+		"metadata": map[string]interface{}{
+			"user_id": nestedUserID,
+		},
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(string(bodyBytes)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5.5", "vip")
+	require.True(t, found)
+	require.Equal(t, 9630, channelID)
+
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	require.Equal(t, "gjson", meta.KeySourceType)
+	require.Equal(t, "metadata.user_id", meta.KeySourcePath)
+	require.Equal(t, affinityFingerprint(affinityValue), meta.KeyFingerprint)
+}
+
+func TestCodexChannelAffinityDefaultRuleMatchesSessionAliases(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	var codexRule *operation_setting.ChannelAffinityRule
+	for i := range setting.Rules {
+		rule := &setting.Rules[i]
+		if strings.EqualFold(strings.TrimSpace(rule.Name), "codex cli trace") {
+			codexRule = rule
+			break
+		}
+	}
+	require.NotNil(t, codexRule)
+
+	affinityValue := fmt.Sprintf("codex-session-%d", time.Now().UnixNano())
+	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(*codexRule, "gpt-5.5", "vip", affinityValue)
+
+	cache := getChannelAffinityCache()
+	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9628, time.Minute))
+	t.Cleanup(func() {
+		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
+	})
+
+	bodyBytes, err := common.Marshal(map[string]interface{}{
+		"metadata": map[string]interface{}{
+			"codex_session_id": affinityValue,
+		},
+	})
+	require.NoError(t, err)
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(string(bodyBytes)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5.5", "vip")
+	require.True(t, found)
+	require.Equal(t, 9628, channelID)
+
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	require.Equal(t, "gjson", meta.KeySourceType)
+	require.Equal(t, "metadata.codex_session_id", meta.KeySourcePath)
+	require.Equal(t, affinityFingerprint(affinityValue), meta.KeyFingerprint)
+}
+
+func TestExtractChannelAffinityValueNormalizesLongPromptCacheKey(t *testing.T) {
+	affinityValue := strings.Repeat("session-", 10)
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"prompt_cache_key":%q}`, affinityValue)))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	value := extractChannelAffinityValue(ctx, operation_setting.ChannelAffinityKeySource{Type: "gjson", Path: "prompt_cache_key"})
+
+	require.Len(t, value, 64)
+	require.NotEqual(t, affinityValue, value)
 }
 
 func TestChannelAffinityRequestPrefixLoggingSetting(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -79,5 +80,58 @@ func TestConvertOpenAIResponsesRequestDoesNotDefaultStreamForCompact(t *testing.
 	}
 	if info.IsStream {
 		t.Fatal("expected compact request not to mark relay info as streaming")
+	}
+}
+
+func TestConvertOpenAIResponsesRequestNormalizesReadToolSchemaForCodex(t *testing.T) {
+	tools, _ := common.Marshal([]map[string]any{
+		{
+			"type": "function",
+			"name": "Read",
+			"parameters": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string"},
+					"offset":    map[string]any{"type": "integer"},
+					"limit":     map[string]any{"type": "integer"},
+					"pages": map[string]any{
+						"type":  "array",
+						"items": map[string]any{"type": "integer"},
+					},
+				},
+				"required": []any{"file_path", "pages"},
+			},
+		},
+	})
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model: "gpt-5.5",
+		Tools: tools,
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+
+	req := converted.(dto.OpenAIResponsesRequest)
+	var convertedTools []map[string]any
+	if err := common.Unmarshal(req.Tools, &convertedTools); err != nil {
+		t.Fatalf("failed to decode tools: %v", err)
+	}
+	params := convertedTools[0]["parameters"].(map[string]any)
+	properties := params["properties"].(map[string]any)
+	if _, exists := properties["pages"]; exists {
+		t.Fatalf("expected Read.pages to be removed from schema, got %#v", properties["pages"])
+	}
+	for _, item := range params["required"].([]any) {
+		if item == "pages" {
+			t.Fatalf("expected Read.pages to be removed from required list, got %#v", params["required"])
+		}
+	}
+	if params["additionalProperties"] != false {
+		t.Fatalf("expected Read tool schema to reject extra parameters, got %#v", params["additionalProperties"])
 	}
 }

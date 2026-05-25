@@ -35,6 +35,21 @@ func normalizeChatImageURLToString(v any) any {
 	}
 }
 
+func responsesServiceTierFromChatRaw(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var value string
+	if err := common.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "fast") {
+		return "priority"
+	}
+	return value
+}
+
 func convertChatResponseFormatToResponsesText(reqFormat *dto.ResponseFormat) json.RawMessage {
 	if reqFormat == nil || strings.TrimSpace(reqFormat.Type) == "" {
 		return nil
@@ -71,6 +86,156 @@ func convertChatResponseFormatToResponsesText(reqFormat *dto.ResponseFormat) jso
 		"format": format,
 	})
 	return textRaw
+}
+
+func closeFunctionToolParametersForResponses(parameters any) any {
+	if parameters == nil {
+		return emptyFunctionToolParametersSchema()
+	}
+
+	var schema map[string]any
+	bytes, err := common.Marshal(parameters)
+	if err != nil {
+		return emptyFunctionToolParametersSchema()
+	}
+	if err := common.Unmarshal(bytes, &schema); err != nil {
+		return emptyFunctionToolParametersSchema()
+	}
+	if len(schema) == 0 {
+		schema = emptyFunctionToolParametersSchema()
+	}
+	return closeObjectSchemaAdditionalProperties(schema)
+}
+
+func emptyFunctionToolParametersSchema() map[string]any {
+	return map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{},
+		"additionalProperties": false,
+	}
+}
+
+func closeObjectSchemaAdditionalProperties(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed)+1)
+		for key, child := range typed {
+			if child == nil {
+				continue
+			}
+			switch key {
+			case "properties":
+				if properties, ok := child.(map[string]any); ok {
+					closedProperties := make(map[string]any, len(properties))
+					for propertyName, propertySchema := range properties {
+						closedProperties[propertyName] = closeObjectSchemaAdditionalProperties(propertySchema)
+					}
+					out[key] = closedProperties
+					continue
+				}
+			case "required":
+				if _, ok := child.([]any); !ok {
+					continue
+				}
+			case "items":
+				out[key] = closeObjectSchemaAdditionalProperties(child)
+				continue
+			case "anyOf", "oneOf", "allOf":
+				if variants, ok := child.([]any); ok {
+					closedVariants := make([]any, 0, len(variants))
+					for _, variant := range variants {
+						closedVariants = append(closedVariants, closeObjectSchemaAdditionalProperties(variant))
+					}
+					out[key] = closedVariants
+					continue
+				}
+			}
+			out[key] = child
+		}
+
+		_, hasProperties := out["properties"]
+		_, hasAdditionalProperties := out["additionalProperties"]
+		if hasProperties && !hasAdditionalProperties {
+			out["additionalProperties"] = false
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, item := range typed {
+			out = append(out, closeObjectSchemaAdditionalProperties(item))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func normalizeResponsesFunctionToolMapForUpstream(tool map[string]any) map[string]any {
+	if tool == nil {
+		return tool
+	}
+	if toolType, _ := tool["type"].(string); toolType != "function" {
+		return tool
+	}
+	tool["parameters"] = closeFunctionToolParametersForResponses(tool["parameters"])
+	if name, _ := tool["name"].(string); strings.EqualFold(strings.TrimSpace(name), "Read") {
+		tool["parameters"] = removeReadPagesParameterFromSchema(tool["parameters"])
+	}
+	return tool
+}
+
+func removeReadPagesParameterFromSchema(schema any) any {
+	typed, ok := schema.(map[string]any)
+	if !ok {
+		return schema
+	}
+	properties, ok := typed["properties"].(map[string]any)
+	if ok {
+		delete(properties, "pages")
+		typed["properties"] = properties
+	}
+	required, ok := typed["required"].([]any)
+	if ok {
+		filtered := make([]any, 0, len(required))
+		for _, item := range required {
+			if item == "pages" {
+				continue
+			}
+			filtered = append(filtered, item)
+		}
+		if len(filtered) == 0 {
+			delete(typed, "required")
+		} else {
+			typed["required"] = filtered
+		}
+	}
+	return typed
+}
+
+func NormalizeResponsesToolSchemas(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var tools []map[string]any
+	if err := common.Unmarshal(raw, &tools); err != nil {
+		return raw
+	}
+	changed := false
+	for index, tool := range tools {
+		if toolType, _ := tool["type"].(string); toolType != "function" {
+			continue
+		}
+		tools[index] = normalizeResponsesFunctionToolMapForUpstream(tool)
+		changed = true
+	}
+	if !changed {
+		return raw
+	}
+	normalized, err := common.Marshal(tools)
+	if err != nil {
+		return raw
+	}
+	return normalized
 }
 
 func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*dto.OpenAIResponsesRequest, error) {
@@ -291,12 +456,12 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 		for _, tool := range req.Tools {
 			switch tool.Type {
 			case "function":
-				tools = append(tools, map[string]any{
+				tools = append(tools, normalizeResponsesFunctionToolMapForUpstream(map[string]any{
 					"type":        "function",
 					"name":        tool.Function.Name,
 					"description": tool.Function.Description,
 					"parameters":  tool.Function.Parameters,
-				})
+				}))
 			default:
 				// Best-effort: keep original tool shape for unknown types.
 				var m map[string]any
@@ -373,19 +538,28 @@ func ChatCompletionsRequestToResponsesRequest(req *dto.GeneralOpenAIRequest) (*d
 	}
 
 	out := &dto.OpenAIResponsesRequest{
-		Model:             req.Model,
-		Input:             inputRaw,
-		Instructions:      instructionsRaw,
-		Stream:            req.Stream,
-		Temperature:       req.Temperature,
-		Text:              textRaw,
-		ToolChoice:        toolChoiceRaw,
-		Tools:             toolsRaw,
-		TopP:              topP,
-		User:              req.User,
-		ParallelToolCalls: parallelToolCallsRaw,
-		Store:             req.Store,
-		Metadata:          req.Metadata,
+		Model:                req.Model,
+		Input:                inputRaw,
+		Instructions:         instructionsRaw,
+		Stream:               req.Stream,
+		Temperature:          req.Temperature,
+		Text:                 textRaw,
+		ToolChoice:           toolChoiceRaw,
+		Tools:                toolsRaw,
+		TopP:                 topP,
+		User:                 req.User,
+		ParallelToolCalls:    parallelToolCallsRaw,
+		Store:                req.Store,
+		Metadata:             req.Metadata,
+		PromptCacheRetention: req.PromptCacheRetention,
+		SafetyIdentifier:     req.SafetyIdentifier,
+		StreamOptions:        req.StreamOptions,
+	}
+	if serviceTier := responsesServiceTierFromChatRaw(req.ServiceTier); serviceTier != "" {
+		out.ServiceTier = serviceTier
+	}
+	if strings.TrimSpace(req.PromptCacheKey) != "" {
+		out.PromptCacheKey, _ = common.Marshal(strings.TrimSpace(req.PromptCacheKey))
 	}
 	if req.MaxTokens != nil || req.MaxCompletionTokens != nil {
 		out.MaxOutputTokens = lo.ToPtr(maxOutputTokens)

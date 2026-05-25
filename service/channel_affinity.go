@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
@@ -316,7 +317,7 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 		if c == nil || c.Request == nil || src.Key == "" {
 			return ""
 		}
-		return strings.TrimSpace(c.Request.Header.Get(src.Key))
+		return normalizeChannelAffinityKeySourceValue(src, strings.TrimSpace(c.Request.Header.Get(src.Key)))
 	case "gjson":
 		if src.Path == "" {
 			return ""
@@ -335,13 +336,75 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 		}
 		switch res.Type {
 		case gjson.String, gjson.Number, gjson.True, gjson.False:
-			return strings.TrimSpace(res.String())
+			return normalizeChannelAffinityKeySourceValue(src, strings.TrimSpace(res.String()))
 		default:
-			return strings.TrimSpace(res.Raw)
+			return normalizeChannelAffinityKeySourceValue(src, strings.TrimSpace(res.Raw))
 		}
 	default:
 		return ""
 	}
+}
+
+func normalizeChannelAffinityKeySourceValue(src operation_setting.ChannelAffinityKeySource, value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if src.Type == "gjson" && strings.EqualFold(strings.TrimSpace(src.Path), "metadata.user_id") {
+		if sessionKey := deriveSessionKeyFromMetadataUserID(value); sessionKey != "" {
+			value = sessionKey
+		}
+	}
+	if isPromptCacheLikeChannelAffinitySource(src) {
+		return normalizeChannelAffinityPromptCacheKey(value)
+	}
+	return value
+}
+
+func isPromptCacheLikeChannelAffinitySource(src operation_setting.ChannelAffinityKeySource) bool {
+	if src.Type == "request_header" {
+		header := strings.ToLower(strings.TrimSpace(src.Key))
+		return header == "session_id" ||
+			header == "session-id" ||
+			header == "x-session-id" ||
+			header == "x-conversation-id" ||
+			header == "x-thread-id" ||
+			header == "x-claude-session-id" ||
+			header == "x-codex-session-id"
+	}
+	if src.Type != "gjson" {
+		return false
+	}
+	path := strings.ToLower(strings.TrimSpace(src.Path))
+	return path == "prompt_cache_key" ||
+		path == "openai_prompt_cache_key" ||
+		path == "session_id" ||
+		path == "sessionid" ||
+		path == "conversation_id" ||
+		path == "conversationid" ||
+		path == "thread_id" ||
+		path == "threadid" ||
+		path == "request_session_id" ||
+		path == "metadata.prompt_cache_key" ||
+		path == "metadata.openai_prompt_cache_key" ||
+		path == "metadata.session_id" ||
+		path == "metadata.sessionid" ||
+		path == "metadata.conversation_id" ||
+		path == "metadata.conversationid" ||
+		path == "metadata.thread_id" ||
+		path == "metadata.threadid" ||
+		path == "metadata.claude_session_id" ||
+		path == "metadata.claudesessionid" ||
+		path == "metadata.codex_session_id" ||
+		path == "metadata.codexsessionid" ||
+		path == "metadata.user_id"
+}
+
+func normalizeChannelAffinityPromptCacheKey(value string) string {
+	if utf8.RuneCountInString(value) <= 64 && len(value) <= 64 {
+		return value
+	}
+	return fmt.Sprintf("%x", common.Sha256Raw([]byte(value)))
 }
 
 func buildChannelAffinityCacheKeySuffix(rule operation_setting.ChannelAffinityRule, modelName string, usingGroup string, affinityValue string) string {

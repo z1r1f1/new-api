@@ -44,6 +44,37 @@ func TestGenerateTextOtherInfoRecordsFastServiceTierOffWhenRequestDoesNotHaveFas
 	}
 }
 
+func TestGenerateTextOtherInfoRecordsRequestServiceTierFromFastAlias(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/message", strings.NewReader(`{"model":"gpt-5.5"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	now := time.Now()
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime:         now,
+		FirstResponseTime: now,
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{"model":"gpt-5.5","fast":true,"output_config":{"effort":"medium"}}`),
+		},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+
+	if other["request_service_tier"] != "priority" {
+		t.Fatalf("expected fast alias to log request_service_tier=priority, got %#v", other["request_service_tier"])
+	}
+	if other["request_fast"] != true {
+		t.Fatalf("expected request_fast=true, got %#v", other["request_fast"])
+	}
+	if other["request_fast_service_tier"] != "priority" {
+		t.Fatalf("expected request_fast_service_tier=priority, got %#v", other["request_fast_service_tier"])
+	}
+	if other["request_effort"] != "medium" {
+		t.Fatalf("expected request_effort=medium, got %#v", other["request_effort"])
+	}
+}
+
 func TestGenerateTextOtherInfoRecordsResponseServiceTier(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -119,6 +150,28 @@ func TestGenerateTextOtherInfoRecordsRequestEffortAndServiceTierFromBillingInput
 	}
 	if other["request_fast_service_tier"] != "priority" {
 		t.Fatalf("expected request_fast_service_tier=priority, got %#v", other["request_fast_service_tier"])
+	}
+}
+
+func TestGenerateTextOtherInfoRecordsRequestEffortFromOutputConfig(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"gpt-5.5"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	now := time.Now()
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime:         now,
+		FirstResponseTime: now,
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+		BillingRequestInput: &billingexpr.RequestInput{
+			Body: []byte(`{"model":"gpt-5.5","output_config":{"effort":"xhigh"}}`),
+		},
+	}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+
+	if other["request_effort"] != "xhigh" {
+		t.Fatalf("expected request_effort=xhigh, got %#v", other["request_effort"])
 	}
 }
 

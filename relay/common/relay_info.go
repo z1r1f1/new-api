@@ -796,9 +796,9 @@ func FailTaskInfo(reason string) *TaskInfo {
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
 func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
-		return NormalizePromptCacheKey(jsonData)
+		return normalizePromptCacheKeyAndFastServiceTier(jsonData)
 	}
-	if !hasRemovableDisabledField(jsonData, channelOtherSettings) {
+	if !hasRemovableDisabledField(jsonData, channelOtherSettings) && !hasLiteralFastServiceTier(jsonData, channelOtherSettings.AllowServiceTier) {
 		return NormalizePromptCacheKey(jsonData)
 	}
 
@@ -813,6 +813,8 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		if _, exists := data["service_tier"]; exists {
 			delete(data, "service_tier")
 		}
+	} else if serviceTier, ok := data["service_tier"].(string); ok && strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
+		data["service_tier"] = "priority"
 	}
 
 	// 默认移除 inference_geo，除非明确允许（避免在未授权情况下透传数据驻留区域）
@@ -869,6 +871,38 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		return jsonData, nil
 	}
 	return jsonDataAfter, nil
+}
+
+func normalizePromptCacheKeyAndFastServiceTier(jsonData []byte) ([]byte, error) {
+	jsonData, err := NormalizePromptCacheKey(jsonData)
+	if err != nil {
+		return jsonData, err
+	}
+	if !hasLiteralFastServiceTier(jsonData, true) {
+		return jsonData, nil
+	}
+	var data map[string]interface{}
+	if err := common.Unmarshal(jsonData, &data); err != nil {
+		common.SysError("normalizePromptCacheKeyAndFastServiceTier Unmarshal error :" + err.Error())
+		return jsonData, nil
+	}
+	if serviceTier, ok := data["service_tier"].(string); ok && strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
+		data["service_tier"] = "priority"
+	}
+	jsonDataAfter, err := common.Marshal(data)
+	if err != nil {
+		common.SysError("normalizePromptCacheKeyAndFastServiceTier Marshal error :" + err.Error())
+		return jsonData, nil
+	}
+	return jsonDataAfter, nil
+}
+
+func hasLiteralFastServiceTier(jsonData []byte, allowServiceTier bool) bool {
+	if !allowServiceTier || len(jsonData) == 0 {
+		return false
+	}
+	result := gjson.GetBytes(jsonData, "service_tier")
+	return result.Exists() && result.Type == gjson.String && strings.EqualFold(strings.TrimSpace(result.String()), "fast")
 }
 
 func hasRemovableDisabledField(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings) bool {
