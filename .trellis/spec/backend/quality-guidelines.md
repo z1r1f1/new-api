@@ -1062,6 +1062,27 @@ Channel test `response_time` is used by operators to compare perceived channel l
 - Consume logs for channel tests may continue to record the full test duration; do not silently reinterpret billing/log elapsed time as TTFT.
 - Add focused controller tests when changing this behavior.
 
+### OAuth provider callback parity
+
+OAuth providers that use the frontend callback page must keep the authorization
+URL and token-exchange `redirect_uri` byte-for-byte compatible.
+
+- Frontend authorization builders under `web/default/src/lib/oauth.ts` should
+  send users to the provider with `redirect_uri=<public origin>/oauth/<provider>`
+  when the provider requires or validates the redirect URI.
+- Backend providers under `oauth/` must send the same `/oauth/<provider>`
+  redirect URI during token exchange. Do not switch to `/api/oauth/<provider>`
+  unless the authorization URL also uses that API callback directly.
+- When the application is behind a reverse proxy, backend redirect URI builders
+  should honor `Forwarded`, `X-Forwarded-Proto`, and `X-Forwarded-Host` before
+  falling back to the request host/TLS state.
+- Token and userinfo response decoding in touched OAuth providers should use
+  `common.Unmarshal` / `common.DecodeJson`, not new `encoding/json` decoder
+  calls.
+- Add focused provider tests that assert auth style, redirect URI, non-2xx
+  provider responses, and provider-specific account gating such as trust level
+  or suspended/silenced status.
+
 ---
 
 ### Billing expression changes
