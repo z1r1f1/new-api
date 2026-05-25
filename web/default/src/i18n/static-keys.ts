@@ -138,6 +138,8 @@ export const STATIC_I18N_KEYS = [
   'Budgets',
   'Load Balancing',
   'Rate Limiting',
+  'IP Blacklist',
+  'Block requests from specified client IPs or CIDR ranges.',
   'Token Mgmt',
   'Prompt Caching',
   'Pass-Through',

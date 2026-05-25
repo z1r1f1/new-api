@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { IPBlacklistSection } from '../request-limits/ip-blacklist-section'
 import { RateLimitSection } from '../request-limits/rate-limit-section'
 import { SensitiveWordsSection } from '../request-limits/sensitive-words-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
@@ -51,6 +52,20 @@ const SECURITY_SECTIONS = [
           CheckSensitiveEnabled: settings.CheckSensitiveEnabled,
           CheckSensitiveOnPromptEnabled: settings.CheckSensitiveOnPromptEnabled,
           SensitiveWords: settings.SensitiveWords,
+        }}
+      />
+    ),
+  },
+  {
+    id: 'ip-blacklist',
+    titleKey: 'IP Blacklist',
+    descriptionKey: 'Block requests from specified client IPs or CIDR ranges.',
+    build: (settings: SecuritySettings) => (
+      <IPBlacklistSection
+        defaultValues={{
+          'ip_blacklist_setting.enabled':
+            settings['ip_blacklist_setting.enabled'],
+          'ip_blacklist_setting.list': settings['ip_blacklist_setting.list'],
         }}
       />
     ),

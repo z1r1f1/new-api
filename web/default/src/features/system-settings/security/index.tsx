@@ -40,6 +40,8 @@ const defaultSecuritySettings: SecuritySettings = {
   'fetch_setting.ip_list': [],
   'fetch_setting.allowed_ports': [],
   'fetch_setting.apply_ip_filter_for_domain': false,
+  'ip_blacklist_setting.enabled': false,
+  'ip_blacklist_setting.list': '',
 }
 
 export function SecuritySettings() {

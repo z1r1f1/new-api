@@ -4612,6 +4612,13 @@
     "{{count}} selected channel(s) skipped because they are not supported": "{{count}} canal(aux) sélectionné(s) ignoré(s), car non pris en charge",
     "{{count}} channel(s) failed to redo OAuth": "Échec de la relance OAuth pour {{count}} canal(aux)",
     "{{count}} channel(s) failed to redo ChatGPT": "Échec de la relance ChatGPT pour {{count}} canal(aux)",
+    "IP Blacklist": "Liste noire IP",
+    "Block requests from specified client IPs or CIDR ranges.": "Bloquer les requêtes provenant des IP clientes ou plages CIDR spécifiées.",
+    "Enable IP Blacklist": "Activer la liste noire IP",
+    "Reject matching requests before authentication and routing.": "Rejeter les requêtes correspondantes avant l’authentification et le routage.",
+    "Blocked IPs": "IP bloquées",
+    "One IP or CIDR range per line. Commas and semicolons are also supported.": "Une IP ou plage CIDR par ligne. Les virgules et points-virgules sont aussi pris en charge.",
+    "Save IP blacklist": "Enregistrer la liste noire IP",
     "Final Reasoning Effort": "Effort de raisonnement final"
   }
 }

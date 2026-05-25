@@ -13,6 +13,7 @@ import (
 )
 
 func SetRouter(router *gin.Engine, assets ThemeAssets) {
+	router.Use(middleware.IPBlacklist())
 	SetApiRouter(router)
 	SetDashboardRouter(router)
 	SetRelayRouter(router)

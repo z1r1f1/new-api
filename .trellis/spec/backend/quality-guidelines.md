@@ -346,6 +346,65 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 })
 ```
 
+### Global IP blacklist
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `middleware.IPBlacklist`, router middleware ordering, `ip_blacklist_setting.*`, or the default frontend Security & Limits IP blacklist settings.
+- The blacklist is a site-wide access-control layer and must run before auth, relay routing, dashboard APIs, and static frontend routing.
+
+#### 2. Signatures
+
+- Runtime settings:
+  - `ip_blacklist_setting.enabled`
+  - `ip_blacklist_setting.list`
+- Shared parser: `common.SplitIPList(raw string) []string`
+- Matcher: `common.IsIpInCIDRList(ip net.IP, cidrList []string) bool`
+
+#### 3. Contracts
+
+- Disabled blacklist or empty list -> allow the request to continue.
+- The list supports single IPs and CIDR ranges.
+- Operators may separate entries with newlines, commas, or semicolons; parsing must trim whitespace and drop duplicates.
+- Matched requests return HTTP 403 and abort the Gin chain before downstream middleware runs.
+
+#### 4. Validation & Error Matrix
+
+- `enabled=false` -> no blocking.
+- `enabled=true`, `list=""` -> no blocking.
+- `enabled=true`, malformed client IP -> HTTP 403 `无法解析客户端 IP 地址`.
+- `enabled=true`, client IP in list -> HTTP 403 `当前 IP 已被禁止访问`.
+- Invalid entries in the blacklist are ignored by `common.IsIpInCIDRList`; do not fail startup or option loading.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `203.0.113.8` with `203.0.113.0/24` is blocked.
+- Good: `198.51.100.10` with `203.0.113.0/24` is allowed.
+- Base: disabled blacklist with any list is allowed.
+- Bad: adding the middleware only to `/api`, leaving `/v1` relay or frontend routes unprotected.
+
+#### 6. Tests Required
+
+- Unit-test separator parsing and duplicate removal.
+- Middleware-test both blocked and allowed request paths.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+apiRouter.Use(middleware.IPBlacklist())
+```
+
+Correct:
+
+```go
+func SetRouter(router *gin.Engine, assets ThemeAssets) {
+    router.Use(middleware.IPBlacklist())
+    // register API, relay, dashboard, and web routes after this
+}
+```
+
 ### ChatGPT Web image requests and playground async image tasks
 
 #### 1. Scope / Trigger

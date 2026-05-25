@@ -1,6 +1,9 @@
 package common
 
-import "net"
+import (
+	"net"
+	"strings"
+)
 
 func IsIP(s string) bool {
 	ip := net.ParseIP(s)
@@ -48,4 +51,23 @@ func IsIpInCIDRList(ip net.IP, cidrList []string) bool {
 		}
 	}
 	return false
+}
+
+func SplitIPList(raw string) []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, value := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r'
+	}) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
 }

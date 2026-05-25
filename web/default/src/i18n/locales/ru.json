@@ -4612,6 +4612,13 @@
     "{{count}} selected channel(s) skipped because they are not supported": "Пропущено выбранных каналов из-за отсутствия поддержки: {{count}}",
     "{{count}} channel(s) failed to redo OAuth": "Не удалось повторить OAuth для каналов: {{count}}",
     "{{count}} channel(s) failed to redo ChatGPT": "Не удалось повторить ChatGPT для каналов: {{count}}",
+    "IP Blacklist": "Черный список IP",
+    "Block requests from specified client IPs or CIDR ranges.": "Блокировать запросы с указанных клиентских IP или диапазонов CIDR.",
+    "Enable IP Blacklist": "Включить черный список IP",
+    "Reject matching requests before authentication and routing.": "Отклонять совпадающие запросы до аутентификации и маршрутизации.",
+    "Blocked IPs": "Заблокированные IP",
+    "One IP or CIDR range per line. Commas and semicolons are also supported.": "Один IP или диапазон CIDR на строку. Запятые и точки с запятой также поддерживаются.",
+    "Save IP blacklist": "Сохранить черный список IP",
     "Final Reasoning Effort": "Итоговая интенсивность рассуждения"
   }
 }

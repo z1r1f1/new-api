@@ -326,6 +326,8 @@ export type SecuritySettings = {
   'fetch_setting.ip_list': string[]
   'fetch_setting.allowed_ports': number[]
   'fetch_setting.apply_ip_filter_for_domain': boolean
+  'ip_blacklist_setting.enabled': boolean
+  'ip_blacklist_setting.list': string
 }
 
 export type UpstreamChannel = {

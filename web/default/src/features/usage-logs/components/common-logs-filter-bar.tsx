@@ -90,6 +90,7 @@ export function CommonLogsFilterBar<TData>(
     if (searchParams.model) next.model = searchParams.model
     if (searchParams.token) next.token = searchParams.token
     if (searchParams.group) next.group = searchParams.group
+    if (searchParams.ip) next.ip = searchParams.ip
     if (searchParams.username) next.username = searchParams.username
     if (searchParams.requestId) next.requestId = searchParams.requestId
     if (searchParams.upstreamRequestId)
@@ -113,6 +114,7 @@ export function CommonLogsFilterBar<TData>(
     searchParams.model,
     searchParams.token,
     searchParams.group,
+    searchParams.ip,
     searchParams.username,
     searchParams.requestId,
     searchParams.upstreamRequestId,
@@ -173,6 +175,7 @@ export function CommonLogsFilterBar<TData>(
     !!filters.channelId ||
     !!filters.channelName ||
     !!filters.channel ||
+    !!filters.ip ||
     !!filters.requestId ||
     !!filters.upstreamRequestId
 
@@ -307,6 +310,14 @@ export function CommonLogsFilterBar<TData>(
             />
           )}
           <Input
+            placeholder={t('IP')}
+            type={sensitiveType}
+            value={filters.ip || ''}
+            onChange={(e) => handleChange('ip', e.target.value)}
+            onKeyDown={handleKeyDown}
+            className={inputClass}
+          />
+          <Input
             placeholder={t('Request ID')}
             value={filters.requestId || ''}
             onChange={(e) => handleChange('requestId', e.target.value)}
@@ -316,9 +327,7 @@ export function CommonLogsFilterBar<TData>(
           <Input
             placeholder={t('Upstream Request ID')}
             value={filters.upstreamRequestId || ''}
-            onChange={(e) =>
-              handleChange('upstreamRequestId', e.target.value)
-            }
+            onChange={(e) => handleChange('upstreamRequestId', e.target.value)}
             onKeyDown={handleKeyDown}
             className={inputClass}
           />

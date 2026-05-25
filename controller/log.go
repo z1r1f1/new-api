@@ -25,9 +25,10 @@ func GetAllLogs(c *gin.Context) {
 	}
 	channelName := c.Query("channel_name")
 	group := c.Query("group")
+	ip := c.Query("ip")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, requestId, upstreamRequestId)
+	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, ip, requestId, upstreamRequestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -52,9 +53,10 @@ func GetUserLogs(c *gin.Context) {
 	}
 	channelName := c.Query("channel_name")
 	group := c.Query("group")
+	ip := c.Query("ip")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, requestId, upstreamRequestId)
+	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, ip, requestId, upstreamRequestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -118,8 +120,9 @@ func GetLogsStat(c *gin.Context) {
 	}
 	channelName := c.Query("channel_name")
 	group := c.Query("group")
+	ip := c.Query("ip")
 	requestId := c.Query("request_id")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, requestId)
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -153,8 +156,9 @@ func GetLogsSelfStat(c *gin.Context) {
 	}
 	channelName := c.Query("channel_name")
 	group := c.Query("group")
+	ip := c.Query("ip")
 	requestId := c.Query("request_id")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, requestId)
+	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

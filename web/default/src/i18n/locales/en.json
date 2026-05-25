@@ -4653,6 +4653,13 @@
     "{{count}} selected channel(s) skipped because they are not supported": "{{count}} selected channel(s) skipped because they are not supported",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} channel(s) failed to redo OAuth",
     "{{count}} channel(s) failed to redo ChatGPT": "{{count}} channel(s) failed to redo ChatGPT",
+    "IP Blacklist": "IP Blacklist",
+    "Block requests from specified client IPs or CIDR ranges.": "Block requests from specified client IPs or CIDR ranges.",
+    "Enable IP Blacklist": "Enable IP Blacklist",
+    "Reject matching requests before authentication and routing.": "Reject matching requests before authentication and routing.",
+    "Blocked IPs": "Blocked IPs",
+    "One IP or CIDR range per line. Commas and semicolons are also supported.": "One IP or CIDR range per line. Commas and semicolons are also supported.",
+    "Save IP blacklist": "Save IP blacklist",
     "Final Reasoning Effort": "Final Reasoning Effort"
   }
 }

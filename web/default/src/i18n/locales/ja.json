@@ -4612,6 +4612,13 @@
     "{{count}} selected channel(s) skipped because they are not supported": "未対応のため、選択した {{count}} 件のチャネルをスキップしました",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} 件のチャネルで OAuth の再実行に失敗しました",
     "{{count}} channel(s) failed to redo ChatGPT": "{{count}} 件のチャネルで ChatGPT の再実行に失敗しました",
+    "IP Blacklist": "IPブラックリスト",
+    "Block requests from specified client IPs or CIDR ranges.": "指定したクライアントIPまたはCIDR範囲からのリクエストをブロックします。",
+    "Enable IP Blacklist": "IPブラックリストを有効にする",
+    "Reject matching requests before authentication and routing.": "認証とルーティングの前に一致するリクエストを拒否します。",
+    "Blocked IPs": "ブロック対象IP",
+    "One IP or CIDR range per line. Commas and semicolons are also supported.": "1行に1つのIPまたはCIDR範囲を入力します。カンマとセミコロン区切りにも対応しています。",
+    "Save IP blacklist": "IPブラックリストを保存",
     "Final Reasoning Effort": "最終推論強度"
   }
 }

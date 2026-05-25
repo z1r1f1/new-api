@@ -4612,6 +4612,13 @@
     "{{count}} selected channel(s) skipped because they are not supported": "Đã bỏ qua {{count}} kênh đã chọn vì không được hỗ trợ",
     "{{count}} channel(s) failed to redo OAuth": "{{count}} kênh làm lại OAuth thất bại",
     "{{count}} channel(s) failed to redo ChatGPT": "{{count}} kênh làm lại ChatGPT thất bại",
+    "IP Blacklist": "Danh sách chặn IP",
+    "Block requests from specified client IPs or CIDR ranges.": "Chặn yêu cầu từ các IP máy khách hoặc dải CIDR được chỉ định.",
+    "Enable IP Blacklist": "Bật danh sách chặn IP",
+    "Reject matching requests before authentication and routing.": "Từ chối các yêu cầu khớp trước khi xác thực và định tuyến.",
+    "Blocked IPs": "IP bị chặn",
+    "One IP or CIDR range per line. Commas and semicolons are also supported.": "Mỗi dòng một IP hoặc dải CIDR. Cũng hỗ trợ dấu phẩy và dấu chấm phẩy.",
+    "Save IP blacklist": "Lưu danh sách chặn IP",
     "Final Reasoning Effort": "Mức suy luận cuối cùng"
   }
 }
