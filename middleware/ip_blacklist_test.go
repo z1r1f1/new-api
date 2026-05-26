@@ -159,6 +159,73 @@ func TestIPBlacklistAutoBanWhitelistSkipsClientIP(t *testing.T) {
 	}
 }
 
+func TestIPBlacklistAutoBanUsesForwardedClientWhenProxyIsWhitelisted(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setting := system_setting.GetIPBlacklistSetting()
+	originalEnabled := setting.Enabled
+	originalList := setting.List
+	originalAutoBanEnabled := setting.AutoBanEnabled
+	originalAutoBanRpm := setting.AutoBanRpm
+	originalAutoBanWhitelist := setting.AutoBanWhitelist
+	originalUpdate := updateIPBlacklistList
+	originalNow := ipAutoBanNow
+	t.Cleanup(func() {
+		setting.Enabled = originalEnabled
+		setting.List = originalList
+		setting.AutoBanEnabled = originalAutoBanEnabled
+		setting.AutoBanRpm = originalAutoBanRpm
+		setting.AutoBanWhitelist = originalAutoBanWhitelist
+		updateIPBlacklistList = originalUpdate
+		ipAutoBanNow = originalNow
+		ipAutoBanCounters = make(map[string]ipAutoBanCounter)
+	})
+
+	setting.Enabled = false
+	setting.List = ""
+	setting.AutoBanEnabled = true
+	setting.AutoBanRpm = 2
+	setting.AutoBanWhitelist = "127.0.0.1"
+	updateIPBlacklistList = func(key string, value string) error {
+		if key != "ip_blacklist_setting.list" {
+			t.Fatalf("key = %s, want ip_blacklist_setting.list", key)
+		}
+		setting.List = value
+		return nil
+	}
+	ipAutoBanNow = func() time.Time {
+		return time.Unix(240, 0)
+	}
+	ipAutoBanCounters = make(map[string]ipAutoBanCounter)
+
+	router := gin.New()
+	if err := router.SetTrustedProxies(nil); err != nil {
+		t.Fatal(err)
+	}
+	router.Use(IPBlacklist())
+	router.GET("/ping", func(c *gin.Context) {
+		c.String(http.StatusOK, "pong")
+	})
+
+	for i := 1; i <= 2; i++ {
+		req := httptest.NewRequest(http.MethodGet, "/ping", nil)
+		req.RemoteAddr = "127.0.0.1:12345"
+		req.Header.Set("X-Real-IP", "203.0.113.44")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if i == 1 && w.Code != http.StatusOK {
+			t.Fatalf("first status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+		}
+		if i == 2 && w.Code != http.StatusForbidden {
+			t.Fatalf("second status = %d, want %d; body=%s", w.Code, http.StatusForbidden, w.Body.String())
+		}
+	}
+
+	if setting.List != "203.0.113.44" {
+		t.Fatalf("setting.List = %q, want forwarded client IP", setting.List)
+	}
+}
+
 func TestIPBlacklistAllowsNonMatchingClientIP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	setting := system_setting.GetIPBlacklistSetting()

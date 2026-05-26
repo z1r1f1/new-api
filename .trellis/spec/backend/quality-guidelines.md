@@ -366,22 +366,32 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 
 #### 3. Contracts
 
-- Disabled blacklist or empty list -> allow the request to continue.
+- `enabled=false` only disables manually configured blacklist blocking when
+  automatic ban is also disabled. When automatic ban is enabled, existing
+  auto-banned entries in `list` remain enforced so the ban survives the request
+  that added it.
 - The list supports single IPs and CIDR ranges.
 - Operators may separate entries with newlines, commas, or semicolons; parsing must trim whitespace and drop duplicates.
 - Matched requests return HTTP 403 and abort the Gin chain before downstream middleware runs.
-- Automatic ban is in-memory per process for request counting, uses the canonical `c.ClientIP()` candidate, and persists triggered IPs by updating `ip_blacklist_setting.list`.
+- Automatic ban is in-memory per process for request counting. It prefers the
+  canonical `c.ClientIP()` candidate, but if that candidate is whitelisted
+  because it is a local/reverse-proxy address, it may fall through to the next
+  parsed forwarded candidate and count the first non-whitelisted client IP.
+  Persist triggered IPs by updating `ip_blacklist_setting.list`.
+- `auto_ban_enabled` defaults to true while `auto_ban_rpm=0` keeps the feature
+  inert by default. This preserves compatibility for deployments that set a
+  positive threshold before the explicit enable key existed.
 - `auto_ban_whitelist` only exempts IPs from automatic ban; it must not bypass explicit manual blacklist entries.
 
 #### 4. Validation & Error Matrix
 
-- `enabled=false` -> no blocking.
+- `enabled=false`, `auto_ban_enabled=false` -> no blocking.
 - `enabled=false`, `auto_ban_enabled=true`, and an IP is already in `list` -> block the IP so automatically banned entries remain effective.
 - `enabled=true`, `list=""` -> no blocking.
 - `enabled=true`, malformed client IP -> HTTP 403 `无法解析客户端 IP 地址`.
 - `enabled=true`, client IP in list -> HTTP 403 `当前 IP 已被禁止访问`.
 - `auto_ban_enabled=true`, `auto_ban_rpm<=0` -> no automatic ban.
-- `auto_ban_enabled=true`, request count for the canonical client IP reaches `auto_ban_rpm` in the current minute -> append the IP to `list`, persist `ip_blacklist_setting.list`, return HTTP 403 `当前 IP 请求频率过高，已被自动封禁`.
+- `auto_ban_enabled=true`, request count for the selected non-whitelisted client IP reaches `auto_ban_rpm` in the current minute -> append the IP to `list`, persist `ip_blacklist_setting.list`, return HTTP 403 `当前 IP 请求频率过高，已被自动封禁`.
 - Client IP in `auto_ban_whitelist` -> skip automatic ban counting for that IP, but still enforce the manual blacklist.
 - Invalid entries in the blacklist are ignored by `common.IsIpInCIDRList`; do not fail startup or option loading.
 
@@ -389,17 +399,20 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 
 - Good: `203.0.113.8` with `203.0.113.0/24` is blocked.
 - Good: `198.51.100.10` with `203.0.113.0/24` is allowed.
-- Good: `auto_ban_rpm=60` adds `203.0.113.9` to the persisted blacklist when the same canonical client IP reaches 60 requests in one minute.
+- Good: `auto_ban_rpm=60` adds `203.0.113.9` to the persisted blacklist when the same selected client IP reaches 60 requests in one minute.
 - Good: `203.0.113.10` in `auto_ban_whitelist` is not auto-banned even when it exceeds the RPM threshold.
-- Base: disabled blacklist with any list is allowed.
+- Good: `127.0.0.1` in `auto_ban_whitelist` with `X-Real-IP: 203.0.113.9`
+  counts and bans `203.0.113.9`, not the local reverse proxy.
+- Base: disabled manual blacklist with automatic ban disabled and any list is allowed.
 - Bad: adding the middleware only to `/api`, leaving `/v1` relay or frontend routes unprotected.
-- Bad: auto-banning every `X-Forwarded-For` value; spoofed headers could ban unrelated victims. Use the canonical client IP candidate for automatic counting.
+- Bad: auto-banning every `X-Forwarded-For` value; spoofed headers could ban unrelated victims. Select one non-whitelisted client candidate for automatic counting.
 
 #### 6. Tests Required
 
 - Unit-test separator parsing and duplicate removal.
 - Middleware-test both blocked and allowed request paths.
-- Middleware-test automatic ban threshold behavior and whitelist exemption.
+- Middleware-test automatic ban threshold behavior, whitelist exemption, and
+  reverse-proxy fallback from a whitelisted proxy IP to a forwarded client IP.
 
 #### 7. Wrong vs Correct
 
@@ -430,9 +443,12 @@ for _, ip := range strings.Split(c.GetHeader("X-Forwarded-For"), ",") {
 Correct:
 
 ```go
-// Use the canonical client IP candidate for automatic ban counting; keep
-// forwarded-header candidates only for explicit blacklist matching.
-clientIP := blacklistClientIPCandidates(c)[0]
+// Prefer the canonical client IP, but skip whitelisted local/reverse-proxy
+// candidates so the real forwarded client can be counted.
+clientIP, ok := selectAutoBanClientIP(blacklistClientIPCandidates(c), whitelist)
+if !ok {
+    return
+}
 countAndMaybeBan(clientIP.ip.String())
 ```
 

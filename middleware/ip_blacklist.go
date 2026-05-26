@@ -68,15 +68,16 @@ func IPBlacklist() gin.HandlerFunc {
 }
 
 type blacklistClientIP struct {
-	raw string
-	ip  net.IP
+	source string
+	raw    string
+	ip     net.IP
 }
 
 func blacklistClientIPCandidates(c *gin.Context) []blacklistClientIP {
 	candidates := make([]blacklistClientIP, 0, 8)
 	seen := make(map[string]struct{})
 
-	add := func(value string) {
+	add := func(source string, value string) {
 		value = strings.TrimSpace(value)
 		if value == "" {
 			return
@@ -94,19 +95,20 @@ func blacklistClientIPCandidates(c *gin.Context) []blacklistClientIP {
 		}
 		seen[key] = struct{}{}
 		candidates = append(candidates, blacklistClientIP{
-			raw: value,
-			ip:  ip,
+			source: source,
+			raw:    value,
+			ip:     ip,
 		})
 	}
 
-	add(c.ClientIP())
-	add(c.Request.RemoteAddr)
-	add(c.GetHeader("CF-Connecting-IP"))
-	add(c.GetHeader("True-Client-IP"))
-	add(c.GetHeader("X-Real-IP"))
+	add("client_ip", c.ClientIP())
+	add("remote_addr", c.Request.RemoteAddr)
+	add("cf_connecting_ip", c.GetHeader("CF-Connecting-IP"))
+	add("true_client_ip", c.GetHeader("True-Client-IP"))
+	add("x_real_ip", c.GetHeader("X-Real-IP"))
 
 	for _, value := range strings.Split(c.GetHeader("X-Forwarded-For"), ",") {
-		add(value)
+		add("x_forwarded_for", value)
 	}
 
 	return candidates
@@ -117,8 +119,8 @@ func autoBanIPIfNeeded(c *gin.Context, setting *system_setting.IPBlacklistSettin
 		return false
 	}
 
-	clientIP := candidates[0]
-	if common.IsIpInCIDRList(clientIP.ip, common.SplitIPList(setting.AutoBanWhitelist)) {
+	clientIP, ok := selectAutoBanClientIP(candidates, common.SplitIPList(setting.AutoBanWhitelist))
+	if !ok {
 		return false
 	}
 
@@ -127,7 +129,7 @@ func autoBanIPIfNeeded(c *gin.Context, setting *system_setting.IPBlacklistSettin
 	}
 
 	if addAutoBannedIP(setting, clientIP.ip.String()) {
-		logger.LogWarn(c, "auto-banned high RPM IP "+clientIP.raw)
+		logger.LogWarn(c, "auto-banned high RPM IP "+clientIP.raw+" from "+clientIP.source)
 	}
 	c.JSON(http.StatusForbidden, gin.H{
 		"success": false,
@@ -135,6 +137,16 @@ func autoBanIPIfNeeded(c *gin.Context, setting *system_setting.IPBlacklistSettin
 	})
 	c.Abort()
 	return true
+}
+
+func selectAutoBanClientIP(candidates []blacklistClientIP, whitelist []string) (blacklistClientIP, bool) {
+	for _, candidate := range candidates {
+		if common.IsIpInCIDRList(candidate.ip, whitelist) {
+			continue
+		}
+		return candidate, true
+	}
+	return blacklistClientIP{}, false
 }
 
 func recordAutoBanHit(ip string, threshold int) bool {

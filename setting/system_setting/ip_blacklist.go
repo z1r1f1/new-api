@@ -13,7 +13,7 @@ type IPBlacklistSetting struct {
 var ipBlacklistSetting = IPBlacklistSetting{
 	Enabled:          false,
 	List:             "",
-	AutoBanEnabled:   false,
+	AutoBanEnabled:   true,
 	AutoBanRpm:       0,
 	AutoBanWhitelist: "",
 }
