@@ -328,6 +328,9 @@ export type SecuritySettings = {
   'fetch_setting.apply_ip_filter_for_domain': boolean
   'ip_blacklist_setting.enabled': boolean
   'ip_blacklist_setting.list': string
+  'ip_blacklist_setting.auto_ban_enabled': boolean
+  'ip_blacklist_setting.auto_ban_rpm': number
+  'ip_blacklist_setting.auto_ban_whitelist': string
 }
 
 export type UpstreamChannel = {

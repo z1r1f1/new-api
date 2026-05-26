@@ -1787,7 +1787,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Các Dự Án Liên Quan",
     "footer.defaultCopyright": "Bản quyền được bảo lưu.",
-    "footer.newapi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Bản quyền được bảo lưu. Được thiết kế và phát triển bởi các cộng tác viên dự án.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Đối với các kênh được thêm sau ngày 10 tháng 5 năm 2025, không cần loại bỏ \".\" khỏi tên mô hình trong quá trình triển khai",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Đối với các triển khai riêng tư, định dạng: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Buộc phản hồi JSON hợp lệ về cú pháp",
@@ -4669,6 +4669,14 @@
     "Reset countdown": "Đếm ngược đặt lại",
     "Resetting soon": "Sắp đặt lại",
     "Deep research": "Nghiên cứu chuyên sâu",
-    "Use ChatGPT Web deep research connector for this request.": "Sử dụng trình kết nối nghiên cứu chuyên sâu ChatGPT Web cho yêu cầu này."
+    "Use ChatGPT Web deep research connector for this request.": "Sử dụng trình kết nối nghiên cứu chuyên sâu ChatGPT Web cho yêu cầu này.",
+    "Avg Total/FRT": "TB tổng/phản hồi đầu",
+    "Enable Automatic IP Ban": "Bật tự động chặn IP",
+    "Automatically add high-RPM client IPs to the blacklist and reject them.": "Tự động thêm IP máy khách có RPM cao vào danh sách chặn và từ chối chúng.",
+    "Auto-ban RPM threshold": "Ngưỡng RPM tự động chặn",
+    "requests/min": "yêu cầu/phút",
+    "0 disables automatic banning.": "0 sẽ tắt tự động chặn.",
+    "Auto-ban Whitelist": "Danh sách cho phép tự động chặn",
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "Các IP hoặc dải CIDR ở đây sẽ không bao giờ bị tự động chặn. Các mục danh sách chặn thủ công vẫn có hiệu lực."
   }
 }

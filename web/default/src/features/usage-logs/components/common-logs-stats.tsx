@@ -83,6 +83,7 @@ export function CommonLogsStats() {
         <Skeleton className='h-7 w-[150px] rounded-md' />
         <Skeleton className='h-7 w-[150px] rounded-md' />
         <Skeleton className='h-7 w-[160px] rounded-md' />
+        <Skeleton className='h-7 w-[150px] rounded-md' />
       </div>
     )
   }
@@ -100,6 +101,7 @@ export function CommonLogsStats() {
     return normalized.toLocaleString(undefined, { maximumFractionDigits: 2 })
   }
   const formatPercent = (value?: number) => `${(value || 0).toFixed(1)}%`
+  const formatSeconds = (value?: number) => `${(value || 0).toFixed(1)}s`
 
   return (
     <div className='flex flex-wrap items-center gap-2'>
@@ -138,6 +140,13 @@ export function CommonLogsStats() {
         label={t('Avg Cache Hit Rate')}
         value={formatPercent(stats?.avg_cache_hit_rate)}
         accent='bg-amber-500/70'
+      />
+      <StatBadge
+        label={t('Avg Total/FRT')}
+        value={`${formatSeconds(stats?.avg_response_time)}/${formatSeconds(
+          stats?.avg_frt
+        )}`}
+        accent='bg-cyan-500/70'
       />
     </div>
   )

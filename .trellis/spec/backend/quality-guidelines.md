@@ -358,6 +358,9 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 - Runtime settings:
   - `ip_blacklist_setting.enabled`
   - `ip_blacklist_setting.list`
+  - `ip_blacklist_setting.auto_ban_enabled`
+  - `ip_blacklist_setting.auto_ban_rpm`
+  - `ip_blacklist_setting.auto_ban_whitelist`
 - Shared parser: `common.SplitIPList(raw string) []string`
 - Matcher: `common.IsIpInCIDRList(ip net.IP, cidrList []string) bool`
 
@@ -367,26 +370,36 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 - The list supports single IPs and CIDR ranges.
 - Operators may separate entries with newlines, commas, or semicolons; parsing must trim whitespace and drop duplicates.
 - Matched requests return HTTP 403 and abort the Gin chain before downstream middleware runs.
+- Automatic ban is in-memory per process for request counting, uses the canonical `c.ClientIP()` candidate, and persists triggered IPs by updating `ip_blacklist_setting.list`.
+- `auto_ban_whitelist` only exempts IPs from automatic ban; it must not bypass explicit manual blacklist entries.
 
 #### 4. Validation & Error Matrix
 
 - `enabled=false` -> no blocking.
+- `enabled=false`, `auto_ban_enabled=true`, and an IP is already in `list` -> block the IP so automatically banned entries remain effective.
 - `enabled=true`, `list=""` -> no blocking.
 - `enabled=true`, malformed client IP -> HTTP 403 `无法解析客户端 IP 地址`.
 - `enabled=true`, client IP in list -> HTTP 403 `当前 IP 已被禁止访问`.
+- `auto_ban_enabled=true`, `auto_ban_rpm<=0` -> no automatic ban.
+- `auto_ban_enabled=true`, request count for the canonical client IP reaches `auto_ban_rpm` in the current minute -> append the IP to `list`, persist `ip_blacklist_setting.list`, return HTTP 403 `当前 IP 请求频率过高，已被自动封禁`.
+- Client IP in `auto_ban_whitelist` -> skip automatic ban counting for that IP, but still enforce the manual blacklist.
 - Invalid entries in the blacklist are ignored by `common.IsIpInCIDRList`; do not fail startup or option loading.
 
 #### 5. Good/Base/Bad Cases
 
 - Good: `203.0.113.8` with `203.0.113.0/24` is blocked.
 - Good: `198.51.100.10` with `203.0.113.0/24` is allowed.
+- Good: `auto_ban_rpm=60` adds `203.0.113.9` to the persisted blacklist when the same canonical client IP reaches 60 requests in one minute.
+- Good: `203.0.113.10` in `auto_ban_whitelist` is not auto-banned even when it exceeds the RPM threshold.
 - Base: disabled blacklist with any list is allowed.
 - Bad: adding the middleware only to `/api`, leaving `/v1` relay or frontend routes unprotected.
+- Bad: auto-banning every `X-Forwarded-For` value; spoofed headers could ban unrelated victims. Use the canonical client IP candidate for automatic counting.
 
 #### 6. Tests Required
 
 - Unit-test separator parsing and duplicate removal.
 - Middleware-test both blocked and allowed request paths.
+- Middleware-test automatic ban threshold behavior and whitelist exemption.
 
 #### 7. Wrong vs Correct
 
@@ -403,6 +416,24 @@ func SetRouter(router *gin.Engine, assets ThemeAssets) {
     router.Use(middleware.IPBlacklist())
     // register API, relay, dashboard, and web routes after this
 }
+```
+
+Wrong:
+
+```go
+// Do not auto-ban every forwarded header value; clients can spoof them.
+for _, ip := range strings.Split(c.GetHeader("X-Forwarded-For"), ",") {
+    countAndMaybeBan(ip)
+}
+```
+
+Correct:
+
+```go
+// Use the canonical client IP candidate for automatic ban counting; keep
+// forwarded-header candidates only for explicit blacklist matching.
+clientIP := blacklistClientIPCandidates(c)[0]
+countAndMaybeBan(clientIP.ip.String())
 ```
 
 ### ChatGPT Web image requests and playground async image tasks

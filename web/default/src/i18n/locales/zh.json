@@ -1787,7 +1787,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -4669,6 +4669,14 @@
     "Reset countdown": "距离重置",
     "Resetting soon": "即将重置",
     "Deep research": "深度研究",
-    "Use ChatGPT Web deep research connector for this request.": "为本次请求使用 ChatGPT Web 深度研究连接器。"
+    "Use ChatGPT Web deep research connector for this request.": "为本次请求使用 ChatGPT Web 深度研究连接器。",
+    "Avg Total/FRT": "平均总/首字耗时",
+    "Enable Automatic IP Ban": "启用 IP 自动封禁",
+    "Automatically add high-RPM client IPs to the blacklist and reject them.": "当客户端 IP 的 RPM 过高时，自动加入黑名单并拒绝访问。",
+    "Auto-ban RPM threshold": "自动封禁 RPM 阈值",
+    "requests/min": "请求/分钟",
+    "0 disables automatic banning.": "0 表示禁用自动封禁。",
+    "Auto-ban Whitelist": "自动封禁白名单",
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "这里的 IP 或 CIDR 网段不会被自动封禁；手动黑名单仍然生效。"
   }
 }

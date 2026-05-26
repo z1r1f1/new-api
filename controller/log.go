@@ -138,6 +138,8 @@ func GetLogsStat(c *gin.Context) {
 			"prompt_tokens":      stat.PromptTokens,
 			"completion_tokens":  stat.CompletionTokens,
 			"avg_cache_hit_rate": stat.AvgCacheHitRate,
+			"avg_response_time":  stat.AvgResponseTime,
+			"avg_frt":            stat.AvgFirstResponseTime,
 		},
 	})
 	return
@@ -174,6 +176,8 @@ func GetLogsSelfStat(c *gin.Context) {
 			"prompt_tokens":      quotaNum.PromptTokens,
 			"completion_tokens":  quotaNum.CompletionTokens,
 			"avg_cache_hit_rate": quotaNum.AvgCacheHitRate,
+			"avg_response_time":  quotaNum.AvgResponseTime,
+			"avg_frt":            quotaNum.AvgFirstResponseTime,
 			//"token": tokenNum,
 		},
 	})

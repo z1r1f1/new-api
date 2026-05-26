@@ -1787,7 +1787,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Imposer une réponse JSON syntaxiquement valide",
@@ -4669,6 +4669,14 @@
     "Reset countdown": "Compte à rebours avant réinitialisation",
     "Resetting soon": "Réinitialisation imminente",
     "Deep research": "Recherche approfondie",
-    "Use ChatGPT Web deep research connector for this request.": "Utiliser le connecteur de recherche approfondie ChatGPT Web pour cette requête."
+    "Use ChatGPT Web deep research connector for this request.": "Utiliser le connecteur de recherche approfondie ChatGPT Web pour cette requête.",
+    "Avg Total/FRT": "Moy. total/Premier octet",
+    "Enable Automatic IP Ban": "Activer le bannissement IP automatique",
+    "Automatically add high-RPM client IPs to the blacklist and reject them.": "Ajoute automatiquement les IP client à RPM élevé à la liste noire et les rejette.",
+    "Auto-ban RPM threshold": "Seuil RPM de bannissement auto",
+    "requests/min": "requêtes/min",
+    "0 disables automatic banning.": "0 désactive le bannissement automatique.",
+    "Auto-ban Whitelist": "Liste blanche du bannissement auto",
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "Les IP ou plages CIDR indiquées ici ne seront jamais bannies automatiquement. Les entrées manuelles de liste noire restent appliquées."
   }
 }

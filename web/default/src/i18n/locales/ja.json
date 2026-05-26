@@ -1787,7 +1787,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -4669,6 +4669,14 @@
     "Reset countdown": "リセットまで",
     "Resetting soon": "まもなくリセット",
     "Deep research": "ディープリサーチ",
-    "Use ChatGPT Web deep research connector for this request.": "このリクエストで ChatGPT Web のディープリサーチコネクターを使用します。"
+    "Use ChatGPT Web deep research connector for this request.": "このリクエストで ChatGPT Web のディープリサーチコネクターを使用します。",
+    "Avg Total/FRT": "平均合計/初回応答時間",
+    "Enable Automatic IP Ban": "IP 自動BANを有効化",
+    "Automatically add high-RPM client IPs to the blacklist and reject them.": "RPM が高いクライアント IP を自動的にブラックリストへ追加し、拒否します。",
+    "Auto-ban RPM threshold": "自動BAN RPMしきい値",
+    "requests/min": "リクエスト/分",
+    "0 disables automatic banning.": "0 は自動BANを無効にします。",
+    "Auto-ban Whitelist": "自動BANホワイトリスト",
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "ここに指定した IP または CIDR 範囲は自動BANされません。手動ブラックリストの項目は引き続き適用されます。"
   }
 }

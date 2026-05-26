@@ -66,6 +66,12 @@ const SECURITY_SECTIONS = [
           'ip_blacklist_setting.enabled':
             settings['ip_blacklist_setting.enabled'],
           'ip_blacklist_setting.list': settings['ip_blacklist_setting.list'],
+          'ip_blacklist_setting.auto_ban_enabled':
+            settings['ip_blacklist_setting.auto_ban_enabled'],
+          'ip_blacklist_setting.auto_ban_rpm':
+            settings['ip_blacklist_setting.auto_ban_rpm'],
+          'ip_blacklist_setting.auto_ban_whitelist':
+            settings['ip_blacklist_setting.auto_ban_whitelist'],
         }}
       />
     ),

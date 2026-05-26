@@ -1787,7 +1787,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Принудительно возвращать синтаксически корректный JSON",
@@ -4669,6 +4669,14 @@
     "Reset countdown": "До сброса",
     "Resetting soon": "Скоро сброс",
     "Deep research": "Глубокое исследование",
-    "Use ChatGPT Web deep research connector for this request.": "Использовать коннектор глубокого исследования ChatGPT Web для этого запроса."
+    "Use ChatGPT Web deep research connector for this request.": "Использовать коннектор глубокого исследования ChatGPT Web для этого запроса.",
+    "Avg Total/FRT": "Средн. всего/первый байт",
+    "Enable Automatic IP Ban": "Включить автоблокировку IP",
+    "Automatically add high-RPM client IPs to the blacklist and reject them.": "Автоматически добавлять клиентские IP с высоким RPM в черный список и отклонять их.",
+    "Auto-ban RPM threshold": "Порог RPM для автоблокировки",
+    "requests/min": "запросов/мин",
+    "0 disables automatic banning.": "0 отключает автоматическую блокировку.",
+    "Auto-ban Whitelist": "Белый список автоблокировки",
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "IP или CIDR-диапазоны здесь никогда не будут заблокированы автоматически. Ручной черный список продолжает действовать."
   }
 }

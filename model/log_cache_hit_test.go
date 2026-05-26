@@ -69,6 +69,8 @@ func TestSumUsedQuotaRatesFollowSelectedTimeRange(t *testing.T) {
 			Quota:            10,
 			PromptTokens:     30,
 			CompletionTokens: 30,
+			UseTime:          2,
+			Other:            common.MapToJsonStr(map[string]interface{}{"frt": 1000}),
 		},
 		{
 			CreatedAt:        1120,
@@ -76,6 +78,8 @@ func TestSumUsedQuotaRatesFollowSelectedTimeRange(t *testing.T) {
 			Quota:            20,
 			PromptTokens:     80,
 			CompletionTokens: 40,
+			UseTime:          4,
+			Other:            common.MapToJsonStr(map[string]interface{}{"frt": 2000}),
 		},
 		{
 			CreatedAt:        1180,
@@ -83,6 +87,7 @@ func TestSumUsedQuotaRatesFollowSelectedTimeRange(t *testing.T) {
 			Quota:            30,
 			PromptTokens:     300,
 			CompletionTokens: 300,
+			UseTime:          8,
 		},
 	}).Error)
 
@@ -108,4 +113,6 @@ func TestSumUsedQuotaRatesFollowSelectedTimeRange(t *testing.T) {
 	require.NoError(t, err)
 	require.InDelta(t, 0.75, wideRange.Rpm, 0.000001)
 	require.InDelta(t, 195, wideRange.Tpm, 0.000001)
+	require.InDelta(t, 14.0/3.0, wideRange.AvgResponseTime, 0.000001)
+	require.InDelta(t, 1.5, wideRange.AvgFirstResponseTime, 0.000001)
 }

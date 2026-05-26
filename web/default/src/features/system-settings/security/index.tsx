@@ -42,6 +42,9 @@ const defaultSecuritySettings: SecuritySettings = {
   'fetch_setting.apply_ip_filter_for_domain': false,
   'ip_blacklist_setting.enabled': false,
   'ip_blacklist_setting.list': '',
+  'ip_blacklist_setting.auto_ban_enabled': false,
+  'ip_blacklist_setting.auto_ban_rpm': 0,
+  'ip_blacklist_setting.auto_ban_whitelist': '',
 }
 
 export function SecuritySettings() {

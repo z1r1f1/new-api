@@ -36,6 +36,8 @@ export const DEFAULT_LOG_STATS: LogStatistics = {
   prompt_tokens: 0,
   completion_tokens: 0,
   avg_cache_hit_rate: 0,
+  avg_response_time: 0,
+  avg_frt: 0,
 }
 
 /**

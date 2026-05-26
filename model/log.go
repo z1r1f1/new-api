@@ -500,12 +500,14 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 }
 
 type Stat struct {
-	Quota            int     `json:"quota"`
-	Rpm              float64 `json:"rpm"`
-	Tpm              float64 `json:"tpm"`
-	PromptTokens     int64   `json:"prompt_tokens"`
-	CompletionTokens int64   `json:"completion_tokens"`
-	AvgCacheHitRate  float64 `json:"avg_cache_hit_rate"`
+	Quota                int     `json:"quota"`
+	Rpm                  float64 `json:"rpm"`
+	Tpm                  float64 `json:"tpm"`
+	PromptTokens         int64   `json:"prompt_tokens"`
+	CompletionTokens     int64   `json:"completion_tokens"`
+	AvgCacheHitRate      float64 `json:"avg_cache_hit_rate"`
+	AvgResponseTime      float64 `json:"avg_response_time"`
+	AvgFirstResponseTime float64 `json:"avg_first_response_time"`
 }
 
 func applyCommonLogStatFilters(tx *gorm.DB, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, channelName string, group string, ip string, requestId string, includeTimeRange bool) (*gorm.DB, error) {
@@ -597,6 +599,12 @@ type logRateStatRow struct {
 	TokenCount   int64
 }
 
+type logTimingStatRow struct {
+	Id      int
+	UseTime int
+	Other   string
+}
+
 func commonLogRateWindow(startTimestamp int64, endTimestamp int64) (int64, int64, float64) {
 	if startTimestamp != 0 || endTimestamp != 0 {
 		start := startTimestamp
@@ -652,6 +660,47 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	}
 	stat.Rpm = float64(rateStat.RequestCount) / rateMinutes
 	stat.Tpm = float64(rateStat.TokenCount) / rateMinutes
+
+	timingTx := LOG_DB.Model(&Log{}).Select("id, use_time, other")
+	timingTx, err = applyCommonLogStatFilters(timingTx, logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId, true)
+	if err != nil {
+		return stat, err
+	}
+	var totalUseTime float64
+	var useTimeCount float64
+	var totalFirstResponseTimeMs float64
+	var firstResponseTimeCount float64
+	timingRows := make([]logTimingStatRow, 0, 1000)
+	if err := timingTx.FindInBatches(&timingRows, 1000, func(tx *gorm.DB, batch int) error {
+		for _, row := range timingRows {
+			if row.UseTime > 0 {
+				totalUseTime += float64(row.UseTime)
+				useTimeCount++
+			}
+			if strings.TrimSpace(row.Other) == "" {
+				continue
+			}
+			other := make(map[string]interface{})
+			if err := common.UnmarshalJsonStr(row.Other, &other); err != nil {
+				continue
+			}
+			frt := logOtherNumber(other, "frt")
+			if frt > 0 {
+				totalFirstResponseTimeMs += frt
+				firstResponseTimeCount++
+			}
+		}
+		return nil
+	}).Error; err != nil {
+		common.SysError("failed to query timing stat: " + err.Error())
+		return stat, errors.New("查询统计数据失败")
+	}
+	if useTimeCount > 0 {
+		stat.AvgResponseTime = totalUseTime / useTimeCount
+	}
+	if firstResponseTimeCount > 0 {
+		stat.AvgFirstResponseTime = totalFirstResponseTimeMs / firstResponseTimeCount / 1000
+	}
 
 	if logType == LogTypeUnknown || logType == LogTypeConsume {
 		cacheTx := LOG_DB.Model(&Log{}).Select("id, prompt_tokens, completion_tokens, other")

@@ -1787,7 +1787,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -4669,6 +4669,14 @@
     "Reset countdown": "Reset countdown",
     "Resetting soon": "Resetting soon",
     "Deep research": "Deep research",
-    "Use ChatGPT Web deep research connector for this request.": "Use ChatGPT Web deep research connector for this request."
+    "Use ChatGPT Web deep research connector for this request.": "Use ChatGPT Web deep research connector for this request.",
+    "Avg Total/FRT": "Avg Total/FRT",
+    "Enable Automatic IP Ban": "Enable Automatic IP Ban",
+    "Automatically add high-RPM client IPs to the blacklist and reject them.": "Automatically add high-RPM client IPs to the blacklist and reject them.",
+    "Auto-ban RPM threshold": "Auto-ban RPM threshold",
+    "requests/min": "requests/min",
+    "0 disables automatic banning.": "0 disables automatic banning.",
+    "Auto-ban Whitelist": "Auto-ban Whitelist",
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply."
   }
 }

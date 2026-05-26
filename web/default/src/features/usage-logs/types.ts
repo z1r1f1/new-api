@@ -213,6 +213,8 @@ export interface LogStatistics {
   prompt_tokens: number
   completion_tokens: number
   avg_cache_hit_rate: number
+  avg_response_time: number
+  avg_frt: number
 }
 
 // ============================================================================
