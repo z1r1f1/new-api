@@ -501,8 +501,8 @@ func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int
 
 type Stat struct {
 	Quota            int     `json:"quota"`
-	Rpm              int     `json:"rpm"`
-	Tpm              int     `json:"tpm"`
+	Rpm              float64 `json:"rpm"`
+	Tpm              float64 `json:"tpm"`
 	PromptTokens     int64   `json:"prompt_tokens"`
 	CompletionTokens int64   `json:"completion_tokens"`
 	AvgCacheHitRate  float64 `json:"avg_cache_hit_rate"`
@@ -592,6 +592,36 @@ func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominato
 	return cacheReadTokens, float64(row.PromptTokens)
 }
 
+type logRateStatRow struct {
+	RequestCount int64
+	TokenCount   int64
+}
+
+func commonLogRateWindow(startTimestamp int64, endTimestamp int64) (int64, int64, float64) {
+	if startTimestamp != 0 || endTimestamp != 0 {
+		start := startTimestamp
+		end := endTimestamp
+		if start == 0 {
+			start = end
+		}
+		if end == 0 {
+			end = start
+		}
+		if end < start {
+			start, end = end, start
+		}
+		durationMinutes := float64(end-start) / 60
+		if durationMinutes < 1 {
+			durationMinutes = 1
+		}
+		return start, end, durationMinutes
+	}
+
+	end := time.Now().Unix()
+	start := end - 59
+	return start, end, 1
+}
+
 func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, channelName string, group string, ip string, requestId string) (stat Stat, err error) {
 	tx := LOG_DB.Table("logs").Select("COALESCE(sum(logs.quota), 0) quota, COALESCE(sum(logs.prompt_tokens), 0) prompt_tokens, COALESCE(sum(logs.completion_tokens), 0) completion_tokens")
 	tx, err = applyCommonLogStatFilters(tx, logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId, true)
@@ -599,25 +629,29 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		return stat, err
 	}
 
-	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(logs.prompt_tokens), 0) + COALESCE(sum(logs.completion_tokens), 0) tpm")
+	// 为 rpm 和 tpm 创建单独的查询。显式时间范围存在时，统计该范围的
+	// 平均每分钟请求/Token；未传时间范围的旧调用保持最近 60 秒语义。
+	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) request_count, COALESCE(sum(logs.prompt_tokens), 0) + COALESCE(sum(logs.completion_tokens), 0) token_count")
 	rpmTpmQuery, err = applyCommonLogStatFilters(rpmTpmQuery, logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId, false)
 	if err != nil {
 		return stat, err
 	}
 
-	// 只统计最近60秒的rpm和tpm
-	rpmTpmQuery = rpmTpmQuery.Where("logs.created_at >= ?", time.Now().Add(-60*time.Second).Unix())
+	rateStart, rateEnd, rateMinutes := commonLogRateWindow(startTimestamp, endTimestamp)
+	rpmTpmQuery = rpmTpmQuery.Where("logs.created_at >= ? AND logs.created_at <= ?", rateStart, rateEnd)
 
 	// 执行查询
 	if err := tx.Scan(&stat).Error; err != nil {
 		common.SysError("failed to query log stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
-	if err := rpmTpmQuery.Scan(&stat).Error; err != nil {
+	var rateStat logRateStatRow
+	if err := rpmTpmQuery.Scan(&rateStat).Error; err != nil {
 		common.SysError("failed to query rpm/tpm stat: " + err.Error())
 		return stat, errors.New("查询统计数据失败")
 	}
+	stat.Rpm = float64(rateStat.RequestCount) / rateMinutes
+	stat.Tpm = float64(rateStat.TokenCount) / rateMinutes
 
 	if logType == LogTypeUnknown || logType == LogTypeConsume {
 		cacheTx := LOG_DB.Model(&Log{}).Select("id, prompt_tokens, completion_tokens, other")

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/stretchr/testify/require"
 )
 
 func TestLogTokenStatRowIncludesIDForFindInBatchesCursor(t *testing.T) {
@@ -56,4 +57,55 @@ func TestCacheHitRatePartsPrefersExplicitInputTokensTotal(t *testing.T) {
 	if denominator != 180 {
 		t.Fatalf("denominator = %v, want explicit input_tokens_total", denominator)
 	}
+}
+
+func TestSumUsedQuotaRatesFollowSelectedTimeRange(t *testing.T) {
+	truncateTables(t)
+
+	require.NoError(t, LOG_DB.Create([]Log{
+		{
+			CreatedAt:        1000,
+			Type:             LogTypeConsume,
+			Quota:            10,
+			PromptTokens:     30,
+			CompletionTokens: 30,
+		},
+		{
+			CreatedAt:        1120,
+			Type:             LogTypeConsume,
+			Quota:            20,
+			PromptTokens:     80,
+			CompletionTokens: 40,
+		},
+		{
+			CreatedAt:        1180,
+			Type:             LogTypeConsume,
+			Quota:            30,
+			PromptTokens:     300,
+			CompletionTokens: 300,
+		},
+	}).Error)
+
+	firstRange, err := SumUsedQuota(LogTypeConsume, 1000, 1120, "", "", "", 0, "", "", "", "")
+	require.NoError(t, err)
+	if firstRange.Rpm != 1 {
+		t.Fatalf("firstRange.Rpm = %v, want 1", firstRange.Rpm)
+	}
+	if firstRange.Tpm != 90 {
+		t.Fatalf("firstRange.Tpm = %v, want 90", firstRange.Tpm)
+	}
+
+	secondRange, err := SumUsedQuota(LogTypeConsume, 1180, 1180, "", "", "", 0, "", "", "", "")
+	require.NoError(t, err)
+	if secondRange.Rpm != 1 {
+		t.Fatalf("secondRange.Rpm = %v, want 1", secondRange.Rpm)
+	}
+	if secondRange.Tpm != 600 {
+		t.Fatalf("secondRange.Tpm = %v, want 600", secondRange.Tpm)
+	}
+
+	wideRange, err := SumUsedQuota(LogTypeConsume, 1000, 1240, "", "", "", 0, "", "", "", "")
+	require.NoError(t, err)
+	require.InDelta(t, 0.75, wideRange.Rpm, 0.000001)
+	require.InDelta(t, 195, wideRange.Tpm, 0.000001)
 }

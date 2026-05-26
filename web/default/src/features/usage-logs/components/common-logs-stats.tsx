@@ -89,6 +89,16 @@ export function CommonLogsStats() {
 
   const hiddenValue = '••••'
   const formatCount = (value?: number) => (value || 0).toLocaleString()
+  const formatRate = (value?: number) => {
+    const normalized = value || 0
+    if (normalized === 0) return '0'
+
+    if (Math.abs(normalized) < 0.01) {
+      return normalized.toLocaleString(undefined, { maximumSignificantDigits: 2 })
+    }
+
+    return normalized.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  }
   const formatPercent = (value?: number) => `${(value || 0).toFixed(1)}%`
 
   return (
@@ -102,12 +112,12 @@ export function CommonLogsStats() {
       />
       <StatBadge
         label={t('RPM')}
-        value={stats?.rpm || 0}
+        value={formatRate(stats?.rpm)}
         accent='bg-rose-500/65'
       />
       <StatBadge
         label={t('TPM')}
-        value={stats?.tpm || 0}
+        value={formatRate(stats?.tpm)}
         accent='bg-slate-400/70'
       />
       <StatBadge

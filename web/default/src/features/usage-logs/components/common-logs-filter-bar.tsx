@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQueryClient, useIsFetching } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
@@ -179,8 +179,20 @@ export function CommonLogsFilterBar<TData>(
     !!filters.requestId ||
     !!filters.upstreamRequestId
 
+  const hasTimeFilter = useMemo(() => {
+    const { start, end } = getDefaultTimeRange()
+    return (
+      filters.startTime?.getTime() !== start.getTime() ||
+      filters.endTime?.getTime() !== end.getTime()
+    )
+  }, [filters.startTime, filters.endTime])
+
   const hasAdditionalFilters =
-    !!filters.model || !!filters.group || !!logType || hasExpandedFilters
+    hasTimeFilter ||
+    !!filters.model ||
+    !!filters.group ||
+    !!logType ||
+    hasExpandedFilters
 
   const inputClass = 'w-full sm:w-[140px] lg:w-[160px]'
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
