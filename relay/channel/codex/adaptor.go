@@ -98,25 +98,24 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 		request.Instructions = json.RawMessage(`""`)
 	}
 	request.Tools = openaicompat.NormalizeResponsesToolSchemas(request.Tools)
+	// Codex backend is stricter than the public Responses API and rejects
+	// stream_options. Chat Completions compatibility may carry
+	// stream_options.include_usage into Responses; do not forward it upstream.
+	request.StreamOptions = nil
 
 	if isCompact {
 		return request, nil
 	}
 
-	// Codex backend only accepts streaming responses. Treat an omitted stream
-	// field as stream=true so Claude/OpenAI-compatible clients that rely on
-	// API defaults do not get an upstream 400. Explicit stream=false is still
-	// preserved as client intent.
-	if request.Stream == nil {
-		request.Stream = common.GetPointer(true)
+	// Codex backend only accepts streaming responses. Force stream=true for
+	// normal Responses requests, including clients that explicitly send
+	// stream=false, so compatible clients do not get an upstream 400.
+	request.Stream = common.GetPointer(true)
+	if info != nil {
+		info.IsStream = true
 	}
-	if request.Stream != nil && *request.Stream {
-		if info != nil {
-			info.IsStream = true
-		}
-		if c != nil {
-			c.Set(string(constant.ContextKeyIsStream), true)
-		}
+	if c != nil {
+		c.Set(string(constant.ContextKeyIsStream), true)
 	}
 
 	// codex: store must be false

@@ -177,6 +177,24 @@ func normalizeResponsesFunctionToolMapForUpstream(tool map[string]any) map[strin
 	if toolType, _ := tool["type"].(string); toolType != "function" {
 		return tool
 	}
+	if function, ok := tool["function"].(map[string]any); ok {
+		if name, _ := tool["name"].(string); strings.TrimSpace(name) == "" {
+			if functionName, _ := function["name"].(string); strings.TrimSpace(functionName) != "" {
+				tool["name"] = strings.TrimSpace(functionName)
+			}
+		}
+		if description, _ := tool["description"].(string); strings.TrimSpace(description) == "" {
+			if functionDescription, _ := function["description"].(string); strings.TrimSpace(functionDescription) != "" {
+				tool["description"] = functionDescription
+			}
+		}
+		if _, hasParameters := tool["parameters"]; !hasParameters {
+			if parameters, exists := function["parameters"]; exists {
+				tool["parameters"] = parameters
+			}
+		}
+		delete(tool, "function")
+	}
 	tool["parameters"] = closeFunctionToolParametersForResponses(tool["parameters"])
 	if name, _ := tool["name"].(string); strings.EqualFold(strings.TrimSpace(name), "Read") {
 		tool["parameters"] = removeReadPagesParameterFromSchema(tool["parameters"])

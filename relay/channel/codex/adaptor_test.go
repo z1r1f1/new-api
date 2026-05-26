@@ -42,24 +42,52 @@ func TestConvertOpenAIResponsesRequestDefaultsStreamForCodex(t *testing.T) {
 	}
 }
 
-func TestConvertOpenAIResponsesRequestPreservesExplicitFalseStreamForCodex(t *testing.T) {
-	stream := false
+func TestConvertOpenAIResponsesRequestDropsUnsupportedStreamOptionsForCodex(t *testing.T) {
+	stream := true
 	info := &relaycommon.RelayInfo{
 		RelayMode:   relayconstant.RelayModeResponses,
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
 
-	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{Model: "gpt-5.5", Stream: &stream})
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model:         "gpt-5.5",
+		Stream:        &stream,
+		StreamOptions: &dto.StreamOptions{IncludeUsage: true},
+	})
 	if err != nil {
 		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
 	}
 
 	req := converted.(dto.OpenAIResponsesRequest)
-	if req.Stream == nil || *req.Stream {
-		t.Fatalf("expected explicit stream=false to be preserved, got %#v", req.Stream)
+	if req.StreamOptions != nil {
+		t.Fatalf("expected codex request to drop unsupported stream_options, got %#v", req.StreamOptions)
 	}
-	if info.IsStream {
-		t.Fatal("expected explicit stream=false not to mark relay info as streaming")
+}
+
+func TestConvertOpenAIResponsesRequestForcesExplicitFalseStreamForCodex(t *testing.T) {
+	stream := false
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{Model: "gpt-5.5", Stream: &stream})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+
+	req := converted.(dto.OpenAIResponsesRequest)
+	if req.Stream == nil || !*req.Stream {
+		t.Fatalf("expected explicit stream=false to be forced to true for codex, got %#v", req.Stream)
+	}
+	if !info.IsStream {
+		t.Fatal("expected forced stream=true to mark relay info as streaming")
+	}
+	if got, exists := c.Get(string(constant.ContextKeyIsStream)); !exists || got != true {
+		t.Fatalf("expected context stream flag true, got %v exists=%v", got, exists)
 	}
 }
 

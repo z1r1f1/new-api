@@ -732,6 +732,7 @@ if fast, ok := extractFast(body); ok {
 #### 3. Contracts
 
 - Claude `tools[].input_schema` must be carried as OpenAI chat `function.parameters`.
+- Native Responses requests may arrive with Chat Completions-style nested function tools (`{"type":"function","function":{"name":...,"parameters":...}}`). Normalize these to Responses-style flat tools (`{"type":"function","name":...,"parameters":...}`) before forwarding to OpenAI/Codex.
 - Before marshalling function tools into Responses `tools`, parameter schemas must be normalized with project JSON wrappers (`common.Marshal` / `common.Unmarshal`).
 - `nil`, non-object, or malformed function parameter schemas must become a closed empty object schema: `{"type":"object","properties":{},"additionalProperties":false}`.
 - Object schemas with `properties` and no explicit `additionalProperties` must gain `additionalProperties:false` recursively, including nested `properties`, `items`, `anyOf`, `oneOf`, and `allOf`.
@@ -748,11 +749,13 @@ if fast, ok := extractFast(body); ok {
 - Nested object schema has `properties` and lacks `additionalProperties` -> add `additionalProperties:false` recursively.
 - `required == nil` or non-array -> remove it.
 - Function tool name is `Read` and schema has `properties.pages` -> remove `pages` from both `properties` and `required`.
+- Function tool has nested `function.name` but no top-level `name` -> copy the nested value to top-level and remove the nested `function` object.
 - Existing explicit `additionalProperties` -> preserve the caller-provided value.
 
 #### 5. Good/Base/Bad Cases
 
 - Good: Claude Code `Read` schema with `file_path`, optional `offset`, and optional `limit` reaches Responses with `additionalProperties:false`, without `required:null`, and without the PDF-only `pages` field.
+- Good: native `/v1/responses` tools sent in Chat Completions nested-function shape are flattened before Codex/OpenAI forwarding, avoiding upstream `tools[0].name` missing errors.
 - Base: a valid chat function schema with an existing `additionalProperties:false` remains valid and stable.
 - Bad: forwarding `required:null`, scalar `required`, open object schemas, or `Read.pages`; upstream/model may emit invalid system-tool arguments such as empty PDF `pages` or schema-external page/line parameters.
 - Bad: blindly marking every property as required to satisfy strict schema mode; this can break optional local tool inputs.
@@ -762,6 +765,7 @@ if fast, ok := extractFast(body); ok {
 - `service/openaicompat`: regression test that chat function tool parameters gain `additionalProperties:false`.
 - `service/openaicompat`: regression test that nil values and invalid `required` values are stripped recursively.
 - `service/openaicompat`: regression test that non-object function parameters default to a closed empty object schema.
+- `service/openaicompat`: regression test that Chat-style nested function tools are flattened to Responses-style function tools.
 - `service`: end-to-end conversion test from `ClaudeToOpenAIRequest` through `ChatCompletionsRequestToResponsesRequest` asserting the final Responses tools are normalized.
 - `relay/channel/codex`: regression test that native `/v1/responses` `Read` tools remove `pages` before the upstream Codex request is sent.
 
@@ -936,34 +940,41 @@ httpRouter.POST("/message", func(c *gin.Context) {
 
 - Adaptor hook: `relay/channel/codex.Adaptor.ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error)`.
 - Request field: `dto.OpenAIResponsesRequest.Stream *bool \`json:"stream,omitempty"\``.
+- Unsupported upstream field: `dto.OpenAIResponsesRequest.StreamOptions *dto.StreamOptions \`json:"stream_options,omitempty"\``.
 - Runtime stream flag: `relaycommon.RelayInfo.IsStream` plus Gin context key `constant.ContextKeyIsStream`.
 
 #### 3. Contracts
 
-- For Codex normal Responses requests (`RelayModeResponses`), an omitted `stream` field must be normalized to `stream:true` before sending to upstream.
+- For Codex normal Responses requests (`RelayModeResponses`), `stream` must be normalized to `stream:true` before sending to upstream, even when a compatible client explicitly sends `stream:false`.
+- Codex backend rejects `stream_options`; the adaptor must drop `StreamOptions` before forwarding both native Responses requests and Chat Completions compatibility requests that carried `stream_options.include_usage`.
 - When the adaptor normalizes or receives `stream:true`, it must also mark `RelayInfo.IsStream=true` and update `ContextKeyIsStream`, so response handling, stream status tracking, and consume logs all use streaming semantics.
 - `RelayModeResponsesCompact` must not get this default; compact requests keep their own endpoint semantics.
-- Explicit `stream:false` remains explicit client intent and must not be silently reinterpreted as an omitted value.
+- `stream:false` is not forwardable to Codex normal Responses because the upstream rejects it; compact mode keeps its own endpoint semantics.
 
 #### 4. Validation & Error Matrix
 
 - `RelayModeResponses`, `stream` omitted -> upstream body includes `"stream":true`; downstream handled as stream.
 - `RelayModeResponses`, `stream:true` -> preserve true and downstream handled as stream.
-- `RelayModeResponses`, `stream:false` -> preserve false; upstream may reject according to Codex backend rules.
+- `RelayModeResponses`, `stream:false` -> upstream body is rewritten to `"stream":true`; downstream handled as stream.
 - `RelayModeResponsesCompact`, `stream` omitted -> leave omitted.
+- Any Codex Responses request with `stream_options` -> upstream body omits `stream_options`.
 
 #### 5. Good/Base/Bad Cases
 
 - Good: Claude-compatible `/v1/messages` request without `stream` is converted through OpenAI Responses and Codex adaptor adds `stream:true` before upstream.
 - Good: OpenAI-compatible `/v1/responses` request without `stream` on Codex does not fail with upstream `stream must set to be true`.
+- Good: OpenAI-compatible `/v1/responses` request with explicit `stream:false` on Codex does not fail with upstream `stream must set to be true`; the gateway treats it as Codex-required streaming.
+- Good: OpenAI-compatible `/v1/chat/completions` with `stream_options.include_usage` can route through Codex responses without upstream `Unsupported parameter: stream_options`.
 - Base: compact request to `/v1/responses/compact` remains non-stream-defaulted.
 - Bad: adding only `request.Stream=true` without syncing `RelayInfo.IsStream`; response code can parse the upstream SSE with a non-stream handler or log incorrect stream state.
 
 #### 6. Tests Required
 
 - `relay/channel/codex`: regression test that omitted `stream` defaults to true for `RelayModeResponses`.
+- `relay/channel/codex`: regression test that explicit `stream:false` is forced to true for `RelayModeResponses`.
 - `relay/channel/codex`: regression test that `RelayInfo.IsStream` and `ContextKeyIsStream` are true after the default is applied.
 - `relay/channel/codex`: regression test that compact requests do not receive the default.
+- `relay/channel/codex`: regression test that `StreamOptions` is dropped before forwarding to Codex.
 
 #### 7. Wrong vs Correct
 

@@ -213,3 +213,65 @@ func TestChatCompletionsRequestToResponsesRequestDefaultsInvalidFunctionToolPara
 		t.Fatalf("expected default object schema to reject extra parameters, got %#v", params["additionalProperties"])
 	}
 }
+
+func TestNormalizeResponsesToolSchemasFlattensChatStyleFunctionTool(t *testing.T) {
+	raw, _ := common.Marshal([]map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "Read",
+				"description": "Read local file",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"file_path": map[string]any{"type": "string"},
+						"pages": map[string]any{
+							"type":  "array",
+							"items": map[string]any{"type": "integer"},
+						},
+					},
+					"required": []any{"file_path", "pages"},
+				},
+			},
+		},
+	})
+
+	normalized := NormalizeResponsesToolSchemas(raw)
+
+	var tools []map[string]any
+	if err := common.Unmarshal(normalized, &tools); err != nil {
+		t.Fatalf("failed to decode normalized tools: %v", err)
+	}
+	if len(tools) != 1 {
+		t.Fatalf("expected one tool, got %d", len(tools))
+	}
+	tool := tools[0]
+	if tool["name"] != "Read" {
+		t.Fatalf("expected chat-style function.name to become top-level name, got %#v", tool["name"])
+	}
+	if tool["description"] != "Read local file" {
+		t.Fatalf("expected chat-style function.description to become top-level description, got %#v", tool["description"])
+	}
+	if _, exists := tool["function"]; exists {
+		t.Fatalf("expected nested function object to be removed, got %#v", tool["function"])
+	}
+	params, ok := tool["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected parameters object, got %#v", tool["parameters"])
+	}
+	properties, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties object, got %#v", params["properties"])
+	}
+	if _, exists := properties["pages"]; exists {
+		t.Fatalf("expected Read.pages to be removed from flattened schema, got %#v", properties["pages"])
+	}
+	for _, item := range params["required"].([]any) {
+		if item == "pages" {
+			t.Fatalf("expected Read.pages to be removed from required list, got %#v", params["required"])
+		}
+	}
+	if params["additionalProperties"] != false {
+		t.Fatalf("expected flattened tool schema to reject extra parameters, got %#v", params["additionalProperties"])
+	}
+}
