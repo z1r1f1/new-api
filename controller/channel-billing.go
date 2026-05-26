@@ -360,11 +360,13 @@ func updateChannelMoonshotBalance(channel *model.Channel) (float64, error) {
 }
 
 type chatGPTImageBalanceData struct {
-	ImageQuotaRemaining int      `json:"image_quota_remaining"`
-	ImageQuotaTotal     int      `json:"image_quota_total,omitempty"`
-	ImageQuotaResetAt   int64    `json:"image_quota_reset_at,omitempty"`
-	DefaultModelSlug    string   `json:"default_model_slug,omitempty"`
-	BlockedFeatures     []string `json:"blocked_features,omitempty"`
+	ImageQuotaRemaining         int      `json:"image_quota_remaining"`
+	ImageQuotaTotal             int      `json:"image_quota_total,omitempty"`
+	ImageQuotaResetAt           int64    `json:"image_quota_reset_at,omitempty"`
+	ImageQuotaResetAfterSeconds int64    `json:"image_quota_reset_after_seconds,omitempty"`
+	ImageQuotaWindow            string   `json:"image_quota_window,omitempty"`
+	DefaultModelSlug            string   `json:"default_model_slug,omitempty"`
+	BlockedFeatures             []string `json:"blocked_features,omitempty"`
 }
 
 func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPTImageBalanceData, error) {
@@ -411,10 +413,12 @@ func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPT
 	}
 
 	data := &chatGPTImageBalanceData{
-		ImageQuotaRemaining: info.ImageQuotaRemaining,
-		ImageQuotaResetAt:   info.ImageQuotaResetAt,
-		DefaultModelSlug:    info.DefaultModelSlug,
-		BlockedFeatures:     info.BlockedFeatures,
+		ImageQuotaRemaining:         info.ImageQuotaRemaining,
+		ImageQuotaResetAt:           info.ImageQuotaResetAt,
+		ImageQuotaResetAfterSeconds: info.ImageQuotaResetAfterSeconds,
+		ImageQuotaWindow:            info.ImageQuotaWindow,
+		DefaultModelSlug:            info.DefaultModelSlug,
+		BlockedFeatures:             info.BlockedFeatures,
 	}
 	if info.ImageQuotaTotal > 0 {
 		data.ImageQuotaTotal = info.ImageQuotaTotal

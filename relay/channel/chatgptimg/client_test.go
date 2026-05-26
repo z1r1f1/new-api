@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/QuantumNous/new-api/common"
 )
 
 func TestNoRelayRetryErrorIncludesHTTPStatusInMessage(t *testing.T) {
@@ -100,6 +102,253 @@ func TestRelayStatusErrorDoesNotSkipRelayRetry(t *testing.T) {
 	}
 	if got := retryControl.RelayStatusCode(); got != http.StatusTooManyRequests {
 		t.Fatalf("expected relay status 429, got %d", got)
+	}
+}
+
+func TestChatConversationPayloadIncludesWebModelAndThinkingEffort(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body failed: %v", err)
+		}
+		if err := common.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal request body failed: %v", err)
+		}
+		bodies = append(bodies, payload)
+
+		switch r.URL.Path {
+		case "/backend-api/f/conversation/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-test"}`))
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+	opt := ChatConvOpts{
+		Prompt:         "hi",
+		UpstreamModel:  "gpt-5-5-thinking",
+		ThinkingEffort: "standard",
+		ParentMsgID:    "client-created-root",
+		ChatToken:      "requirements-token",
+		SSETimeout:     time.Second,
+	}
+	if _, err := client.PrepareChatConversation(context.Background(), opt); err != nil {
+		t.Fatalf("PrepareChatConversation returned error: %v", err)
+	}
+	stream, err := client.StreamChatConversation(context.Background(), opt)
+	if err != nil {
+		t.Fatalf("StreamChatConversation returned error: %v", err)
+	}
+	for range stream {
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("expected prepare and conversation requests, got %d", len(bodies))
+	}
+	for index, payload := range bodies {
+		if got := payload["model"]; got != "gpt-5-5-thinking" {
+			t.Fatalf("payload %d sent unexpected model: %#v", index, got)
+		}
+		if got := payload["thinking_effort"]; got != "standard" {
+			t.Fatalf("payload %d sent unexpected thinking_effort: %#v", index, got)
+		}
+	}
+}
+
+func TestImageConversationPayloadUsesImageModelAndGenerationHints(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body failed: %v", err)
+		}
+		if err := common.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal request body failed: %v", err)
+		}
+		bodies = append(bodies, payload)
+
+		switch r.URL.Path {
+		case "/backend-api/f/conversation/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-test"}`))
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+	opt := ImageConvOpts{
+		Prompt:        "draw",
+		UpstreamModel: "gpt-image-2",
+		ParentMsgID:   "client-created-root",
+		ChatToken:     "requirements-token",
+		SSETimeout:    time.Second,
+	}
+	if _, err := client.PrepareFConversation(context.Background(), opt); err != nil {
+		t.Fatalf("PrepareFConversation returned error: %v", err)
+	}
+	stream, err := client.StreamFConversation(context.Background(), opt)
+	if err != nil {
+		t.Fatalf("StreamFConversation returned error: %v", err)
+	}
+	for range stream {
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("expected prepare and conversation requests, got %d", len(bodies))
+	}
+	if got := bodies[0]["model"]; got != "gpt-image-2" {
+		t.Fatalf("prepare sent unexpected model: %#v", got)
+	}
+	if got := bodies[1]["model"]; got != "gpt-image-2" {
+		t.Fatalf("conversation sent unexpected model: %#v", got)
+	}
+	if got := bodies[0]["client_prepare_state"]; got != "none" {
+		t.Fatalf("prepare sent unexpected client_prepare_state: %#v", got)
+	}
+	if got := bodies[1]["client_prepare_state"]; got != "success" {
+		t.Fatalf("conversation sent unexpected client_prepare_state: %#v", got)
+	}
+	if got := bodies[0]["thinking_effort"]; got != "standard" {
+		t.Fatalf("prepare sent unexpected thinking_effort: %#v", got)
+	}
+	if got := bodies[1]["thinking_effort"]; got != "standard" {
+		t.Fatalf("conversation sent unexpected thinking_effort: %#v", got)
+	}
+	if hints, ok := bodies[0]["system_hints"].([]any); !ok || len(hints) != 1 || hints[0] != "picture_v2" {
+		t.Fatalf("prepare sent unexpected system_hints: %#v", bodies[0]["system_hints"])
+	}
+	if hints, ok := bodies[1]["system_hints"].([]any); !ok || len(hints) != 0 {
+		t.Fatalf("conversation sent unexpected system_hints: %#v", bodies[1]["system_hints"])
+	}
+}
+
+func TestChatConversationPayloadIncludesDeepResearchHints(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		raw, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body failed: %v", err)
+		}
+		if err := common.Unmarshal(raw, &payload); err != nil {
+			t.Fatalf("unmarshal request body failed: %v", err)
+		}
+		bodies = append(bodies, payload)
+
+		switch r.URL.Path {
+		case "/backend-api/f/conversation/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-test"}`))
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+	opt := ChatConvOpts{
+		Prompt:         "hi",
+		UpstreamModel:  "gpt-5-5-thinking",
+		ThinkingEffort: "standard",
+		DeepResearch:   true,
+		ParentMsgID:    "client-created-root",
+		ChatToken:      "requirements-token",
+		SSETimeout:     time.Second,
+	}
+	if _, err := client.PrepareChatConversation(context.Background(), opt); err != nil {
+		t.Fatalf("PrepareChatConversation returned error: %v", err)
+	}
+	stream, err := client.StreamChatConversation(context.Background(), opt)
+	if err != nil {
+		t.Fatalf("StreamChatConversation returned error: %v", err)
+	}
+	for range stream {
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("expected prepare and conversation requests, got %d", len(bodies))
+	}
+
+	for index, payload := range bodies {
+		assertDeepResearchPayload(t, index, payload)
+	}
+}
+
+func assertDeepResearchPayload(t *testing.T, index int, payload map[string]any) {
+	t.Helper()
+	hints, ok := payload["system_hints"].([]any)
+	if !ok || len(hints) != 1 || hints[0] != "connector:connector_openai_deep_research" {
+		t.Fatalf("payload %d sent unexpected system_hints: %#v", index, payload["system_hints"])
+	}
+
+	var metadata any
+	if partialQuery, ok := payload["partial_query"].(map[string]any); ok {
+		metadata = partialQuery["metadata"]
+	} else if messages, ok := payload["messages"].([]any); ok && len(messages) > 0 {
+		firstMessage, _ := messages[0].(map[string]any)
+		metadata = firstMessage["metadata"]
+	}
+
+	meta, ok := metadata.(map[string]any)
+	if !ok {
+		t.Fatalf("payload %d missing deep research metadata: %#v", index, metadata)
+	}
+	if got := meta["deep_research_version"]; got != "standard" {
+		t.Fatalf("payload %d sent unexpected deep_research_version: %#v", index, got)
+	}
+	if got := meta["venus_model_variant"]; got != "standard" {
+		t.Fatalf("payload %d sent unexpected venus_model_variant: %#v", index, got)
+	}
+	selectedSources, ok := meta["selected_sources"].([]any)
+	if !ok || len(selectedSources) != 1 || selectedSources[0] != "web" {
+		t.Fatalf("payload %d sent unexpected selected_sources: %#v", index, meta["selected_sources"])
 	}
 }
 
@@ -509,6 +758,142 @@ func TestParseChatSSEPatchSkipsMainlineMetadataDelta(t *testing.T) {
 	}
 }
 
+func TestParseChatSSESuppressesDeepResearchImplicitLinkDelta(t *testing.T) {
+	stream := make(chan SSEEvent, 5)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"{\"path\":\"/Deep Research App/implicit_link::connector_openai_deep_research/start\",\"args\":{\"user"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"v":"\":\"alice\"}}"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"研究结果已完成"}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if result.Content != "研究结果已完成" {
+		t.Fatalf("expected deep research internal payload to be suppressed, got %q", result.Content)
+	}
+	if strings.Contains(result.Content, "implicit_link::connector_openai_deep_research") || strings.Contains(result.Content, "Deep Research App") {
+		t.Fatalf("deep research internal payload leaked into content: %q", result.Content)
+	}
+}
+
+func TestParseChatSSESuppressesDeepResearchImplicitLinkSnapshot(t *testing.T) {
+	stream := make(chan SSEEvent, 4)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["{\"path\":\"/Deep Research App/implicit_link::connector_openai_deep_research/start\",\"args\":{\"user"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["{\"path\":\"/Deep Research App/implicit_link::connector_openai_deep_research/start\",\"args\":{\"user\":\"alice\"}}\n\n最终研究报告"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if result.Content != "最终研究报告" {
+		t.Fatalf("expected snapshot internal payload to be suppressed, got %q", result.Content)
+	}
+	if strings.Contains(result.Content, "implicit_link::connector_openai_deep_research") || strings.Contains(result.Content, "Deep Research App") {
+		t.Fatalf("deep research internal payload leaked into content: %q", result.Content)
+	}
+}
+
+func TestExtractLatestAssistantTextSuppressesDeepResearchImplicitLinkLine(t *testing.T) {
+	internal := `{"path":"/Deep Research App/implicit_link::connector_openai_deep_research/start","args":{"user":"alice"}}`
+	conversation := map[string]any{
+		"current_node": "assistant-1",
+		"mapping": map[string]any{
+			"assistant-1": map[string]any{
+				"message": map[string]any{
+					"author":  map[string]any{"role": "assistant"},
+					"content": map[string]any{"parts": []any{internal + "\n\n最终研究报告"}},
+				},
+			},
+		},
+	}
+
+	if got := ExtractLatestAssistantTextFromConversation(conversation); got != "最终研究报告" {
+		t.Fatalf("expected only final report text, got %q", got)
+	}
+}
+
+func TestChatGPTWebConversationHasDeepResearchEmbeddedUI(t *testing.T) {
+	conversation := map[string]any{
+		"current_node": "assistant-empty",
+		"mapping": map[string]any{
+			"tool-1": map[string]any{
+				"message": map[string]any{
+					"author": map[string]any{"role": "tool", "name": "api_tool"},
+					"content": map[string]any{
+						"parts": []any{"The tool included embedded UI which has been displayed to the user.\n\nEmbedded UI description: \n\nRendered a widget that contains the deep research experience."},
+					},
+				},
+			},
+			"assistant-empty": map[string]any{
+				"parent": "tool-1",
+				"message": map[string]any{
+					"author":  map[string]any{"role": "assistant"},
+					"content": map[string]any{"parts": []any{""}},
+				},
+			},
+		},
+	}
+
+	if !ChatGPTWebConversationHasDeepResearchEmbeddedUI(conversation) {
+		t.Fatal("expected deep research embedded UI marker to be detected")
+	}
+	if got := ExtractLatestAssistantTextFromConversation(conversation); got != "" {
+		t.Fatalf("embedded UI marker should not be treated as assistant text, got %q", got)
+	}
+}
+
+func TestExtractDeepResearchReportTextFromConversationReadsWidgetState(t *testing.T) {
+	conversation := map[string]any{
+		"current_node": "assistant-empty",
+		"mapping": map[string]any{
+			"widget-state": map[string]any{
+				"message": map[string]any{
+					"author": map[string]any{"role": "tool", "name": "api_tool.widget_state"},
+					"content": map[string]any{
+						"parts": []any{`The latest state of the widget is: {"status":"completed","report_message":{"author":{"role":"assistant"},"update_time":2,"content":{"content_type":"text","parts":["# 最终报告\n\nharness 是测试夹具。"]}}}`},
+					},
+				},
+			},
+			"assistant-empty": map[string]any{
+				"parent": "widget-state",
+				"message": map[string]any{
+					"author":  map[string]any{"role": "assistant"},
+					"content": map[string]any{"parts": []any{""}},
+				},
+			},
+		},
+	}
+
+	if got := ExtractDeepResearchReportTextFromConversation(conversation); got != "# 最终报告\n\nharness 是测试夹具。" {
+		t.Fatalf("expected report text from widget state, got %q", got)
+	}
+	if got := ExtractLatestAssistantTextFromConversation(conversation); got != "" {
+		t.Fatalf("widget state should not be treated as normal assistant text, got %q", got)
+	}
+}
+
+func TestParseChatSSEPreservesOrdinaryDeepResearchText(t *testing.T) {
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"字符串 implicit_link::connector_openai_deep_research 只是说明文字"}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if result.Content != "字符串 implicit_link::connector_openai_deep_research 只是说明文字" {
+		t.Fatalf("expected ordinary explanatory text to be preserved, got %q", result.Content)
+	}
+}
+
 func TestParseChatSSEExtractsBareDeltaAfterAppendStarts(t *testing.T) {
 	stream := make(chan SSEEvent, 5)
 	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
@@ -524,6 +909,75 @@ func TestParseChatSSEExtractsBareDeltaAfterAppendStarts(t *testing.T) {
 	}
 	if result.Content != "Hello world" {
 		t.Fatalf("expected full bare-delta content, got %q", result.Content)
+	}
+}
+
+func TestCollectChatSSEEventDetectsStreamHandoff(t *testing.T) {
+	state := &ChatSSEState{}
+	_, done, err := CollectChatSSEEvent(SSEEvent{Data: []byte(`{"type":"stream_handoff","conversation_id":"conv-1","turn_exchange_id":"turn-1","options":[{"type":"resume_sse_endpoint","topic_id":"conversation-turn-1"}]}`)}, state)
+	if err != nil {
+		t.Fatalf("CollectChatSSEEvent returned error: %v", err)
+	}
+	if done {
+		t.Fatal("stream_handoff should not finish the stream by itself")
+	}
+	if !state.HasStreamHandoff {
+		t.Fatal("expected stream handoff marker to be recorded")
+	}
+	if state.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id to be captured, got %q", state.ConversationID)
+	}
+}
+
+func TestParseChatSSEExtractsStructuredPatchText(t *testing.T) {
+	stream := make(chan SSEEvent, 4)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":{"text":"Hello"}}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts","o":"replace","v":["Hello world"]}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"message_stream_complete","conversation_id":"conv-1"}`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.Err != nil {
+		t.Fatalf("ParseChatSSE returned error: %v", result.Err)
+	}
+	if result.Content != "Hello world" {
+		t.Fatalf("expected structured patch content, got %q", result.Content)
+	}
+}
+
+func TestExtractLatestAssistantTextFromConversationUsesCurrentNode(t *testing.T) {
+	conversation := map[string]any{
+		"current_node": "assistant-2",
+		"mapping": map[string]any{
+			"user-1": map[string]any{
+				"parent": nil,
+				"message": map[string]any{
+					"author":  map[string]any{"role": "user"},
+					"content": map[string]any{"parts": []any{"hi"}},
+				},
+			},
+			"assistant-1": map[string]any{
+				"parent": "user-1",
+				"message": map[string]any{
+					"author":      map[string]any{"role": "assistant"},
+					"create_time": float64(1),
+					"content":     map[string]any{"parts": []any{"old"}},
+				},
+			},
+			"assistant-2": map[string]any{
+				"parent": "assistant-1",
+				"message": map[string]any{
+					"author":      map[string]any{"role": "assistant"},
+					"create_time": float64(2),
+					"content":     map[string]any{"parts": []any{map[string]any{"text": "new"}}},
+				},
+			},
+		},
+	}
+
+	if got := ExtractLatestAssistantTextFromConversation(conversation); got != "new" {
+		t.Fatalf("expected latest assistant text from current node, got %q", got)
 	}
 }
 
@@ -673,6 +1127,42 @@ func TestProbeImageQuotaFallsBackTotalFromUsed(t *testing.T) {
 	}
 	if info.ImageQuotaTotal != 20 {
 		t.Fatalf("expected fallback total 20, got %d", info.ImageQuotaTotal)
+	}
+}
+
+func TestInferImageQuotaWindow(t *testing.T) {
+	now := time.Unix(1778832000, 0)
+	cases := []struct {
+		name    string
+		resetAt int64
+		want    string
+	}{
+		{name: "missing reset", resetAt: 0, want: "unknown"},
+		{name: "resetting soon", resetAt: now.Add(10 * time.Minute).Unix(), want: "resetting_soon"},
+		{name: "daily", resetAt: now.Add(24 * time.Hour).Unix(), want: "daily"},
+		{name: "weekly", resetAt: now.Add(7 * 24 * time.Hour).Unix(), want: "weekly"},
+		{name: "monthly", resetAt: now.Add(30 * 24 * time.Hour).Unix(), want: "monthly"},
+		{name: "too far", resetAt: now.Add(60 * 24 * time.Hour).Unix(), want: "unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := inferImageQuotaWindow(tc.resetAt, now); got != tc.want {
+				t.Fatalf("inferImageQuotaWindow() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestImageQuotaResetAfterSeconds(t *testing.T) {
+	now := time.Unix(1778832000, 0)
+	if got := imageQuotaResetAfterSeconds(now.Add(2*time.Hour).Unix(), now); got != 7200 {
+		t.Fatalf("expected 7200 reset seconds, got %d", got)
+	}
+	if got := imageQuotaResetAfterSeconds(now.Add(-time.Hour).Unix(), now); got != 0 {
+		t.Fatalf("past reset time should clamp to 0, got %d", got)
+	}
+	if got := imageQuotaResetAfterSeconds(0, now); got != 0 {
+		t.Fatalf("missing reset time should be 0, got %d", got)
 	}
 }
 

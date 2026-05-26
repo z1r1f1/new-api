@@ -158,6 +158,8 @@ export interface ChannelBalanceResponse {
     image_quota_remaining?: number
     image_quota_total?: number
     image_quota_reset_at?: number
+    image_quota_reset_after_seconds?: number
+    image_quota_window?: string
     default_model_slug?: string
     blocked_features?: string[]
   }

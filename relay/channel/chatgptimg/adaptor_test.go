@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,9 @@ import (
 	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 )
 
@@ -53,6 +56,391 @@ func TestBuildChatPromptAddsImageGenerationInstruction(t *testing.T) {
 	}
 	if strings.Contains(got, "valid JSON object only") {
 		t.Fatalf("image generation prompt must not force JSON-only response: %q", got)
+	}
+}
+
+func TestBuildChatPromptAddsToolBridgeInstruction(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "读取 AGENTS.md"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        "Read",
+				Description: "Reads a file from the local filesystem",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"file_path": map[string]any{"type": "string"},
+					},
+					"required": []any{"file_path"},
+				},
+			},
+		}},
+	}
+	got := buildChatPrompt(req)
+	for _, want := range []string{"TOOL BRIDGE PROTOCOL", "MUST call an available tool", "Treat the listed tools", `"tool_call"`, "Read", "file_path"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("tool bridge prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestPreemptiveLocalToolResponseForClaudeFileRead(t *testing.T) {
+	service.InitTokenEncoders()
+	stream := true
+	req := chatRequest{
+		Model:  "gpt-5.5-thinking",
+		Stream: &stream,
+		Messages: []dto.Message{
+			{Role: "user", Content: "读取 /Users/zrf/project/git-project/aicustomer/AGENTS.md"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        "exec_command",
+				Description: "Runs a local shell command",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		}},
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		RelayMode:   relayconstant.RelayModeResponses,
+	}
+	timing := service.NewChatGPTWebTiming()
+
+	resp, ok, err := buildChatGPTWebPreemptiveLocalToolResponse(req, info, timing)
+	if err != nil {
+		t.Fatalf("buildChatGPTWebPreemptiveLocalToolResponse returned error: %v", err)
+	}
+	if !ok || resp == nil || resp.Body == nil {
+		t.Fatal("expected preemptive tool response")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	got := string(body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"exec_command"`,
+		`cat 'AGENTS.md'`,
+		`"workdir":"/Users/zrf/project/git-project/aicustomer"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected synthetic response to contain %q, got:\n%s", want, got)
+		}
+	}
+	if timing.Snapshot()["tool_bridge_preemptive"] != true {
+		t.Fatalf("expected timing to mark preemptive tool bridge, got %#v", timing.Snapshot())
+	}
+}
+
+func TestPreemptiveLocalToolResponseForOpenAIResponsesFileRead(t *testing.T) {
+	service.InitTokenEncoders()
+	stream := true
+	req := chatRequest{
+		Model:  "gpt-5.5-thinking",
+		Stream: &stream,
+		Messages: []dto.Message{
+			{Role: "user", Content: "读取 AGENTS.md"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        "Read",
+				Description: "Reads a file from the local filesystem",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		}},
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatOpenAI,
+		RelayMode:   relayconstant.RelayModeResponses,
+	}
+	timing := service.NewChatGPTWebTiming()
+
+	resp, ok, err := buildChatGPTWebPreemptiveLocalToolResponse(req, info, timing)
+	if err != nil {
+		t.Fatalf("buildChatGPTWebPreemptiveLocalToolResponse returned error: %v", err)
+	}
+	if !ok || resp == nil || resp.Body == nil {
+		t.Fatal("expected preemptive responses tool response")
+	}
+	body, _ := io.ReadAll(resp.Body)
+	got := string(body)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"Read"`,
+		`"file_path":"AGENTS.md"`,
+		`"type":"response.completed"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected synthetic responses stream to contain %q, got:\n%s", want, got)
+		}
+	}
+	if timing.Snapshot()["tool_bridge_preemptive"] != true {
+		t.Fatalf("expected timing to mark preemptive tool bridge, got %#v", timing.Snapshot())
+	}
+}
+
+func TestPreemptiveLocalToolResponseSkipsWhenToolResultPresent(t *testing.T) {
+	stream := true
+	req := chatRequest{
+		Model:  "gpt-5.5-thinking",
+		Stream: &stream,
+		Messages: []dto.Message{
+			{Role: "user", Content: "读取 /Users/zrf/project/git-project/aicustomer/AGENTS.md"},
+			{Role: "assistant", Content: `[function_call] exec_command {"cmd":"cat 'AGENTS.md'"}`},
+			{Role: "tool", ToolCallId: "call_1", Content: "# AGENTS.md\n项目规则"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type:     "function",
+			Function: dto.FunctionRequest{Name: "exec_command"},
+		}},
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat: types.RelayFormatClaude,
+		RelayMode:   relayconstant.RelayModeResponses,
+	}
+	timing := service.NewChatGPTWebTiming()
+
+	resp, ok, err := buildChatGPTWebPreemptiveLocalToolResponse(req, info, timing)
+	if err != nil {
+		t.Fatalf("buildChatGPTWebPreemptiveLocalToolResponse returned error: %v", err)
+	}
+	if ok || resp != nil {
+		t.Fatalf("tool-result follow-up must be sent upstream instead of preemptively re-calling the tool, ok=%v resp=%v", ok, resp)
+	}
+	snapshot := timing.Snapshot()
+	if snapshot["tool_bridge_preemptive"] != false || snapshot["tool_bridge_preemptive_reason"] != "tool_result_present" {
+		t.Fatalf("expected preemptive skip reason for tool result, got %#v", snapshot)
+	}
+}
+
+func TestToolInstructionDoesNotTriggerImageHeuristic(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "读取 AGENTS.md"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        "ReadImageMetadata",
+				Description: "reads image metadata from a local file",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		}},
+	}
+	prompt := buildChatPromptForRelay(req, nil)
+	if strings.Contains(prompt, chatImageGenerationInstruction) {
+		t.Fatalf("tool descriptions must not trigger image generation intent: %q", prompt)
+	}
+}
+
+func TestBuildLatestChatGPTWebMessagePromptForRelaySendsOnlyLatestUser(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "user", Content: "first question"},
+			{Role: "assistant", Content: "first answer"},
+			{Role: "user", Content: "follow up only"},
+		},
+	}
+
+	got := buildLatestChatGPTWebMessagePromptForRelay(req, nil)
+	if got != "follow up only" {
+		t.Fatalf("expected only latest user message without role transcript, got %q", got)
+	}
+	for _, forbidden := range []string{"System:", "User:", "Assistant:", "first question", "first answer"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("latest-message prompt must not include %q: %q", forbidden, got)
+		}
+	}
+}
+
+func TestBuildLatestChatGPTWebMessagePromptForRelayIncludesTrailingToolResult(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "system", Content: "be concise"},
+			{Role: "user", Content: "读取 /Users/zrf/project/git-project/aicustomer/AGENTS.md"},
+			{Role: "assistant", Content: `[function_call] exec_command {"cmd":"cat 'AGENTS.md'"}`},
+			{Role: "tool", ToolCallId: "call_1", Content: "# AGENTS.md\n项目规则"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type:     "function",
+			Function: dto.FunctionRequest{Name: "exec_command"},
+		}},
+	}
+
+	got := buildLatestChatGPTWebMessagePromptForRelay(req, nil)
+	for _, want := range []string{
+		"User request:",
+		"读取 /Users/zrf/project/git-project/aicustomer/AGENTS.md",
+		"Tool result call_1:",
+		"# AGENTS.md\n项目规则",
+		"Use the tool result above",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("latest tool-result prompt missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "TOOL BRIDGE PROTOCOL") {
+		t.Fatalf("tool-result follow-up should not ask the model to call a tool again by default:\n%s", got)
+	}
+	if strings.Contains(got, "System: be concise") || strings.Contains(got, "[function_call]") {
+		t.Fatalf("latest tool-result prompt should remain incremental and omit old transcript noise:\n%s", got)
+	}
+}
+
+func TestChatGPTWebSessionRouteKeyIsolatesChannelAndAccount(t *testing.T) {
+	base := &relaycommon.RelayInfo{
+		UserId:  100,
+		TokenId: 200,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            10,
+			ChannelMultiKeyIndex: 0,
+			ApiKey:               "account-a",
+		},
+	}
+
+	key1 := chatGPTWebSessionRouteKey(base, "client-session-1")
+	key2 := chatGPTWebSessionRouteKey(base, "client-session-1")
+	if key1 == "" || key1 != key2 {
+		t.Fatalf("expected stable non-empty route key, got %q and %q", key1, key2)
+	}
+	if strings.Contains(key1, "client-session-1") || strings.Contains(key1, "account-a") {
+		t.Fatalf("route key must be hashed and not expose raw session/account data: %q", key1)
+	}
+
+	otherChannel := *base
+	otherChannelMeta := *base.ChannelMeta
+	otherChannelMeta.ChannelId = 11
+	otherChannel.ChannelMeta = &otherChannelMeta
+	if got := chatGPTWebSessionRouteKey(&otherChannel, "client-session-1"); got == key1 {
+		t.Fatalf("different ChatGPT Web channels must not share a session route key")
+	}
+
+	otherAccount := *base
+	otherAccountMeta := *base.ChannelMeta
+	otherAccountMeta.ApiKey = "account-b"
+	otherAccount.ChannelMeta = &otherAccountMeta
+	if got := chatGPTWebSessionRouteKey(&otherAccount, "client-session-1"); got == key1 {
+		t.Fatalf("different ChatGPT Web accounts must not share a session route key")
+	}
+}
+
+func TestResolveChatGPTWebSessionRouteUsesCachedConversation(t *testing.T) {
+	resetChatGPTWebSessionRouteCacheForTest()
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		resetChatGPTWebSessionRouteCacheForTest()
+	})
+
+	info := &relaycommon.RelayInfo{
+		UserId:  100,
+		TokenId: 200,
+		RequestHeaders: map[string]string{
+			"User-Agent": "claude-code/1.0",
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            10,
+			ChannelMultiKeyIndex: 0,
+			ApiKey:               "account-a",
+		},
+	}
+	routeKey := chatGPTWebSessionRouteKey(info, "client-session-1")
+	recordChatGPTWebSessionRoute(chatGPTWebSessionRoute{
+		Enabled: true,
+		Key:     routeKey,
+	}, "conv-123", nil)
+
+	raw := []byte(`{"metadata":{"user_id":"{\"session_id\":\"client-session-1\"}"}}`)
+	route := resolveChatGPTWebSessionRoute(info, chatRequest{Model: "claude-test"}, raw, nil)
+	if !route.Enabled || !route.Reused || route.CachedConversationID != "conv-123" {
+		t.Fatalf("expected cached conversation route, got %#v", route)
+	}
+}
+
+func TestResolveChatGPTWebSessionRouteFallsBackToFirstUserMessageSeed(t *testing.T) {
+	resetChatGPTWebSessionRouteCacheForTest()
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		resetChatGPTWebSessionRouteCacheForTest()
+	})
+
+	info := &relaycommon.RelayInfo{
+		UserId:  100,
+		TokenId: 200,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            10,
+			ChannelMultiKeyIndex: 0,
+			ApiKey:               "account-a",
+		},
+	}
+	firstReq := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hi"},
+		},
+	}
+	firstRoute := resolveChatGPTWebSessionRoute(info, firstReq, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
+	if !firstRoute.Enabled || firstRoute.SessionSource != "message_seed" || firstRoute.Reused {
+		t.Fatalf("expected first request to create message-seed route without hit, got %#v", firstRoute)
+	}
+	recordChatGPTWebSessionRoute(firstRoute, "conv-from-first-turn", nil)
+
+	secondReq := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", Content: "hello"},
+			{Role: "user", Content: "continue"},
+		},
+	}
+	secondRoute := resolveChatGPTWebSessionRoute(info, secondReq, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
+	if !secondRoute.Enabled || !secondRoute.Reused || secondRoute.CachedConversationID != "conv-from-first-turn" {
+		t.Fatalf("expected second request to reuse first-turn ChatGPT Web conversation, got %#v", secondRoute)
+	}
+}
+
+func TestApplyChatGPTWebSessionRouteUsesLatestPromptAndFullFallback(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "first question"},
+			{Role: "assistant", Content: "first answer"},
+			{Role: "user", Content: "follow up only"},
+		},
+	}
+	fullPrompt := buildChatPromptForRelay(req, nil)
+	route := chatGPTWebSessionRoute{
+		Enabled:              true,
+		Reused:               true,
+		CachedConversationID: "conv-123",
+	}
+
+	got := applyChatGPTWebSessionRoute(&req, &route, fullPrompt, nil)
+	if got != "follow up only" {
+		t.Fatalf("expected incremental prompt to use latest user message, got %q", got)
+	}
+	if req.ConversationID != "conv-123" {
+		t.Fatalf("expected cached conversation id to be applied, got %q", req.ConversationID)
+	}
+	if req.FallbackPrompt != fullPrompt {
+		t.Fatalf("expected full context fallback prompt, got %q want %q", req.FallbackPrompt, fullPrompt)
+	}
+	if !route.Incremental {
+		t.Fatalf("expected route to be marked incremental")
 	}
 }
 
@@ -107,7 +495,7 @@ func TestResponsesImageModelStillTriggersImagePolling(t *testing.T) {
 	if !shouldPollChatGeneratedImagesForRelay(info, req, prompt, "", false) {
 		t.Fatalf("responses image model should enable image polling")
 	}
-	if !shouldPollChatGeneratedImagesForRelay(info, chatRequest{Model: "gpt-5.5-thinking"}, "User: hello", "", true) {
+	if !shouldPollChatGeneratedImagesForRelay(info, chatRequest{Model: "claude-test"}, "User: hello", "", true) {
 		t.Fatalf("responses relay should poll when upstream explicitly reports image generation")
 	}
 }
@@ -115,8 +503,9 @@ func TestResponsesImageModelStillTriggersImagePolling(t *testing.T) {
 func TestConvertOpenAIRequestAllowsChat(t *testing.T) {
 	stream := false
 	converted, err := (&Adaptor{}).ConvertOpenAIRequest(nil, nil, &dto.GeneralOpenAIRequest{
-		Model:  "gpt-5",
-		Stream: &stream,
+		Model:           "gpt-5.5-thinking",
+		Stream:          &stream,
+		ReasoningEffort: "medium",
 		Messages: []dto.Message{
 			{Role: "user", Content: "hi"},
 		},
@@ -128,8 +517,65 @@ func TestConvertOpenAIRequestAllowsChat(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected chatRequest, got %T", converted)
 	}
-	if req.Model != "gpt-5" || len(req.Messages) != 1 || req.Stream == nil || *req.Stream {
+	if req.Model != "gpt-5.5-thinking" || len(req.Messages) != 1 || req.Stream == nil || *req.Stream {
 		t.Fatalf("unexpected converted request: %#v", req)
+	}
+	if req.ThinkingEffort != "standard" {
+		t.Fatalf("expected ChatGPT Web thinking effort to default to standard, got %q", req.ThinkingEffort)
+	}
+}
+
+func TestConvertOpenAIRequestReadsChatGPTWebDeepResearchFlag(t *testing.T) {
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/chat/completions",
+		bytes.NewReader([]byte(`{"chatgpt_web_deep_research":true}`)),
+	)
+
+	converted, err := (&Adaptor{}).ConvertOpenAIRequest(c, nil, &dto.GeneralOpenAIRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hi"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest returned error: %v", err)
+	}
+	req, ok := converted.(chatRequest)
+	if !ok {
+		t.Fatalf("expected chatRequest, got %T", converted)
+	}
+	if !req.DeepResearch {
+		t.Fatalf("expected deep research flag to be extracted from raw request body")
+	}
+}
+
+func TestConvertOpenAIRequestPreservesToolsForChatGPTWeb(t *testing.T) {
+	converted, err := (&Adaptor{}).ConvertOpenAIRequest(nil, nil, &dto.GeneralOpenAIRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "read a file"},
+		},
+		Tools: []dto.ToolCallRequest{{
+			Type: "function",
+			Function: dto.FunctionRequest{
+				Name:        "Read",
+				Description: "read local file",
+				Parameters:  map[string]any{"type": "object"},
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIRequest returned error: %v", err)
+	}
+	req, ok := converted.(chatRequest)
+	if !ok {
+		t.Fatalf("expected chatRequest, got %T", converted)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "Read" {
+		t.Fatalf("expected tools to be preserved, got %#v", req.Tools)
 	}
 }
 
@@ -143,6 +589,8 @@ func TestConvertOpenAIResponsesRequestAllowsChat(t *testing.T) {
 		Input:              json.RawMessage(`[{"role":"user","content":[{"type":"input_text","text":"hello"},{"type":"input_image","image_url":"https://example.com/cat.png"}]}]`),
 		Stream:             &stream,
 		Text:               json.RawMessage(`{"format":{"type":"json_object"}}`),
+		Tools:              json.RawMessage(`[{"type":"function","name":"Read","description":"read local file","parameters":{"type":"object","properties":{"file_path":{"type":"string"}},"required":["file_path"]}}]`),
+		Reasoning:          &dto.Reasoning{Effort: "high"},
 		PreviousResponseID: "resp_chatgptimg-conv-123",
 	})
 	if err != nil {
@@ -161,6 +609,12 @@ func TestConvertOpenAIResponsesRequestAllowsChat(t *testing.T) {
 	if req.ResponseFormat == nil || req.ResponseFormat.Type != "json_object" {
 		t.Fatalf("expected responses text format to map to chat response_format, got %#v", req.ResponseFormat)
 	}
+	if req.ThinkingEffort != "extended" {
+		t.Fatalf("expected responses reasoning effort to map to ChatGPT Web extended, got %q", req.ThinkingEffort)
+	}
+	if len(req.Tools) != 1 || req.Tools[0].Function.Name != "Read" {
+		t.Fatalf("expected responses tools to map to chat tools, got %#v", req.Tools)
+	}
 	if len(req.Messages) != 2 {
 		t.Fatalf("expected system + user messages, got %#v", req.Messages)
 	}
@@ -169,6 +623,70 @@ func TestConvertOpenAIResponsesRequestAllowsChat(t *testing.T) {
 		!strings.Contains(prompt, "User: hello") ||
 		!strings.Contains(prompt, "[image_url: https://example.com/cat.png]") {
 		t.Fatalf("unexpected prompt from converted responses request: %q", prompt)
+	}
+}
+
+func TestParseChatGPTWebToolCallFromJSONFence(t *testing.T) {
+	tools := []dto.ToolCallRequest{{
+		Type:     "function",
+		Function: dto.FunctionRequest{Name: "Read"},
+	}}
+	content := "```json\n{\"tool_call\":{\"name\":\"read\",\"arguments\":{\"file_path\":\"/etc/hostname\"}}}\n```"
+	call, ok := parseChatGPTWebToolCall(content, tools)
+	if !ok {
+		t.Fatalf("expected tool call to be parsed")
+	}
+	if call.Function.Name != "Read" || !strings.Contains(call.Function.Arguments, `"/etc/hostname"`) {
+		t.Fatalf("unexpected parsed tool call: %#v", call)
+	}
+}
+
+func TestChatModelForWebUsesChatGPTWebSlug(t *testing.T) {
+	cases := []struct {
+		model string
+		want  string
+	}{
+		{model: "", want: "auto"},
+		{model: "gpt-image-2", want: "auto"},
+		{model: "gpt-5.5-thinking", want: "gpt-5-5-thinking"},
+		{model: "gpt-5.5-pro", want: "gpt-5-5-pro"},
+		{model: "gpt-5.4-thinking", want: "gpt-5-4-thinking"},
+		{model: "gpt-5.4-pro", want: "gpt-5-4-pro"},
+		{model: "gpt-5.4-instant", want: "gpt-5-4-instant"},
+		{model: "custom-web-model", want: "custom-web-model"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.model, func(t *testing.T) {
+			if got := chatModelForWeb(tc.model); got != tc.want {
+				t.Fatalf("chatModelForWeb(%q) = %q, want %q", tc.model, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestChatGPTWebThinkingEffortOnlyForThinkingModels(t *testing.T) {
+	cases := []struct {
+		name      string
+		model     string
+		requested string
+		want      string
+	}{
+		{name: "empty defaults to standard", model: "gpt-5-5-thinking", requested: "", want: "standard"},
+		{name: "medium stays standard", model: "gpt-5-5-thinking", requested: "medium", want: "standard"},
+		{name: "standard stays standard", model: "gpt-5-5-thinking", requested: "standard", want: "standard"},
+		{name: "high maps to extended", model: "gpt-5-5-thinking", requested: "high", want: "extended"},
+		{name: "xhigh maps to extended", model: "gpt-5-5-thinking", requested: "xhigh", want: "extended"},
+		{name: "extended stays extended", model: "gpt-5-5-thinking", requested: "extended", want: "extended"},
+		{name: "non thinking model omits effort", model: "gpt-5-5-pro", requested: "high", want: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chatGPTWebThinkingEffort(tc.model, tc.requested); got != tc.want {
+				t.Fatalf("chatGPTWebThinkingEffort(%q, %q) = %q, want %q", tc.model, tc.requested, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -217,7 +735,7 @@ func TestStreamResponsesCompletionEmitsResponsesEvents(t *testing.T) {
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamResponsesCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", pw)
+	go streamResponsesCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -240,6 +758,44 @@ func TestStreamResponsesCompletionEmitsResponsesEvents(t *testing.T) {
 	}
 }
 
+func TestStreamResponsesCompletionConvertsToolJSONToFunctionCall(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["{\"tool_call\":{\"name\":\"Read\",\"arguments\":{\"file_path\":\"/etc/hostname\"}}}"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	req := chatRequest{
+		Model: "claude-test",
+		Tools: []dto.ToolCallRequest{{
+			Type:     "function",
+			Function: dto.FunctionRequest{Name: "Read"},
+		}},
+	}
+
+	pr, pw := io.Pipe()
+	go streamResponsesCompletion(context.Background(), nil, stream, req, "read file", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read responses stream output failed: %v", err)
+	}
+	body := string(out)
+	for _, want := range []string{
+		`"type":"function_call"`,
+		`"name":"Read"`,
+		`"type":"response.function_call_arguments.delta"`,
+		`"type":"response.completed"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("responses tool stream missing %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"type":"response.output_text.delta"`) {
+		t.Fatalf("tool stream must not leak structured JSON as text:\n%s", body)
+	}
+}
+
 func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	stream := make(chan SSEEvent, 2)
 	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["hello"]}}}}`)}
@@ -247,7 +803,7 @@ func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", pw)
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -259,6 +815,207 @@ func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	}
 	if !strings.Contains(string(out), `"id":"chatcmpl-chatgptimg-conv-1"`) {
 		t.Fatalf("stream output did not expose the real conversation id for reuse:\n%s", string(out))
+	}
+}
+
+func TestStreamChatCompletionSuppressesDeepResearchInternalPayload(t *testing.T) {
+	stream := make(chan SSEEvent, 4)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Event: "delta", Data: []byte(`{"p":"/message/content/parts/0","o":"append","v":"{\"path\":\"/Deep Research App/implicit_link::connector_openai_deep_research/start\",\"args\":{\"user\":\"alice\"}}"}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	pr, pw := io.Pipe()
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test", DeepResearch: true}, "做深度研究", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read stream output failed: %v", err)
+	}
+	body := string(out)
+	if strings.Contains(body, "implicit_link::connector_openai_deep_research") || strings.Contains(body, "Deep Research App") {
+		t.Fatalf("deep research internal payload leaked into stream:\n%s", body)
+	}
+	if !strings.Contains(body, "深度研究任务已启动") {
+		t.Fatalf("expected user-facing deep research pending message, got:\n%s", body)
+	}
+}
+
+func TestStreamChatCompletionSuppressesDeepResearchInternalSnapshotPayload(t *testing.T) {
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-1"}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["{\"path\":\"/Deep Research App/implicit_link::connector_openai_deep_research/start\",\"args\":{\"user"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	pr, pw := io.Pipe()
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test", DeepResearch: true}, "做深度研究", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read stream output failed: %v", err)
+	}
+	body := string(out)
+	if strings.Contains(body, "implicit_link::connector_openai_deep_research") || strings.Contains(body, "Deep Research App") {
+		t.Fatalf("deep research internal snapshot payload leaked into stream:\n%s", body)
+	}
+	if !strings.Contains(body, "深度研究任务已启动") {
+		t.Fatalf("expected user-facing deep research pending message, got:\n%s", body)
+	}
+}
+
+func TestRecoverChatCompletionTextWithFetcherWaitsForDeepResearchResult(t *testing.T) {
+	attempts := 0
+	timing := service.NewChatGPTWebTiming()
+	got := recoverChatCompletionTextWithFetcher(context.Background(), func(context.Context) (string, error) {
+		attempts++
+		if attempts < 3 {
+			return "", nil
+		}
+		return "最终深度研究结果", nil
+	}, time.Second, time.Millisecond, timing)
+
+	if got != "最终深度研究结果" {
+		t.Fatalf("expected delayed deep research result, got %q", got)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 polling attempts, got %d", attempts)
+	}
+	snapshot := timing.Snapshot()
+	if snapshot["chat_text_mapping_recovered"] != true {
+		t.Fatalf("expected timing to mark recovery, got %#v", snapshot)
+	}
+}
+
+func TestRecoverChatCompletionTextWithFetcherRetriesTransientMappingError(t *testing.T) {
+	attempts := 0
+	got := recoverChatCompletionTextWithFetcher(context.Background(), func(context.Context) (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "", errors.New("chatgpt upstream 404: conversation get failed")
+		}
+		return "handoff recovered text", nil
+	}, time.Second, time.Millisecond, nil)
+
+	if got != "handoff recovered text" {
+		t.Fatalf("expected recovered text after transient mapping error, got %q", got)
+	}
+	if attempts != 2 {
+		t.Fatalf("expected 2 polling attempts, got %d", attempts)
+	}
+}
+
+func TestRecoverChatCompletionTextFromConversationExtractsDeepResearchWidgetReport(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/conversation/conv-deep-research" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"current_node": "assistant-empty",
+			"mapping": {
+				"widget-state": {
+					"message": {
+						"author": {"role":"tool","name":"api_tool.widget_state"},
+						"content": {"parts": ["The latest state of the widget is: {\"status\":\"completed\",\"report_message\":{\"author\":{\"role\":\"assistant\"},\"update_time\":2,\"content\":{\"content_type\":\"text\",\"parts\":[\"最终深度研究报告\"]}}}"]}
+					}
+				},
+				"assistant-empty": {
+					"parent": "widget-state",
+					"message": {"author":{"role":"assistant"},"content":{"parts":[""]}}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+
+	got := recoverChatCompletionTextFromConversationWithWait(context.Background(), client, "conv-deep-research", 0, 0)
+	if got != "最终深度研究报告" {
+		t.Fatalf("expected report recovered from widget state, got %q", got)
+	}
+}
+
+func TestStreamChatCompletionRecoversTextAfterStreamHandoff(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/conversation/conv-handoff" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"current_node": "assistant-1",
+			"mapping": {
+				"assistant-1": {
+					"message": {
+						"author": {"role":"assistant"},
+						"content": {"parts": ["handoff recovered text"]}
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"type":"resume_conversation_token","conversation_id":"conv-handoff"}`)}
+	stream <- SSEEvent{Data: []byte(`{"type":"stream_handoff","conversation_id":"conv-handoff","turn_exchange_id":"turn-1","options":[{"type":"resume_sse_endpoint","topic_id":"conversation-turn-1"}]}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+	pr, pw := io.Pipe()
+	go streamChatCompletion(context.Background(), client, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read stream output failed: %v", err)
+	}
+	if !strings.Contains(string(out), "handoff recovered text") {
+		t.Fatalf("expected recovered handoff text in stream, got:\n%s", string(out))
+	}
+}
+
+func TestStreamChatCompletionConvertsToolJSONToToolCalls(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["{\"tool_call\":{\"name\":\"Read\",\"arguments\":{\"file_path\":\"/etc/hostname\"}}}"]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	req := chatRequest{
+		Model: "claude-test",
+		Tools: []dto.ToolCallRequest{{
+			Type:     "function",
+			Function: dto.FunctionRequest{Name: "Read"},
+		}},
+	}
+
+	pr, pw := io.Pipe()
+	go streamChatCompletion(context.Background(), nil, stream, req, "read file", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read chat stream output failed: %v", err)
+	}
+	body := string(out)
+	for _, want := range []string{
+		`"tool_calls"`,
+		`"name":"Read"`,
+		`"finish_reason":"tool_calls"`,
+		`data: [DONE]`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("chat tool stream missing %s:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"content":"{\"tool_call\"`) {
+		t.Fatalf("tool stream must not leak structured JSON as text:\n%s", body)
 	}
 }
 
@@ -618,6 +1375,15 @@ func TestNormalizeGenerationRequestDefaultsWithNilChannelMeta(t *testing.T) {
 	}
 }
 
+func TestChatGPTWebImageConversationModelUsesRequestModel(t *testing.T) {
+	if got := chatGPTWebImageConversationModel(generationRequest{Model: "gpt-image-2"}); got != "gpt-image-2" {
+		t.Fatalf("expected gpt-image-2 to be sent upstream, got %q", got)
+	}
+	if got := chatGPTWebImageConversationModel(generationRequest{Model: "auto"}); got != ModelList[0] {
+		t.Fatalf("expected auto to fall back to default image model %q, got %q", ModelList[0], got)
+	}
+}
+
 func TestImageSSETextWithoutImageError(t *testing.T) {
 	err := imageSSETextWithoutImageError(ImageSSEResult{
 		ConversationID: "conv-1",
@@ -635,6 +1401,21 @@ func TestImageSSETextWithoutImageError(t *testing.T) {
 		ImageGenTaskID: "task-1",
 	}); err != nil {
 		t.Fatalf("expected image task to continue polling, got %v", err)
+	}
+}
+
+func TestShouldPollTextOnlyImageSSEAllowsSearchFallback(t *testing.T) {
+	if !shouldPollTextOnlyImageSSE(ImageSSEResult{
+		ConversationID: "conv-1",
+		Content:        `search("三唔识七，乱噏廿四 视频合集封面")`,
+	}) {
+		t.Fatal("expected search-like text-only image SSE to allow conversation polling")
+	}
+	if shouldPollTextOnlyImageSSE(ImageSSEResult{
+		ConversationID: "conv-1",
+		Content:        "I cannot generate that image.",
+	}) {
+		t.Fatal("expected refusal text to fail without polling")
 	}
 }
 

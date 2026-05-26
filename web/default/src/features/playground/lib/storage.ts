@@ -226,6 +226,9 @@ function normalizeConfig(value: unknown): Partial<PlaygroundConfig> {
     result.seed = candidate.seed
   }
   if (typeof candidate.stream === 'boolean') result.stream = candidate.stream
+  if (typeof candidate.deep_research === 'boolean') {
+    result.deep_research = candidate.deep_research
+  }
 
   return result
 }

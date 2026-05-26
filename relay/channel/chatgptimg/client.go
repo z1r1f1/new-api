@@ -35,6 +35,10 @@ const (
 	defaultBaseURL        = "https://chatgpt.com"
 
 	defaultOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
+
+	chatGPTWebDeepResearchConnector    = "connector:connector_openai_deep_research"
+	chatGPTWebDeepResearchImplicitLink = "implicit_link::connector_openai_deep_research"
+	chatGPTWebDeepResearchAppPath      = "/Deep Research App/"
 )
 
 type ClientOptions struct {
@@ -358,11 +362,13 @@ func (e *UpstreamError) IsUnauthorized() bool {
 }
 
 type ImageQuotaInfo struct {
-	DefaultModelSlug    string   `json:"default_model_slug,omitempty"`
-	ImageQuotaRemaining int      `json:"image_quota_remaining"`
-	ImageQuotaTotal     int      `json:"image_quota_total"`
-	ImageQuotaResetAt   int64    `json:"image_quota_reset_at,omitempty"`
-	BlockedFeatures     []string `json:"blocked_features,omitempty"`
+	DefaultModelSlug            string   `json:"default_model_slug,omitempty"`
+	ImageQuotaRemaining         int      `json:"image_quota_remaining"`
+	ImageQuotaTotal             int      `json:"image_quota_total"`
+	ImageQuotaResetAt           int64    `json:"image_quota_reset_at,omitempty"`
+	ImageQuotaResetAfterSeconds int64    `json:"image_quota_reset_after_seconds,omitempty"`
+	ImageQuotaWindow            string   `json:"image_quota_window,omitempty"`
+	BlockedFeatures             []string `json:"blocked_features,omitempty"`
 }
 
 type conversationInitQuotaResp struct {
@@ -494,6 +500,9 @@ func (c *Client) ProbeImageQuota(ctx context.Context) (*ImageQuotaInfo, error) {
 			}
 		}
 	}
+	now := time.Now()
+	out.ImageQuotaResetAfterSeconds = imageQuotaResetAfterSeconds(out.ImageQuotaResetAt, now)
+	out.ImageQuotaWindow = inferImageQuotaWindow(out.ImageQuotaResetAt, now)
 	return out, nil
 }
 
@@ -504,6 +513,36 @@ func isImageQuotaFeature(name string) bool {
 		return true
 	}
 	return strings.Contains(n, "image_gen") || strings.Contains(n, "img_gen")
+}
+
+func imageQuotaResetAfterSeconds(resetAt int64, now time.Time) int64 {
+	if resetAt <= 0 {
+		return 0
+	}
+	seconds := resetAt - now.Unix()
+	if seconds < 0 {
+		return 0
+	}
+	return seconds
+}
+
+func inferImageQuotaWindow(resetAt int64, now time.Time) string {
+	if resetAt <= 0 {
+		return "unknown"
+	}
+	seconds := imageQuotaResetAfterSeconds(resetAt, now)
+	switch {
+	case seconds <= int64((15 * time.Minute).Seconds()):
+		return "resetting_soon"
+	case seconds <= int64((36 * time.Hour).Seconds()):
+		return "daily"
+	case seconds <= int64((9 * 24 * time.Hour).Seconds()):
+		return "weekly"
+	case seconds <= int64((45 * 24 * time.Hour).Seconds()):
+		return "monthly"
+	default:
+		return "unknown"
+	}
 }
 
 func firstInt(ps ...*int) *int {
@@ -730,6 +769,8 @@ type ImageConvOpts struct {
 type ChatConvOpts struct {
 	Prompt         string
 	UpstreamModel  string
+	ThinkingEffort string
+	DeepResearch   bool
 	ConvID         string
 	ParentMsgID    string
 	MessageID      string
@@ -738,6 +779,45 @@ type ChatConvOpts struct {
 	ConduitToken   string
 	TimezoneOffset int
 	SSETimeout     time.Duration
+}
+
+func applyChatGPTWebDeepResearchPayload(payload map[string]any, userMessage map[string]any, enabled bool) {
+	if !enabled {
+		return
+	}
+	hints := []string{chatGPTWebDeepResearchConnector}
+	payload["system_hints"] = hints
+	if userMessage == nil {
+		return
+	}
+	metadata := chatGPTWebDeepResearchMetadata()
+	if existing, ok := userMessage["metadata"].(map[string]any); ok {
+		for key, value := range existing {
+			if _, exists := metadata[key]; !exists {
+				metadata[key] = value
+			}
+		}
+	}
+	userMessage["metadata"] = metadata
+}
+
+func chatGPTWebDeepResearchMetadata() map[string]any {
+	hints := []string{chatGPTWebDeepResearchConnector}
+	return map[string]any{
+		"caterpillar_selected_sources": []string{"web"},
+		"developer_mode_connector_ids": []any{},
+		"selected_mcp_sources":         []any{},
+		"selected_sources":             []string{"web"},
+		"selected_github_repos":        []any{},
+		"selected_all_github_repos":    false,
+		"system_hints":                 hints,
+		"deep_research_version":        "standard",
+		"venus_model_variant":          "standard",
+		"serialization_metadata": map[string]any{
+			"custom_symbol_offsets": []any{},
+		},
+		"user_timezone": "Asia/Shanghai",
+	}
 }
 
 func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (string, error) {
@@ -752,11 +832,12 @@ func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (s
 		"fork_from_shared_post": false,
 		"parent_message_id":     opt.ParentMsgID,
 		"model":                 opt.UpstreamModel,
-		"client_prepare_state":  "success",
+		"client_prepare_state":  "none",
 		"timezone_offset_min":   -480,
 		"timezone":              "Asia/Shanghai",
 		"conversation_mode":     map[string]string{"kind": "primary_assistant"},
 		"system_hints":          []string{"picture_v2"},
+		"attachment_mime_types": []string{"image/png"},
 		"partial_query": map[string]any{
 			"id":     uuid.NewString(),
 			"author": map[string]string{"role": "user"},
@@ -770,6 +851,7 @@ func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (s
 		"client_contextual_info": map[string]any{
 			"app_name": "chatgpt.com",
 		},
+		"thinking_effort": "standard",
 	}
 	if opt.ConvID != "" {
 		payload["conversation_id"] = opt.ConvID
@@ -809,6 +891,14 @@ func (c *Client) PrepareChatConversation(ctx context.Context, opt ChatConvOpts) 
 	if opt.MessageID == "" {
 		opt.MessageID = uuid.NewString()
 	}
+	partialQuery := map[string]any{
+		"id":     uuid.NewString(),
+		"author": map[string]string{"role": "user"},
+		"content": map[string]any{
+			"content_type": "text",
+			"parts":        []string{opt.Prompt},
+		},
+	}
 	payload := map[string]any{
 		"action":                "next",
 		"fork_from_shared_post": false,
@@ -818,19 +908,16 @@ func (c *Client) PrepareChatConversation(ctx context.Context, opt ChatConvOpts) 
 		"timezone_offset_min":   -480,
 		"timezone":              "Asia/Shanghai",
 		"conversation_mode":     map[string]string{"kind": "primary_assistant"},
-		"partial_query": map[string]any{
-			"id":     uuid.NewString(),
-			"author": map[string]string{"role": "user"},
-			"content": map[string]any{
-				"content_type": "text",
-				"parts":        []string{opt.Prompt},
-			},
-		},
-		"supports_buffering":  true,
-		"supported_encodings": []string{"v1"},
+		"partial_query":         partialQuery,
+		"supports_buffering":    true,
+		"supported_encodings":   []string{"v1"},
 		"client_contextual_info": map[string]any{
 			"app_name": "chatgpt.com",
 		},
+	}
+	applyChatGPTWebDeepResearchPayload(payload, partialQuery, opt.DeepResearch)
+	if thinkingEffort := strings.TrimSpace(opt.ThinkingEffort); thinkingEffort != "" {
+		payload["thinking_effort"] = thinkingEffort
 	}
 	if opt.ConvID != "" {
 		payload["conversation_id"] = opt.ConvID
@@ -909,7 +996,8 @@ func (c *Client) StreamFConversation(ctx context.Context, opt ImageConvOpts) (<-
 	}
 
 	payload := map[string]any{
-		"action": "next",
+		"action":                "next",
+		"fork_from_shared_post": false,
 		"messages": []map[string]any{{
 			"id":          opt.MessageID,
 			"author":      map[string]string{"role": "user"},
@@ -919,12 +1007,12 @@ func (c *Client) StreamFConversation(ctx context.Context, opt ImageConvOpts) (<-
 		}},
 		"parent_message_id":        opt.ParentMsgID,
 		"model":                    opt.UpstreamModel,
-		"client_prepare_state":     "sent",
+		"client_prepare_state":     "success",
 		"timezone_offset_min":      opt.TimezoneOffset,
 		"timezone":                 "Asia/Shanghai",
 		"conversation_mode":        map[string]string{"kind": "primary_assistant"},
 		"enable_message_followups": true,
-		"system_hints":             []string{"picture_v2"},
+		"system_hints":             []string{},
 		"supports_buffering":       true,
 		"supported_encodings":      []string{"v1"},
 		"client_contextual_info": map[string]any{
@@ -939,6 +1027,7 @@ func (c *Client) StreamFConversation(ctx context.Context, opt ImageConvOpts) (<-
 		},
 		"paragen_cot_summary_display_override": "allow",
 		"force_parallel_switch":                "auto",
+		"thinking_effort":                      "standard",
 	}
 	if opt.ConvID != "" {
 		payload["conversation_id"] = opt.ConvID
@@ -992,25 +1081,26 @@ func (c *Client) StreamChatConversation(ctx context.Context, opt ChatConvOpts) (
 		opt.SSETimeout = 300 * time.Second
 	}
 
+	userMessage := map[string]any{
+		"id":          opt.MessageID,
+		"author":      map[string]string{"role": "user"},
+		"create_time": float64(time.Now().UnixMilli()) / 1000.0,
+		"content": map[string]any{
+			"content_type": "text",
+			"parts":        []string{opt.Prompt},
+		},
+		"metadata": map[string]any{
+			"developer_mode_connector_ids": []any{},
+			"selected_github_repos":        []any{},
+			"selected_all_github_repos":    false,
+			"serialization_metadata": map[string]any{
+				"custom_symbol_offsets": []any{},
+			},
+		},
+	}
 	payload := map[string]any{
-		"action": "next",
-		"messages": []map[string]any{{
-			"id":          opt.MessageID,
-			"author":      map[string]string{"role": "user"},
-			"create_time": float64(time.Now().UnixMilli()) / 1000.0,
-			"content": map[string]any{
-				"content_type": "text",
-				"parts":        []string{opt.Prompt},
-			},
-			"metadata": map[string]any{
-				"developer_mode_connector_ids": []any{},
-				"selected_github_repos":        []any{},
-				"selected_all_github_repos":    false,
-				"serialization_metadata": map[string]any{
-					"custom_symbol_offsets": []any{},
-				},
-			},
-		}},
+		"action":                   "next",
+		"messages":                 []map[string]any{userMessage},
 		"parent_message_id":        opt.ParentMsgID,
 		"model":                    opt.UpstreamModel,
 		"client_prepare_state":     "sent",
@@ -1032,6 +1122,10 @@ func (c *Client) StreamChatConversation(ctx context.Context, opt ChatConvOpts) (
 		},
 		"paragen_cot_summary_display_override": "allow",
 		"force_parallel_switch":                "auto",
+	}
+	applyChatGPTWebDeepResearchPayload(payload, userMessage, opt.DeepResearch)
+	if thinkingEffort := strings.TrimSpace(opt.ThinkingEffort); thinkingEffort != "" {
+		payload["thinking_effort"] = thinkingEffort
 	}
 	if opt.ConvID != "" {
 		payload["conversation_id"] = opt.ConvID
@@ -1137,21 +1231,27 @@ type ImageSSEResult struct {
 }
 
 type ChatSSEResult struct {
-	ConversationID     string
-	Content            string
-	FinishType         string
-	HasImageGeneration bool
-	HasInlineImage     bool
-	Err                error
+	ConversationID               string
+	Content                      string
+	FinishType                   string
+	HasImageGeneration           bool
+	HasInlineImage               bool
+	HasDeepResearchInternalEvent bool
+	HasStreamHandoff             bool
+	Err                          error
 }
 
 type ChatSSEState struct {
-	ConversationID     string
-	Content            string
-	FinishType         string
-	IsAppendingText    bool
-	HasImageGeneration bool
-	HasInlineImage     bool
+	ConversationID                   string
+	Content                          string
+	FinishType                       string
+	IsAppendingText                  bool
+	HasImageGeneration               bool
+	HasInlineImage                   bool
+	HasDeepResearchInternalEvent     bool
+	HasStreamHandoff                 bool
+	SuppressingDeepResearchInternal  bool
+	DeepResearchInternalContentToken string
 }
 
 var (
@@ -1224,10 +1324,12 @@ func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 		_, done, err := CollectChatSSEEvent(ev, state)
 		if err != nil {
 			return ChatSSEResult{
-				ConversationID: state.ConversationID,
-				Content:        state.Content,
-				FinishType:     state.FinishType,
-				Err:            err,
+				ConversationID:               state.ConversationID,
+				Content:                      state.Content,
+				FinishType:                   state.FinishType,
+				HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+				HasStreamHandoff:             state.HasStreamHandoff,
+				Err:                          err,
 			}
 		}
 		if done {
@@ -1235,11 +1337,13 @@ func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 		}
 	}
 	return ChatSSEResult{
-		ConversationID:     state.ConversationID,
-		Content:            state.Content,
-		FinishType:         state.FinishType,
-		HasImageGeneration: state.HasImageGeneration,
-		HasInlineImage:     state.HasInlineImage,
+		ConversationID:               state.ConversationID,
+		Content:                      state.Content,
+		FinishType:                   state.FinishType,
+		HasImageGeneration:           state.HasImageGeneration,
+		HasInlineImage:               state.HasInlineImage,
+		HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+		HasStreamHandoff:             state.HasStreamHandoff,
 	}
 }
 
@@ -1251,40 +1355,48 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 		case ev, ok := <-stream:
 			if !ok {
 				return ChatSSEResult{
-					ConversationID:     state.ConversationID,
-					Content:            state.Content,
-					FinishType:         state.FinishType,
-					HasImageGeneration: state.HasImageGeneration,
-					HasInlineImage:     state.HasInlineImage,
+					ConversationID:               state.ConversationID,
+					Content:                      state.Content,
+					FinishType:                   state.FinishType,
+					HasImageGeneration:           state.HasImageGeneration,
+					HasInlineImage:               state.HasInlineImage,
+					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+					HasStreamHandoff:             state.HasStreamHandoff,
 				}
 			}
 			_, done, err := CollectChatSSEEvent(ev, state)
 			if err != nil {
 				return ChatSSEResult{
-					ConversationID:     state.ConversationID,
-					Content:            state.Content,
-					FinishType:         state.FinishType,
-					HasImageGeneration: state.HasImageGeneration,
-					HasInlineImage:     state.HasInlineImage,
-					Err:                err,
+					ConversationID:               state.ConversationID,
+					Content:                      state.Content,
+					FinishType:                   state.FinishType,
+					HasImageGeneration:           state.HasImageGeneration,
+					HasInlineImage:               state.HasInlineImage,
+					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+					HasStreamHandoff:             state.HasStreamHandoff,
+					Err:                          err,
 				}
 			}
 			if done {
 				return ChatSSEResult{
-					ConversationID:     state.ConversationID,
-					Content:            state.Content,
-					FinishType:         state.FinishType,
-					HasImageGeneration: state.HasImageGeneration,
-					HasInlineImage:     state.HasInlineImage,
+					ConversationID:               state.ConversationID,
+					Content:                      state.Content,
+					FinishType:                   state.FinishType,
+					HasImageGeneration:           state.HasImageGeneration,
+					HasInlineImage:               state.HasInlineImage,
+					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+					HasStreamHandoff:             state.HasStreamHandoff,
 				}
 			}
 			if strings.TrimSpace(state.Content) != "" {
 				return ChatSSEResult{
-					ConversationID:     state.ConversationID,
-					Content:            state.Content,
-					FinishType:         state.FinishType,
-					HasImageGeneration: state.HasImageGeneration,
-					HasInlineImage:     state.HasInlineImage,
+					ConversationID:               state.ConversationID,
+					Content:                      state.Content,
+					FinishType:                   state.FinishType,
+					HasImageGeneration:           state.HasImageGeneration,
+					HasInlineImage:               state.HasInlineImage,
+					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+					HasStreamHandoff:             state.HasStreamHandoff,
 				}
 			}
 			if state.ConversationID != "" && quietAfterReady > 0 {
@@ -1292,11 +1404,13 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 			}
 		case <-quietTimer:
 			return ChatSSEResult{
-				ConversationID:     state.ConversationID,
-				Content:            state.Content,
-				FinishType:         state.FinishType,
-				HasImageGeneration: state.HasImageGeneration,
-				HasInlineImage:     state.HasInlineImage,
+				ConversationID:               state.ConversationID,
+				Content:                      state.Content,
+				FinishType:                   state.FinishType,
+				HasImageGeneration:           state.HasImageGeneration,
+				HasInlineImage:               state.HasInlineImage,
+				HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+				HasStreamHandoff:             state.HasStreamHandoff,
 			}
 		}
 	}
@@ -1327,6 +1441,8 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 	}
 	if typ, _ := obj["type"].(string); typ == "message_stream_complete" {
 		return "", true, nil
+	} else if typ == "stream_handoff" {
+		state.HasStreamHandoff = true
 	}
 	if patchDelta, patchDone := collectChatPatchEvent(obj, state); patchDelta != "" || patchDone {
 		return patchDelta, patchDone, nil
@@ -1348,18 +1464,7 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 	if latest == "" {
 		return "", false, nil
 	}
-	var hasInlineImage bool
-	latest, hasInlineImage = normalizeChatAssistantContent(latest)
-	if hasInlineImage {
-		state.HasInlineImage = true
-	}
-	if strings.HasPrefix(latest, state.Content) {
-		delta = latest[len(state.Content):]
-	} else if latest != state.Content {
-		delta = latest
-	}
-	state.Content = latest
-	return delta, false, nil
+	return replaceChatContent(latest, state), false, nil
 }
 
 func chatSSEEventHasImageGeneration(obj map[string]any, raw []byte) bool {
@@ -1410,7 +1515,7 @@ func normalizeChatAssistantContent(content string) (string, bool) {
 	lines := strings.Split(content, "\n")
 	filtered := lines[:0]
 	for _, line := range lines {
-		if isSkippedMainlineMetadataLine(line) {
+		if isSkippedMainlineMetadataLine(line) || isChatGPTWebDeepResearchInternalLine(line) {
 			continue
 		}
 		filtered = append(filtered, line)
@@ -1432,11 +1537,31 @@ func isSkippedMainlineMetadataLine(line string) bool {
 	return skipped && len(payload) == 1
 }
 
+func isChatGPTWebDeepResearchInternalLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" || !strings.HasPrefix(line, "{") || !strings.HasSuffix(line, "}") {
+		return false
+	}
+	if !strings.Contains(line, chatGPTWebDeepResearchImplicitLink) {
+		return false
+	}
+	var payload map[string]any
+	if err := common.Unmarshal([]byte(line), &payload); err != nil {
+		return false
+	}
+	path, _ := payload["path"].(string)
+	return strings.Contains(path, chatGPTWebDeepResearchAppPath) && strings.Contains(path, chatGPTWebDeepResearchImplicitLink)
+}
+
 func appendNormalizedChatContent(state *ChatSSEState, value string) string {
 	if state == nil || value == "" {
 		return ""
 	}
 	previous := state.Content
+	value = filterChatGPTWebDeepResearchInternalContent(state, value)
+	if value == "" {
+		return ""
+	}
 	normalized, hasInlineImage := normalizeChatAssistantContent(previous + value)
 	if hasInlineImage {
 		state.HasInlineImage = true
@@ -1452,17 +1577,128 @@ func appendNormalizedChatContent(state *ChatSSEState, value string) string {
 	return normalized
 }
 
+func filterChatGPTWebDeepResearchInternalContent(state *ChatSSEState, value string) string {
+	if state == nil || value == "" {
+		return value
+	}
+	var filtered strings.Builder
+	remaining := value
+	for remaining != "" {
+		if state.SuppressingDeepResearchInternal {
+			suffix, done := consumeChatGPTWebDeepResearchInternalContent(state, remaining)
+			if !done {
+				break
+			}
+			remaining = suffix
+			continue
+		}
+		start := chatGPTWebDeepResearchInternalStartIndex(remaining)
+		if start < 0 {
+			filtered.WriteString(remaining)
+			break
+		}
+		filtered.WriteString(remaining[:start])
+		state.HasDeepResearchInternalEvent = true
+		state.SuppressingDeepResearchInternal = true
+		state.DeepResearchInternalContentToken = ""
+		suffix, done := consumeChatGPTWebDeepResearchInternalContent(state, remaining[start:])
+		if !done {
+			break
+		}
+		remaining = suffix
+	}
+	return filtered.String()
+}
+
+func chatGPTWebDeepResearchInternalStartIndex(value string) int {
+	markerIndex := strings.Index(value, chatGPTWebDeepResearchImplicitLink)
+	if markerIndex < 0 {
+		return -1
+	}
+	for index := markerIndex; index >= 0; index-- {
+		if value[index] != '{' {
+			continue
+		}
+		candidate := strings.TrimLeft(value[index:], " \t\r\n")
+		if strings.HasPrefix(candidate, `{"path"`) &&
+			strings.Contains(candidate, chatGPTWebDeepResearchAppPath) &&
+			strings.Contains(candidate, chatGPTWebDeepResearchImplicitLink) {
+			return index
+		}
+	}
+	return -1
+}
+
+func consumeChatGPTWebDeepResearchInternalContent(state *ChatSSEState, value string) (suffix string, done bool) {
+	state.DeepResearchInternalContentToken += value
+	end, complete := jsonObjectPrefixEnd(state.DeepResearchInternalContentToken)
+	if !complete {
+		return "", false
+	}
+	suffix = state.DeepResearchInternalContentToken[end:]
+	state.DeepResearchInternalContentToken = ""
+	state.SuppressingDeepResearchInternal = false
+	return suffix, true
+}
+
+func jsonObjectPrefixEnd(value string) (int, bool) {
+	depth := 0
+	started := false
+	inString := false
+	escaped := false
+	for index := 0; index < len(value); index++ {
+		ch := value[index]
+		if !started {
+			switch ch {
+			case ' ', '\t', '\r', '\n':
+				continue
+			case '{':
+				started = true
+				depth = 1
+				continue
+			default:
+				return 0, false
+			}
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch ch {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch ch {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return index + 1, true
+			}
+		}
+	}
+	return 0, false
+}
+
 func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta string, done bool) {
 	path, _ := obj["p"].(string)
 	op, _ := obj["o"].(string)
 	if state.IsAppendingText && path == "" && op == "" {
-		value, _ := obj["v"].(string)
+		value := chatTextFromPatchValue(obj["v"])
 		if value != "" {
 			return appendNormalizedChatContent(state, value), false
 		}
 	}
 	if strings.Contains(path, "/message/content/parts") {
-		value, _ := obj["v"].(string)
+		value := chatTextFromPatchValue(obj["v"])
 		if value == "" {
 			return "", false
 		}
@@ -1487,7 +1723,7 @@ func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta strin
 		patchPath, _ := patch["p"].(string)
 		patchOp, _ := patch["o"].(string)
 		if strings.Contains(patchPath, "/message/content/parts") {
-			value, _ := patch["v"].(string)
+			value := chatTextFromPatchValue(patch["v"])
 			if value == "" {
 				continue
 			}
@@ -1517,7 +1753,30 @@ func collectChatPatchEvent(obj map[string]any, state *ChatSSEState) (delta strin
 	return delta, done
 }
 
+func chatTextFromPatchValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case map[string]any:
+		if text, ok := v["text"].(string); ok {
+			return text
+		}
+		if content, ok := v["content"].(map[string]any); ok {
+			return extractMessageText(map[string]any{"content": content})
+		}
+		if parts, ok := v["parts"].([]any); ok {
+			return extractContentPartsText(parts)
+		}
+	case []any:
+		return extractContentPartsText(v)
+	}
+	return ""
+}
+
 func replaceChatContent(latest string, state *ChatSSEState) string {
+	state.SuppressingDeepResearchInternal = false
+	state.DeepResearchInternalContentToken = ""
+	latest = filterChatGPTWebDeepResearchInternalContent(state, latest)
 	var hasInlineImage bool
 	latest, hasInlineImage = normalizeChatAssistantContent(latest)
 	if hasInlineImage {
@@ -1587,6 +1846,10 @@ func extractMessageText(message map[string]any) string {
 		}
 		return ""
 	}
+	return extractContentPartsText(parts)
+}
+
+func extractContentPartsText(parts []any) string {
 	var b strings.Builder
 	for _, part := range parts {
 		switch v := part.(type) {
@@ -1599,6 +1862,173 @@ func extractMessageText(message map[string]any) string {
 		}
 	}
 	return b.String()
+}
+
+func ExtractLatestAssistantTextFromConversation(conversation map[string]any) string {
+	if len(conversation) == 0 {
+		return ""
+	}
+	mapping, _ := conversation["mapping"].(map[string]any)
+	currentNode, _ := conversation["current_node"].(string)
+	if len(mapping) == 0 {
+		mapping = conversation
+	}
+	if text := latestAssistantTextFromCurrentNode(mapping, currentNode); text != "" {
+		return text
+	}
+	return latestAssistantTextByCreateTime(mapping)
+}
+
+func ExtractDeepResearchReportTextFromConversation(conversation map[string]any) string {
+	if len(conversation) == 0 {
+		return ""
+	}
+	mapping, _ := conversation["mapping"].(map[string]any)
+	if len(mapping) == 0 {
+		mapping = conversation
+	}
+	type candidate struct {
+		text       string
+		updateTime float64
+	}
+	var best candidate
+	for _, raw := range mapping {
+		node, _ := raw.(map[string]any)
+		if node == nil {
+			continue
+		}
+		msg, _ := node["message"].(map[string]any)
+		if msg == nil {
+			continue
+		}
+		text, updateTime := deepResearchReportTextFromWidgetMessage(msg)
+		if text == "" {
+			continue
+		}
+		if best.text == "" || updateTime >= best.updateTime {
+			best = candidate{text: text, updateTime: updateTime}
+		}
+	}
+	return best.text
+}
+
+func deepResearchReportTextFromWidgetMessage(message map[string]any) (string, float64) {
+	raw := strings.TrimSpace(extractMessageText(message))
+	if raw == "" {
+		return "", 0
+	}
+	const widgetStatePrefix = "The latest state of the widget is:"
+	if !strings.HasPrefix(raw, widgetStatePrefix) {
+		return "", 0
+	}
+	raw = strings.TrimSpace(strings.TrimPrefix(raw, widgetStatePrefix))
+	if raw == "" || !strings.HasPrefix(raw, "{") {
+		return "", 0
+	}
+	var state map[string]any
+	if err := common.Unmarshal([]byte(raw), &state); err != nil {
+		return "", 0
+	}
+	report, _ := state["report_message"].(map[string]any)
+	if report == nil {
+		return "", 0
+	}
+	text := extractMessageText(report)
+	text, _ = normalizeChatAssistantContent(text)
+	if text == "" {
+		return "", 0
+	}
+	updateTime, _ := report["update_time"].(float64)
+	if updateTime == 0 {
+		updateTime, _ = report["create_time"].(float64)
+	}
+	return text, updateTime
+}
+
+func ChatGPTWebConversationHasDeepResearchEmbeddedUI(conversation map[string]any) bool {
+	if len(conversation) == 0 {
+		return false
+	}
+	mapping, _ := conversation["mapping"].(map[string]any)
+	if len(mapping) == 0 {
+		mapping = conversation
+	}
+	for _, raw := range mapping {
+		node, _ := raw.(map[string]any)
+		if node == nil {
+			continue
+		}
+		msg, _ := node["message"].(map[string]any)
+		if msg == nil {
+			continue
+		}
+		text := extractMessageText(msg)
+		if strings.Contains(text, "Rendered a widget that contains the deep research experience") {
+			return true
+		}
+		if isAssistantMessage(msg) && isChatGPTWebDeepResearchInternalLine(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func latestAssistantTextFromCurrentNode(mapping map[string]any, currentNode string) string {
+	currentNode = strings.TrimSpace(currentNode)
+	if currentNode == "" || len(mapping) == 0 {
+		return ""
+	}
+	seen := map[string]struct{}{}
+	for currentNode != "" {
+		if _, ok := seen[currentNode]; ok {
+			return ""
+		}
+		seen[currentNode] = struct{}{}
+		node, _ := mapping[currentNode].(map[string]any)
+		if node == nil {
+			return ""
+		}
+		if text := assistantTextFromConversationNode(node); text != "" {
+			return text
+		}
+		parent, _ := node["parent"].(string)
+		currentNode = strings.TrimSpace(parent)
+	}
+	return ""
+}
+
+func latestAssistantTextByCreateTime(mapping map[string]any) string {
+	type candidate struct {
+		text       string
+		createTime float64
+	}
+	var best candidate
+	for _, raw := range mapping {
+		node, _ := raw.(map[string]any)
+		if node == nil {
+			continue
+		}
+		text := assistantTextFromConversationNode(node)
+		if text == "" {
+			continue
+		}
+		msg, _ := node["message"].(map[string]any)
+		createTime, _ := msg["create_time"].(float64)
+		if best.text == "" || createTime >= best.createTime {
+			best = candidate{text: text, createTime: createTime}
+		}
+	}
+	return best.text
+}
+
+func assistantTextFromConversationNode(node map[string]any) string {
+	msg, _ := node["message"].(map[string]any)
+	if msg == nil || !isAssistantMessage(msg) {
+		return ""
+	}
+	text := extractMessageText(msg)
+	text, _ = normalizeChatAssistantContent(text)
+	return text
 }
 
 func ParseImageSSE(stream <-chan SSEEvent) ImageSSEResult {

@@ -126,6 +126,7 @@ export interface ChatCompletionRequest {
   web_search_options?: {
     search_context_size?: 'low' | 'medium' | 'high'
   }
+  chatgpt_web_deep_research?: boolean
   temperature?: number
   top_p?: number
   max_tokens?: number
@@ -227,6 +228,7 @@ export interface PlaygroundConfig {
   presence_penalty: number
   seed: number | null
   stream: boolean
+  deep_research: boolean
 }
 
 export interface ParameterEnabled {

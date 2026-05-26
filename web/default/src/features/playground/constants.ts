@@ -61,6 +61,7 @@ export const DEFAULT_CONFIG: PlaygroundConfig = {
   presence_penalty: 0,
   seed: null,
   stream: true,
+  deep_research: false,
 }
 
 export const DEFAULT_PARAMETER_ENABLED: ParameterEnabled = {

@@ -4660,6 +4660,15 @@
     "Blocked IPs": "已封禁 IP",
     "One IP or CIDR range per line. Commas and semicolons are also supported.": "每行一个 IP 或 CIDR 网段，也支持逗号和分号分隔。",
     "Save IP blacklist": "保存 IP 黑名单",
-    "Final Reasoning Effort": "最终推理强度"
+    "Final Reasoning Effort": "最终推理强度",
+    "Estimated quota period": "预计额度周期",
+    "Likely daily": "疑似日额度",
+    "Likely weekly": "疑似周额度",
+    "Likely monthly": "疑似月额度",
+    "Quota period is estimated from the upstream reset time because ChatGPT Web does not label the window directly.": "额度周期根据上游重置时间推断，因为 ChatGPT Web 不会直接标记窗口类型。",
+    "Reset countdown": "距离重置",
+    "Resetting soon": "即将重置",
+    "Deep research": "深度研究",
+    "Use ChatGPT Web deep research connector for this request.": "为本次请求使用 ChatGPT Web 深度研究连接器。"
   }
 }

@@ -59,3 +59,38 @@ func TestOaiResponsesStreamHandlerMarksCompletedAsDone(t *testing.T) {
 		t.Fatal("expected completed event to be forwarded")
 	}
 }
+
+func TestOaiResponsesStreamHandlerIncludesResponseFailedDetails(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = originalStreamingTimeout
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	body := strings.Join([]string{
+		`data: {"type":"response.failed","response":{"status":"failed","error":{"message":"Upstream rejected the tool call","code":"tool_call_invalid"}}}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	info := &relaycommon.RelayInfo{IsStream: true}
+
+	_, err := OaiResponsesStreamHandler(c, info, resp)
+	if err == nil {
+		t.Fatal("expected response.failed to return an API error")
+	}
+	errText := err.Error()
+	for _, want := range []string{"response.failed", "Upstream rejected the tool call", "tool_call_invalid"} {
+		if !strings.Contains(errText, want) {
+			t.Fatalf("expected error to contain %q, got %q", want, errText)
+		}
+	}
+}

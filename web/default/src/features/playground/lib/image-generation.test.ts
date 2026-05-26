@@ -15,6 +15,7 @@ const config: PlaygroundConfig = {
   presence_penalty: 0,
   seed: null,
   stream: true,
+  deep_research: false,
 }
 
 function message(from: Message['from'], content: string): Message {
@@ -100,5 +101,22 @@ describe('buildChatCompletionPayload', () => {
     assert.deepEqual(payload.web_search_options, {
       search_context_size: 'medium',
     })
+  })
+
+  test('adds ChatGPT Web deep research flag when deep research is enabled', () => {
+    const payload = buildChatCompletionPayload(
+      [message('user', 'hi')],
+      { ...config, model: 'gpt-5.5-thinking', deep_research: true },
+      {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      }
+    )
+
+    assert.equal(payload.chatgpt_web_deep_research, true)
   })
 })

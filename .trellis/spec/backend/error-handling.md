@@ -83,6 +83,84 @@ When adding a new provider adapter, prefer converting provider response errors t
 
 ---
 
+## Responses Stream Failure Events
+
+### 1. Scope / Trigger
+
+- Trigger: any change to OpenAI Responses SSE handling in `relay/channel/openai`.
+- Applies to both native `/v1/responses` streams and bridge paths such as
+  Claude Messages -> OpenAI Responses -> Chat/Claude stream conversion.
+
+### 2. Signatures
+
+- Native stream handler:
+  `OaiResponsesStreamHandler(c, info, resp) (*dto.Usage, *types.NewAPIError)`.
+- Chat/Claude bridge stream handler:
+  `OaiResponsesToChatStreamHandler(c, info, resp) (*dto.Usage, *types.NewAPIError)`.
+- Shared failure formatter:
+  `newResponsesStreamAPIError(dto.ResponsesStreamResponse, string) *types.NewAPIError`.
+
+### 3. Contracts
+
+- Upstream SSE event types `response.error` and `response.failed` are relay
+  errors, not successful zero-token completions.
+- Error details must be extracted from nested `response.error` first, and from
+  top-level `error` when present.
+- Detail extraction must not require `error.type`; `error.message` or
+  `error.code` alone is enough to preserve useful upstream diagnostics.
+- Returned errors keep the stable relay code `types.ErrorCodeBadResponse` while
+  the message includes the upstream event, message, code, type, and param when
+  available.
+- Do not persist full SSE payloads or request bodies in error logs.
+
+### 4. Validation & Error Matrix
+
+- `response.failed` with `response.error.message` ->
+  `responses stream error: response.failed: <message> (...)`.
+- `response.failed` with only `response.error.code` -> include `code=<code>`.
+- `response.error` with top-level `error` -> include top-level error details.
+- No parseable error object -> fall back to
+  `responses stream error: <event_type>`.
+
+### 5. Good/Base/Bad Cases
+
+- Good: upstream sends `{"type":"response.failed","response":{"error":{"message":"Invalid tool","code":"invalid_tool"}}}` and the recorded relay error includes both
+  `Invalid tool` and `invalid_tool`.
+- Base: normal `response.completed` streams still mark the stream done and
+  settle usage.
+- Bad: returning only `responses stream error: response.failed`; this loses the
+  actual upstream reason.
+- Bad: treating `response.failed` as a normal stream EOF and recording a
+  successful consume log with zero completion tokens.
+
+### 6. Tests Required
+
+- `relay/channel/openai`: regression tests for native Responses and bridged
+  Responses streams proving `response.failed` includes message/code details.
+- `common`: regression test proving known Responses SSE event names such as
+  `response.failed` and `response.error` are not masked as plain domains, while
+  real domains, URLs, and IPs still are.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+if oaiErr := streamResp.Response.GetOpenAIError(); oaiErr != nil && oaiErr.Type != "" {
+    return types.WithOpenAIError(*oaiErr, http.StatusInternalServerError)
+}
+return types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.Type), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+```
+
+Correct:
+
+```go
+streamErr = newResponsesStreamAPIError(streamResp, data)
+sr.Stop(streamErr)
+```
+
+---
+
 ## Dashboard/API Error Responses
 
 Controller/admin endpoints usually respond with `gin.H`.

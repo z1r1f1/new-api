@@ -80,8 +80,13 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	var usage = &dto.Usage{}
 	var responseTextBuilder strings.Builder
 	responseCompleted := false
+	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
+		if streamErr != nil {
+			sr.Stop(streamErr)
+			return
+		}
 
 		// 检查当前数据是否包含 completed 状态和 usage 信息
 		var streamResponse dto.ResponsesStreamResponse
@@ -120,6 +125,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		case "response.output_text.delta":
 			// 处理输出文本
 			responseTextBuilder.WriteString(streamResponse.Delta)
+		case "response.error", "response.failed":
+			service.AppendChannelAffinityResponseDebug(c, []byte(data))
+			streamErr = newResponsesStreamAPIError(streamResponse, data)
+			sr.Stop(streamErr)
+			return
 		case dto.ResponsesOutputTypeItemDone:
 			// 函数调用处理
 			if streamResponse.Item != nil {
@@ -136,6 +146,10 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	})
 	if responseCompleted {
 		markResponsesStreamCompleted(info)
+	}
+
+	if streamErr != nil {
+		return nil, streamErr
 	}
 
 	if usage.CompletionTokens == 0 {

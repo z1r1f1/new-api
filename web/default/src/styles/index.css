@@ -32,6 +32,197 @@ For commercial licensing, please contact support@quantumnous.com
     font-weight: var(--shiki-dark-font-weight) !important;
     text-decoration: var(--shiki-dark-text-decoration) !important;
   }
+
+  .docs-markdown {
+    max-width: none;
+    color: var(--foreground);
+    font-family:
+      'Public Sans', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+      ui-sans-serif, system-ui, sans-serif;
+    font-size: 0.96875rem;
+    line-height: 2;
+    letter-spacing: 0.01em;
+    overflow-wrap: anywhere;
+    text-wrap: pretty;
+  }
+
+  @media (min-width: 640px) {
+    .docs-markdown {
+      font-size: 1rem;
+    }
+  }
+
+  .docs-markdown > *:first-child {
+    margin-top: 0;
+  }
+
+  .docs-markdown > *:last-child {
+    margin-bottom: 0;
+  }
+
+  .docs-markdown h1,
+  .docs-markdown h2,
+  .docs-markdown h3,
+  .docs-markdown h4 {
+    color: var(--foreground);
+    font-weight: 800;
+    letter-spacing: -0.025em;
+    text-wrap: balance;
+  }
+
+  .docs-markdown h3 {
+    margin-top: 2.5rem;
+    margin-bottom: 0.875rem;
+    border-left: 4px solid color-mix(in oklab, var(--primary) 72%, transparent);
+    padding-left: 0.875rem;
+    font-size: 1.125rem;
+    line-height: 1.45;
+  }
+
+  .docs-markdown p {
+    margin-block: 1rem;
+    color: var(--muted-foreground);
+    line-height: 2;
+  }
+
+  .docs-markdown strong {
+    color: var(--foreground);
+    font-weight: 700;
+  }
+
+  .docs-markdown a {
+    color: var(--primary);
+    font-weight: 650;
+    text-decoration-line: underline;
+    text-decoration-color: color-mix(in oklab, var(--primary) 35%, transparent);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.25em;
+    transition: text-decoration-color 160ms ease;
+  }
+
+  .docs-markdown a:hover {
+    text-decoration-color: var(--primary);
+  }
+
+  .docs-markdown ul,
+  .docs-markdown ol {
+    margin-block: 1.25rem;
+    padding-left: 1.45rem;
+    color: var(--muted-foreground);
+  }
+
+  .docs-markdown ul {
+    list-style: disc;
+  }
+
+  .docs-markdown ol {
+    list-style: decimal;
+  }
+
+  .docs-markdown li {
+    padding-left: 0.15rem;
+    line-height: 2;
+  }
+
+  .docs-markdown li + li {
+    margin-top: 0.55rem;
+  }
+
+  .docs-markdown li::marker {
+    color: var(--primary);
+    font-weight: 800;
+  }
+
+  .docs-markdown code:not(pre code) {
+    border: 1px solid color-mix(in oklab, var(--border) 85%, transparent);
+    border-radius: 0.45rem;
+    background: color-mix(in oklab, var(--muted) 78%, transparent);
+    padding: 0.12rem 0.42rem;
+    color: var(--foreground);
+    font-size: 0.86em;
+    font-weight: 700;
+  }
+
+  .docs-markdown pre {
+    margin-block: 1.5rem;
+    overflow-x: auto;
+    border: 1px solid oklch(0.32 0 0);
+    border-radius: 1.25rem;
+    background: oklch(0.18 0 0);
+    padding: 1.25rem;
+    color: oklch(0.97 0 0);
+    font-size: 0.875rem;
+    line-height: 1.75;
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 7%);
+  }
+
+  .dark .docs-markdown pre {
+    border-color: rgb(255 255 255 / 10%);
+    background: oklch(0.16 0 0);
+  }
+
+  .docs-markdown pre code {
+    border: 0;
+    background: transparent;
+    padding: 0;
+    color: inherit;
+    font-weight: 500;
+    white-space: pre;
+  }
+
+  .docs-markdown table {
+    display: block;
+    width: 100%;
+    margin-block: 1.5rem;
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: 1rem;
+    border-spacing: 0;
+    font-size: 0.925rem;
+    line-height: 1.65;
+  }
+
+  .docs-markdown thead,
+  .docs-markdown tbody {
+    display: table;
+    width: 100%;
+    min-width: 34rem;
+    border-collapse: collapse;
+  }
+
+  .docs-markdown th {
+    background: color-mix(in oklab, var(--muted) 78%, transparent);
+    color: var(--foreground);
+    font-size: 0.78rem;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-align: left;
+    text-transform: uppercase;
+  }
+
+  .docs-markdown th,
+  .docs-markdown td {
+    border-top: 1px solid var(--border);
+    padding: 0.8rem 1rem;
+    vertical-align: top;
+  }
+
+  .docs-markdown thead tr:first-child th {
+    border-top: 0;
+  }
+
+  .docs-markdown td {
+    color: var(--muted-foreground);
+  }
+
+  .docs-markdown blockquote {
+    margin-block: 1.5rem;
+    border-left: 4px solid var(--primary);
+    border-radius: 1rem;
+    background: color-mix(in oklab, var(--muted) 58%, transparent);
+    padding: 0.85rem 1.1rem;
+    color: var(--muted-foreground);
+  }
 }
 
 @layer base {

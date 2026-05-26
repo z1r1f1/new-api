@@ -125,6 +125,14 @@ func ApplyOpenAIResponsesCompatRequestParamsFromRawBody(req *dto.OpenAIResponses
 	}
 }
 
+func ExtractOpenAICompatPromptCacheKeyFromRawBody(body []byte, headers map[string]string) string {
+	var data map[string]json.RawMessage
+	if len(body) > 0 {
+		_ = common.Unmarshal(body, &data)
+	}
+	return extractOpenAICompatPromptCacheKey(data, headers)
+}
+
 func setGeneralRequestServiceTier(req *dto.GeneralOpenAIRequest, serviceTier string) {
 	serviceTier = normalizeFastServiceTier(serviceTier)
 	if serviceTier == "" || req == nil {

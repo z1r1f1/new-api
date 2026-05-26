@@ -4660,6 +4660,15 @@
     "Blocked IPs": "Blocked IPs",
     "One IP or CIDR range per line. Commas and semicolons are also supported.": "One IP or CIDR range per line. Commas and semicolons are also supported.",
     "Save IP blacklist": "Save IP blacklist",
-    "Final Reasoning Effort": "Final Reasoning Effort"
+    "Final Reasoning Effort": "Final Reasoning Effort",
+    "Estimated quota period": "Estimated quota period",
+    "Likely daily": "Likely daily",
+    "Likely weekly": "Likely weekly",
+    "Likely monthly": "Likely monthly",
+    "Quota period is estimated from the upstream reset time because ChatGPT Web does not label the window directly.": "Quota period is estimated from the upstream reset time because ChatGPT Web does not label the window directly.",
+    "Reset countdown": "Reset countdown",
+    "Resetting soon": "Resetting soon",
+    "Deep research": "Deep research",
+    "Use ChatGPT Web deep research connector for this request.": "Use ChatGPT Web deep research connector for this request."
   }
 }

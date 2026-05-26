@@ -89,6 +89,10 @@ export function buildChatCompletionPayload(
     }
   }
 
+  if (config.deep_research) {
+    payload.chatgpt_web_deep_research = true
+  }
+
   // Add enabled parameters
   const parameterKeys: Array<keyof ParameterEnabled> = [
     'temperature',

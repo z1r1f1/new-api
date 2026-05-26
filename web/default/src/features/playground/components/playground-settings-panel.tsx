@@ -173,6 +173,24 @@ export function PlaygroundSettingsPanel(props: PlaygroundSettingsPanelProps) {
               />
             </div>
           </div>
+
+          <div className={customMode ? 'opacity-60' : ''}>
+            <div className='flex items-center justify-between gap-3 rounded-lg border p-3'>
+              <div>
+                <Label>{t('Deep research')}</Label>
+                <p className='text-muted-foreground text-xs'>
+                  {t('Use ChatGPT Web deep research connector for this request.')}
+                </p>
+              </div>
+              <Switch
+                checked={props.config.deep_research}
+                disabled={controlsDisabled}
+                onCheckedChange={(checked) =>
+                  props.onConfigChange('deep_research', checked)
+                }
+              />
+            </div>
+          </div>
         </CardContent>
       </Card>
 

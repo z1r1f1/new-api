@@ -1127,6 +1127,18 @@ Responses contract locally instead of returning "endpoint not supported".
   `chatcmpl-chatgptimg-*`).
 - Return `/v1/responses` shaped JSON/SSE to clients; do not leak
   `chat.completion` bodies on a Responses endpoint.
+- When `/v1/responses` includes local function tools and the latest user
+  message clearly asks for a local file/directory operation, ChatGPT Web may
+  return an empty assistant message instead of a tool call. The adapter should
+  use the same preemptive local tool-call bridge as Claude-compatible messages
+  and emit a Responses `function_call` item directly, rather than sending the
+  prompt to ChatGPT Web and completing with empty text.
+- When `/v1/messages` is bridged through OpenAI Responses, the stream bridge
+  must recover assistant text from both incremental `response.output_text.delta`
+  events and terminal `response.output_item.done` / `response.completed`
+  message outputs. Some synthetic or upstream Responses streams only carry the
+  final assistant text in `item.content[].text`; dropping that text produces a
+  successful Claude stream with only `message_start` / `message_stop`.
 - Do not use plain text image-intent keyword heuristics for `/v1/responses`
   text models. Responses clients often discuss image generation as a text task;
   treating those words as a generation request buffers the stream and can wait
@@ -1147,6 +1159,13 @@ Responses contract locally instead of returning "endpoint not supported".
   normally and skip image polling.
 - `/v1/responses` image model, or upstream SSE reports image generation ->
   preserve image generation instructions and image polling.
+- Responses stream has no `response.output_text.delta` but does include a
+  completed message item with `content[0].type="output_text"` -> Claude
+  `/v1/messages` clients still receive a `content_block_delta` before
+  `message_stop`.
+- Responses request has tools and latest user text is a local file read/list
+  intent -> return a synthetic Responses `function_call`; do not let the ChatGPT
+  Web upstream produce a successful empty text response.
 
 #### 5. Good/Base/Bad Cases
 
@@ -1154,6 +1173,11 @@ Responses contract locally instead of returning "endpoint not supported".
   returns an OpenAI Responses object with `output_text`.
 - Good: streaming `/v1/responses` emits `response.output_text.delta`,
   `response.output_item.done`, `response.completed`, then `[DONE]`.
+- Good: Claude `/v1/messages` via the Responses bridge receives text even when
+  the final message item is the only event carrying `output_text`.
+- Good: `/v1/responses` with `tools` and `input: "读取 AGENTS.md"` emits a
+  `function_call` item for the matching local tool, so Codex/Claude-style
+  clients can execute the tool and continue the turn.
 - Base: `/v1/chat/completions` behavior stays unchanged and still returns chat
   completion chunks.
 - Bad: returning raw `chat.completion` JSON/SSE from a `/v1/responses` request;
@@ -1173,6 +1197,12 @@ Responses contract locally instead of returning "endpoint not supported".
   do not inject image-generation instructions or enable image polling purely
   from text keywords, while chat-completions text prompts and Responses image
   models still do.
+- `relay/channel/openai`: regression test that a Claude stream converted from a
+  Responses stream with only `response.output_item.done` message text emits
+  `content_block_delta` and does not stop as an empty message.
+- `relay/channel/chatgptimg`: regression test that preemptive local tool
+  bridging is allowed for OpenAI Responses relay mode, not only Claude relay
+  format.
 
 #### 7. Wrong vs Correct
 
@@ -1189,6 +1219,141 @@ Correct:
 ```go
 // Convert Responses input to chatRequest, send it through ChatGPT Web chat,
 // then wrap the synthetic result back into Responses JSON/SSE before billing.
+```
+
+Wrong:
+
+```go
+case "response.output_item.done":
+    if streamResp.Item.Type != "function_call" {
+        break // drops item.type="message" text-only completions
+    }
+```
+
+Correct:
+
+```go
+case "response.output_item.done":
+    if streamResp.Item.Type == "message" {
+        sendMissingOutputTextDelta(streamResp.Item.Content)
+        break
+    }
+```
+
+---
+
+### ChatGPT Web deep research internal events
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `relay/channel/chatgptimg` ChatGPT Web deep-research
+  request payloads, SSE patch parsing, conversation mapping recovery, or
+  playground deep-research output.
+
+#### 2. Signatures
+
+- Request flag: `chatgpt_web_deep_research` / `deep_research` on compatible
+  chat payloads.
+- Upstream connector hint:
+  `connector:connector_openai_deep_research`.
+- SSE/parser entry points:
+  `CollectChatSSEEvent`, `collectChatPatchEvent`, `normalizeChatAssistantContent`,
+  and `ExtractLatestAssistantTextFromConversation`.
+
+#### 3. Contracts
+
+- Enabling deep research must send ChatGPT Web `system_hints` and user-message
+  metadata for `connector:connector_openai_deep_research`.
+- ChatGPT Web may stream an internal connector payload such as
+  `{"path":"/Deep Research App/implicit_link::connector_openai_deep_research/start",...}`.
+- That internal `implicit_link` payload is not assistant text and must not be
+  forwarded to OpenAI-compatible clients or the playground.
+- Suppression must handle both complete message snapshots and split SSE patch
+  deltas. Later normal assistant text in the same stream must still be emitted.
+- Some streams expose the internal payload as a partial `message` snapshot
+  before the JSON object is closed. Snapshot recovery must use the same
+  stateful suppression path as patch deltas; line-based filtering is not
+  sufficient.
+- Ordinary explanatory text that merely mentions
+  `implicit_link::connector_openai_deep_research` must be preserved unless it is
+  the ChatGPT Web internal `path` JSON object.
+- If the upstream stream contains only the deep-research internal start event
+  and no final assistant text, return a user-facing pending/status message
+  instead of an empty completion.
+- Before returning that pending/status message, poll the ChatGPT Web
+  conversation mapping for a bounded period when a conversation id is available.
+  Deep Research often completes asynchronously after the SSE start event.
+- ChatGPT Web may resolve the Deep Research connector to an embedded UI widget
+  instead of plain assistant text. If conversation mapping contains an
+  `api_tool.widget_state` message with `report_message`, extract that report as
+  assistant text; otherwise return an explicit compatibility message rather
+  than promising that the same stream will eventually contain a report.
+- ChatGPT Web text responses may return a `stream_handoff` event followed by
+  `[DONE]` before text deltas are delivered. Treat this as an asynchronous
+  handoff, poll conversation mapping briefly, and stream the recovered assistant
+  text when it appears.
+
+#### 4. Validation & Error Matrix
+
+- Deep-research internal JSON as one complete line -> remove the line from
+  recovered assistant text.
+- Deep-research internal JSON split across patch deltas -> suppress every
+  fragment until the JSON object is balanced.
+- Deep-research internal JSON exposed as a partial message snapshot -> suppress
+  it before streaming any delta to clients.
+- Normal text after the internal JSON -> emit normally.
+- Plain prose mentioning the connector marker -> preserve normally.
+- Internal start event with no final report in the same stream -> emit the
+  gateway pending/status message.
+- Internal start event with no final report yet, but conversation mapping later
+  contains final assistant text within the bounded wait -> stream/return that
+  final text instead of the pending/status message.
+- Internal start event followed by a tool message saying an embedded Deep
+  Research UI was displayed, but without `report_message` in widget state ->
+  return an explicit compatibility message and do not expose the tool/internal
+  JSON as assistant text.
+- Internal start event followed by an `api_tool.widget_state.report_message` ->
+  return the report message text.
+- `stream_handoff` with no text deltas -> wait briefly for conversation mapping
+  and return the recovered assistant text instead of an empty completion.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: playground deep research no longer displays raw
+  `/Deep Research App/implicit_link::.../start` JSON.
+- Good: a later `研究结果已完成` delta after the internal object reaches the
+  client as assistant text.
+- Good: if no later text arrives, the client sees a pending/status message
+  rather than an empty assistant response.
+- Base: normal ChatGPT Web chat streams remain unchanged.
+- Bad: hiding any text that contains the connector string, because users or
+  developers may discuss the marker as ordinary text.
+
+#### 6. Tests Required
+
+- `relay/channel/chatgptimg`: regression test for split deep-research
+  `implicit_link` patch suppression.
+- `relay/channel/chatgptimg`: regression test for complete mapping/message
+  content line suppression.
+- `relay/channel/chatgptimg`: regression test that ordinary explanatory text
+  containing the connector marker is preserved.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Treats every `/message/content/parts` patch value as assistant text.
+return appendNormalizedChatContent(state, value), false
+```
+
+Correct:
+
+```go
+// Filter ChatGPT Web internal Deep Research connector payloads before
+// appending user-visible assistant text.
+value = filterChatGPTWebDeepResearchInternalContent(state, value)
+return appendNormalizedChatContent(state, value), false
 ```
 
 ---

@@ -180,6 +180,43 @@ export function BalanceQueryDialog({
     return `${remainingText}/${formatImageCount(total)}`
   }
 
+  const formatImageQuotaWindow = (window: string | null | undefined) => {
+    const normalized = window?.trim().toLowerCase()
+    if (normalized === 'daily') return t('Likely daily')
+    if (normalized === 'weekly') return t('Likely weekly')
+    if (normalized === 'monthly') return t('Likely monthly')
+    if (normalized === 'resetting_soon') return t('Resetting soon')
+    return t('Unknown')
+  }
+
+  const formatResetCountdown = (
+    resetAt: number | null | undefined,
+    resetAfterSeconds: number | null | undefined
+  ) => {
+    if (!resetAt && resetAfterSeconds == null) return '-'
+
+    let seconds = Number(resetAfterSeconds)
+    if (!Number.isFinite(seconds) || seconds <= 0) {
+      seconds = resetAt
+        ? Math.floor(resetAt - Math.floor(Date.now() / 1000))
+        : 0
+    }
+    seconds = Math.max(0, Math.trunc(seconds))
+    if (seconds <= 0) return t('Resetting soon')
+
+    const days = Math.floor(seconds / 86400)
+    const hours = Math.floor((seconds % 86400) / 3600)
+    const minutes = Math.floor((seconds % 3600) / 60)
+
+    if (days > 0) {
+      return `${days} ${t('days')} ${hours} ${t('hours')}`
+    }
+    if (hours > 0) {
+      return `${hours} ${t('hours')} ${minutes} ${t('minutes')}`
+    }
+    return `${Math.max(1, minutes)} ${t('minutes')}`
+  }
+
   let currentValueDisplay = formatBalance(currentRow.balance)
   if (balance !== null) {
     currentValueDisplay = formatBalance(balance)
@@ -266,6 +303,25 @@ export function BalanceQueryDialog({
                   {formatDate(imageQuotaData?.image_quota_reset_at ?? 0)}
                 </span>
               </div>
+              <div className='flex items-center justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Estimated quota period')}
+                </span>
+                <span className='text-right font-medium'>
+                  {formatImageQuotaWindow(imageQuotaData?.image_quota_window)}
+                </span>
+              </div>
+              <div className='flex items-center justify-between gap-4'>
+                <span className='text-muted-foreground'>
+                  {t('Reset countdown')}
+                </span>
+                <span className='text-right font-medium'>
+                  {formatResetCountdown(
+                    imageQuotaData?.image_quota_reset_at,
+                    imageQuotaData?.image_quota_reset_after_seconds
+                  )}
+                </span>
+              </div>
               <div className='flex items-start justify-between gap-4'>
                 <span className='text-muted-foreground'>
                   {t('Blocked features')}
@@ -276,6 +332,11 @@ export function BalanceQueryDialog({
                     : t('None')}
                 </span>
               </div>
+              <p className='text-muted-foreground border-t pt-2 text-xs leading-relaxed'>
+                {t(
+                  'Quota period is estimated from the upstream reset time because ChatGPT Web does not label the window directly.'
+                )}
+              </p>
             </div>
           )}
 

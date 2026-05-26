@@ -176,6 +176,19 @@ func maskHostForPlainDomain(domain string) string {
 	return stars + "." + strings.Join(tail, ".")
 }
 
+func shouldPreservePlainDomainToken(token string) bool {
+	switch token {
+	case "response.created",
+		"response.completed",
+		"response.failed",
+		"response.error",
+		"response.incomplete":
+		return true
+	default:
+		return false
+	}
+}
+
 // MaskSensitiveInfo masks sensitive information like URLs, IPs, and domain names in a string
 // Example:
 // http://example.com -> http://***.com
@@ -241,6 +254,9 @@ func MaskSensitiveInfo(str string) string {
 
 	// Mask domain names without protocol (like openai.com, www.openai.com)
 	str = maskDomainPattern.ReplaceAllStringFunc(str, func(domain string) string {
+		if shouldPreservePlainDomainToken(domain) {
+			return domain
+		}
 		return maskHostForPlainDomain(domain)
 	})
 
