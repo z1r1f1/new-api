@@ -73,6 +73,9 @@ const (
 	// ContextKeyRelayInfo stores the request-scoped relay info after validation.
 	ContextKeyRelayInfo ContextKey = "relay_info"
 
+	// ContextKeyConsumeLogRecorded marks that a successful consume-log row was persisted for this request.
+	ContextKeyConsumeLogRecorded ContextKey = "consume_log_recorded"
+
 	// ContextKeyImageGenerationResponse stores an OpenAI-compatible image response
 	// captured by provider handlers so /v1/images/generations can be mirrored into drawing logs.
 	ContextKeyImageGenerationResponse ContextKey = "image_generation_response"

@@ -6,9 +6,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
 )
+
+func markConsumeLogRecorded(c *gin.Context) {
+	common.SetContextKey(c, constant.ContextKeyConsumeLogRecorded, true)
+}
 
 func configureIPBlacklistAutoBanForTest(t *testing.T, scope string, pathPrefixes string, rpm int) *system_setting.IPBlacklistSetting {
 	t.Helper()
@@ -74,6 +80,7 @@ func TestIPBlacklistBlocksMatchingClientIP(t *testing.T) {
 	router := gin.New()
 	router.Use(IPBlacklist())
 	router.GET("/ping", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "pong")
 	})
 
@@ -134,6 +141,7 @@ func TestIPBlacklistAutoBansHighRpmClientIP(t *testing.T) {
 	router := gin.New()
 	router.Use(IPBlacklist())
 	router.GET("/ping", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "pong")
 	})
 
@@ -149,8 +157,8 @@ func TestIPBlacklistAutoBansHighRpmClientIP(t *testing.T) {
 	req2.RemoteAddr = "203.0.113.9:12345"
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusForbidden {
-		t.Fatalf("second status = %d, want %d; body=%s", w2.Code, http.StatusForbidden, w2.Body.String())
+	if w2.Code != http.StatusOK {
+		t.Fatalf("second status = %d, want %d; body=%s", w2.Code, http.StatusOK, w2.Body.String())
 	}
 	if setting.List != "203.0.113.9" {
 		t.Fatalf("setting.List = %q, want auto-banned IP", setting.List)
@@ -162,6 +170,73 @@ func TestIPBlacklistAutoBansHighRpmClientIP(t *testing.T) {
 	router.ServeHTTP(w3, req3)
 	if w3.Code != http.StatusForbidden {
 		t.Fatalf("third status = %d, want %d; body=%s", w3.Code, http.StatusForbidden, w3.Body.String())
+	}
+}
+
+func TestIPBlacklistAutoBanCountsOnlySuccessfulConsumeLogs(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	setting := configureIPBlacklistAutoBanForTest(t, system_setting.IPAutoBanScopeRelay, "", 1)
+
+	router := gin.New()
+	router.Use(IPBlacklist())
+	router.POST("/v1/responses", func(c *gin.Context) {
+		c.String(http.StatusServiceUnavailable, "no channel")
+	})
+	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		c.String(http.StatusOK, "ok")
+	})
+
+	failedReq := httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	failedReq.RemoteAddr = "203.0.113.15:12345"
+	failedW := httptest.NewRecorder()
+	router.ServeHTTP(failedW, failedReq)
+	if failedW.Code != http.StatusServiceUnavailable {
+		t.Fatalf("failed status = %d, want %d; body=%s", failedW.Code, http.StatusServiceUnavailable, failedW.Body.String())
+	}
+	if setting.List != "" {
+		t.Fatalf("setting.List after failed request = %q, want empty", setting.List)
+	}
+
+	unloggedReq := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	unloggedReq.RemoteAddr = "203.0.113.15:12345"
+	unloggedW := httptest.NewRecorder()
+	router.ServeHTTP(unloggedW, unloggedReq)
+	if unloggedW.Code != http.StatusOK {
+		t.Fatalf("unlogged status = %d, want %d; body=%s", unloggedW.Code, http.StatusOK, unloggedW.Body.String())
+	}
+	if setting.List != "" {
+		t.Fatalf("setting.List after unlogged success = %q, want empty", setting.List)
+	}
+}
+
+func TestRecordAutoBanHitReportsCountWindowAndThreshold(t *testing.T) {
+	originalNow := ipAutoBanNow
+	t.Cleanup(func() {
+		ipAutoBanNow = originalNow
+		ipAutoBanCounters = make(map[string]ipAutoBanCounter)
+	})
+
+	ipAutoBanNow = func() time.Time {
+		return time.Unix(600, 0)
+	}
+	ipAutoBanCounters = make(map[string]ipAutoBanCounter)
+
+	first := recordAutoBanHit("203.0.113.99", 2)
+	if first.count != 1 || first.threshold != 2 || first.windowMinute != 10 || first.banned {
+		t.Fatalf("first hit = %+v, want count=1 threshold=2 window=10 banned=false", first)
+	}
+
+	second := recordAutoBanHit("203.0.113.99", 2)
+	if second.count != 2 || second.threshold != 2 || second.windowMinute != 10 || !second.banned {
+		t.Fatalf("second hit = %+v, want count=2 threshold=2 window=10 banned=true", second)
+	}
+
+	ipAutoBanNow = func() time.Time {
+		return time.Unix(660, 0)
+	}
+	nextWindow := recordAutoBanHit("203.0.113.99", 2)
+	if nextWindow.count != 1 || nextWindow.windowMinute != 11 || nextWindow.banned {
+		t.Fatalf("next window hit = %+v, want count=1 window=11 banned=false", nextWindow)
 	}
 }
 
@@ -195,6 +270,7 @@ func TestIPBlacklistAutoBanRelayScopeCountsModelAPI(t *testing.T) {
 	router := gin.New()
 	router.Use(IPBlacklist())
 	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "ok")
 	})
 
@@ -203,8 +279,8 @@ func TestIPBlacklistAutoBanRelayScopeCountsModelAPI(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusForbidden, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 	if setting.List != "203.0.113.12" {
 		t.Fatalf("setting.List = %q, want auto-banned IP", setting.List)
@@ -218,6 +294,7 @@ func TestIPBlacklistAutoBanAllScopeCountsDashboardAPI(t *testing.T) {
 	router := gin.New()
 	router.Use(IPBlacklist())
 	router.GET("/api/status", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "ok")
 	})
 
@@ -226,8 +303,8 @@ func TestIPBlacklistAutoBanAllScopeCountsDashboardAPI(t *testing.T) {
 	w := httptest.NewRecorder()
 	router.ServeHTTP(w, req)
 
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusForbidden, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
 	}
 	if setting.List != "203.0.113.13" {
 		t.Fatalf("setting.List = %q, want auto-banned IP", setting.List)
@@ -244,6 +321,7 @@ func TestIPBlacklistAutoBanCustomScopeCountsOnlyConfiguredPrefixes(t *testing.T)
 		c.String(http.StatusOK, "ok")
 	})
 	router.POST("/api/token/", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "ok")
 	})
 
@@ -262,8 +340,8 @@ func TestIPBlacklistAutoBanCustomScopeCountsOnlyConfiguredPrefixes(t *testing.T)
 	req2.RemoteAddr = "203.0.113.14:12345"
 	w2 := httptest.NewRecorder()
 	router.ServeHTTP(w2, req2)
-	if w2.Code != http.StatusForbidden {
-		t.Fatalf("matching status = %d, want %d; body=%s", w2.Code, http.StatusForbidden, w2.Body.String())
+	if w2.Code != http.StatusOK {
+		t.Fatalf("matching status = %d, want %d; body=%s", w2.Code, http.StatusOK, w2.Body.String())
 	}
 	if setting.List != "203.0.113.14" {
 		t.Fatalf("setting.List = %q, want auto-banned IP", setting.List)
@@ -308,6 +386,7 @@ func TestIPBlacklistAutoBanWhitelistSkipsClientIP(t *testing.T) {
 	router := gin.New()
 	router.Use(IPBlacklist())
 	router.GET("/ping", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "pong")
 	})
 
@@ -374,10 +453,11 @@ func TestIPBlacklistAutoBanUsesForwardedClientWhenProxyIsWhitelisted(t *testing.
 	}
 	router.Use(IPBlacklist())
 	router.GET("/ping", func(c *gin.Context) {
+		markConsumeLogRecorded(c)
 		c.String(http.StatusOK, "pong")
 	})
 
-	for i := 1; i <= 2; i++ {
+	for i := 1; i <= 3; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/ping", nil)
 		req.RemoteAddr = "127.0.0.1:12345"
 		req.Header.Set("X-Real-IP", "203.0.113.44")
@@ -387,8 +467,11 @@ func TestIPBlacklistAutoBanUsesForwardedClientWhenProxyIsWhitelisted(t *testing.
 		if i == 1 && w.Code != http.StatusOK {
 			t.Fatalf("first status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
 		}
-		if i == 2 && w.Code != http.StatusForbidden {
-			t.Fatalf("second status = %d, want %d; body=%s", w.Code, http.StatusForbidden, w.Body.String())
+		if i == 2 && w.Code != http.StatusOK {
+			t.Fatalf("second status = %d, want %d; body=%s", w.Code, http.StatusOK, w.Body.String())
+		}
+		if i == 3 && w.Code != http.StatusForbidden {
+			t.Fatalf("third status = %d, want %d; body=%s", w.Code, http.StatusForbidden, w.Body.String())
 		}
 	}
 

@@ -380,6 +380,13 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
   because it is a local/reverse-proxy address, it may fall through to the next
   parsed forwarded candidate and count the first non-whitelisted client IP.
   Persist triggered IPs by updating `ip_blacklist_setting.list`.
+- Automatic ban counts only successful requests that persisted a consume-log
+  row. `model.RecordConsumeLog` must set `ContextKeyConsumeLogRecorded` after
+  `LOG_DB.Create` succeeds, and `middleware.IPBlacklist` may increment the
+  auto-ban counter only after `c.Next()` when the response status is 2xx and
+  that context marker is present. Early relay failures such as 503 "no
+  available channel", auth rejects, and dashboard/API requests without a
+  consume log must not count toward the automatic-ban RPM.
 - `auto_ban_enabled` defaults to true while `auto_ban_rpm=0` keeps the feature
   inert by default. This preserves compatibility for deployments that set a
   positive threshold before the explicit enable key existed.
@@ -404,7 +411,13 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 - `enabled=true`, malformed client IP -> HTTP 403 `无法解析客户端 IP 地址`.
 - `enabled=true`, client IP in list -> HTTP 403 `当前 IP 已被禁止访问`.
 - `auto_ban_enabled=true`, `auto_ban_rpm<=0` -> no automatic ban.
-- `auto_ban_enabled=true`, request count for the selected non-whitelisted client IP reaches `auto_ban_rpm` in the current minute -> append the IP to `list`, persist `ip_blacklist_setting.list`, return HTTP 403 `当前 IP 请求频率过高，已被自动封禁`.
+- `auto_ban_enabled=true`, successful consume-log count for the selected
+  non-whitelisted client IP reaches `auto_ban_rpm` in the current minute ->
+  append the IP to `list` and persist `ip_blacklist_setting.list`; the
+  threshold-crossing request has already completed successfully, so subsequent
+  matching requests return HTTP 403 `当前 IP 已被禁止访问`.
+- Matching path returns 4xx/5xx or does not persist a consume log -> do not
+  count toward automatic ban.
 - Client IP in `auto_ban_whitelist` -> skip automatic ban counting for that IP, but still enforce the manual blacklist.
 - `auto_ban_scope=relay`, `/api/status` -> do not count toward automatic ban.
 - `auto_ban_scope=relay`, `/v1/chat/completions` -> count toward automatic ban.
@@ -416,7 +429,9 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 
 - Good: `203.0.113.8` with `203.0.113.0/24` is blocked.
 - Good: `198.51.100.10` with `203.0.113.0/24` is allowed.
-- Good: `auto_ban_rpm=60` adds `203.0.113.9` to the persisted blacklist when the same selected client IP reaches 60 requests in one minute.
+- Good: `auto_ban_rpm=60` adds `203.0.113.9` to the persisted blacklist when
+  the same selected client IP reaches 60 successful consume-log requests in one
+  minute.
 - Good: `203.0.113.10` in `auto_ban_whitelist` is not auto-banned even when it exceeds the RPM threshold.
 - Good: `127.0.0.1` in `auto_ban_whitelist` with `X-Real-IP: 203.0.113.9`
   counts and bans `203.0.113.9`, not the local reverse proxy.
@@ -424,6 +439,9 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
   loads from automatically banning a user who has no model relay traffic.
 - Good: `auto_ban_scope=custom` with `/api/token` only counts token endpoints,
   not unrelated `/api/status` checks.
+- Good: repeated `/v1/responses` requests that fail before consume-log
+  persistence, for example 503 no-available-channel responses, do not trigger
+  automatic ban even if their raw GIN RPM exceeds the threshold.
 - Base: disabled manual blacklist with automatic ban disabled and any list is allowed.
 - Bad: adding the middleware only to `/api`, leaving `/v1` relay or frontend routes unprotected.
 - Bad: auto-banning every `X-Forwarded-For` value; spoofed headers could ban unrelated victims. Select one non-whitelisted client candidate for automatic counting.
@@ -438,6 +456,10 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
   reverse-proxy fallback from a whitelisted proxy IP to a forwarded client IP.
 - Middleware-test automatic ban scope behavior for default/relay, all, and
   custom-prefix modes.
+- Middleware-test that 4xx/5xx relay failures and 2xx responses without
+  `ContextKeyConsumeLogRecorded` do not count toward automatic ban.
+- Model-test that `RecordConsumeLog` marks `ContextKeyConsumeLogRecorded` only
+  after successful log persistence.
 
 #### 7. Wrong vs Correct
 
@@ -474,7 +496,11 @@ clientIP, ok := selectAutoBanClientIP(blacklistClientIPCandidates(c), whitelist)
 if !ok {
     return
 }
-countAndMaybeBan(clientIP.ip.String())
+if c.Writer.Status() >= http.StatusOK &&
+    c.Writer.Status() < http.StatusMultipleChoices &&
+    common.GetContextKeyBool(c, constant.ContextKeyConsumeLogRecorded) {
+    countAndMaybeBan(clientIP.ip.String())
+}
 ```
 
 ### ChatGPT Web image requests and playground async image tasks

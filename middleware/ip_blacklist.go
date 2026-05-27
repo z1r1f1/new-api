@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -17,6 +19,13 @@ import (
 type ipAutoBanCounter struct {
 	windowMinute int64
 	count        int
+}
+
+type ipAutoBanHit struct {
+	windowMinute int64
+	count        int
+	threshold    int
+	banned       bool
 }
 
 var (
@@ -70,11 +79,8 @@ func IPBlacklist() gin.HandlerFunc {
 			}
 		}
 
-		if autoBanIPIfNeeded(c, setting, clientIPs) {
-			return
-		}
-
 		c.Next()
+		autoBanIPAfterSuccessfulConsumeLog(c, setting, clientIPs)
 	}
 }
 
@@ -125,32 +131,42 @@ func blacklistClientIPCandidates(c *gin.Context) []blacklistClientIP {
 	return candidates
 }
 
-func autoBanIPIfNeeded(c *gin.Context, setting *system_setting.IPBlacklistSetting, candidates []blacklistClientIP) bool {
+func autoBanIPAfterSuccessfulConsumeLog(c *gin.Context, setting *system_setting.IPBlacklistSetting, candidates []blacklistClientIP) {
 	if !setting.AutoBanEnabled || setting.AutoBanRpm <= 0 || len(candidates) == 0 {
-		return false
+		return
 	}
 	if !shouldCountAutoBanRequest(c.Request.URL.Path, setting) {
-		return false
+		return
+	}
+	if c.Writer.Status() < http.StatusOK || c.Writer.Status() >= http.StatusMultipleChoices {
+		return
+	}
+	if !common.GetContextKeyBool(c, constant.ContextKeyConsumeLogRecorded) {
+		return
 	}
 
 	clientIP, ok := selectAutoBanClientIP(candidates, common.SplitIPList(setting.AutoBanWhitelist))
 	if !ok {
-		return false
+		return
 	}
 
-	if !recordAutoBanHit(clientIP.ip.String(), setting.AutoBanRpm) {
-		return false
+	hit := recordAutoBanHit(clientIP.ip.String(), setting.AutoBanRpm)
+	if !hit.banned {
+		return
 	}
 
 	if addAutoBannedIP(setting, clientIP.ip.String()) {
-		logger.LogWarn(c, "auto-banned high RPM IP "+clientIP.raw+" from "+clientIP.source)
+		logger.LogWarn(c, fmt.Sprintf(
+			"auto-banned high RPM IP %s from %s: count=%d threshold=%d scope=%s path=%s window_minute=%d",
+			clientIP.raw,
+			clientIP.source,
+			hit.count,
+			hit.threshold,
+			normalizeAutoBanScope(setting.AutoBanScope),
+			c.Request.URL.Path,
+			hit.windowMinute,
+		))
 	}
-	c.JSON(http.StatusForbidden, gin.H{
-		"success": false,
-		"message": "当前 IP 请求频率过高，已被自动封禁",
-	})
-	c.Abort()
-	return true
 }
 
 func shouldCountAutoBanRequest(path string, setting *system_setting.IPBlacklistSetting) bool {
@@ -221,7 +237,7 @@ func selectAutoBanClientIP(candidates []blacklistClientIP, whitelist []string) (
 	return blacklistClientIP{}, false
 }
 
-func recordAutoBanHit(ip string, threshold int) bool {
+func recordAutoBanHit(ip string, threshold int) ipAutoBanHit {
 	nowMinute := ipAutoBanNow().Unix() / 60
 
 	ipAutoBanMu.Lock()
@@ -242,7 +258,12 @@ func recordAutoBanHit(ip string, threshold int) bool {
 		}
 	}
 
-	return counter.count >= threshold
+	return ipAutoBanHit{
+		windowMinute: counter.windowMinute,
+		count:        counter.count,
+		threshold:    threshold,
+		banned:       counter.count >= threshold,
+	}
 }
 
 func addAutoBannedIP(setting *system_setting.IPBlacklistSetting, ip string) bool {
