@@ -88,8 +88,23 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendParamOverrideInfo(relayInfo, other)
 	appendFastServiceTierInfo(ctx, relayInfo, other)
 	appendStreamStatus(relayInfo, other)
+	appendHTTPToWebsocketConversionInfo(ctx, other)
 	appendChatGPTWebTimingInfo(ctx, other)
 	return other
+}
+
+func appendHTTPToWebsocketConversionInfo(ctx *gin.Context, other map[string]interface{}) {
+	if ctx == nil || other == nil {
+		return
+	}
+	if status := getContextStringValue(ctx, string(constant.ContextKeyHTTPToWebsocketConversionStatus)); status != "" {
+		other["http_to_websocket_conversion_status"] = status
+	}
+	if value, ok := ctx.Get(string(constant.ContextKeyHTTPToWebsocketConversionUsed)); ok {
+		if used, ok := value.(bool); ok {
+			other["http_to_websocket_conversion_used"] = used
+		}
+	}
 }
 
 func appendServiceTierInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}, other map[string]interface{}) {

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
@@ -49,6 +50,25 @@ func TestGenerateTextOtherInfoRecordsChatGPTWebTiming(t *testing.T) {
 	}
 	if rawTiming["stream_open_ms"] != int64(12) {
 		t.Fatalf("expected stream_open_ms=12, got %#v", rawTiming["stream_open_ms"])
+	}
+}
+
+func TestGenerateTextOtherInfoRecordsHTTPToWebsocketConversionStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"gpt-5.5"}`))
+	ctx.Set(string(constant.ContextKeyHTTPToWebsocketConversionStatus), "converted")
+	ctx.Set(string(constant.ContextKeyHTTPToWebsocketConversionUsed), true)
+	now := time.Now()
+	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+
+	if other["http_to_websocket_conversion_status"] != "converted" {
+		t.Fatalf("expected converted websocket status, got %#v", other["http_to_websocket_conversion_status"])
+	}
+	if other["http_to_websocket_conversion_used"] != true {
+		t.Fatalf("expected websocket conversion used=true, got %#v", other["http_to_websocket_conversion_used"])
 	}
 }
 

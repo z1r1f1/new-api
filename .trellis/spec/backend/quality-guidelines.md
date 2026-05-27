@@ -138,6 +138,31 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### HTTP-to-WebSocket relay conversion
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `relay/http_to_websocket.go`, `relay/channel/http_to_websocket.go`, provider adaptor methods named `DoHTTPToWebsocketRequest`, or the global setting `global.http_to_websocket_conversion_enabled`.
+
+#### 2. Contracts
+
+- The global switch defaults to disabled. When enabled, only text HTTP relay modes currently eligible in `relay/http_to_websocket.go` may attempt conversion; native realtime/websocket, image, task, and channel-test paths must not be forced through this adapter.
+- Provider adaptors opt in by implementing `DoHTTPToWebsocketRequest`. Unsupported adaptors must fall back to their normal HTTP path and record `http_to_websocket_conversion_status=unsupported`.
+- Converted requests must use a replayable upstream request body so a websocket dial/write failure can safely fall back to the normal HTTP request with the same JSON payload.
+- The generic upstream websocket adapter derives the target URL by rewriting `http`/`https` to `ws`/`wss`, sends the converted upstream request body as one websocket text message, and exposes upstream websocket messages back to existing response handlers as either:
+  - SSE `data: ...\n\n` frames for stream requests; or
+  - the first websocket message as the JSON body for non-stream requests.
+- Successful conversion records `http_to_websocket_conversion_status=converted` and `http_to_websocket_conversion_used=true` in consume-log `Other`.
+- Websocket converter failure records `http_to_websocket_conversion_status=fallback_error` and `http_to_websocket_conversion_used=false`, then retries the same request through the normal HTTP adaptor path.
+- Do not log websocket request bodies, auth headers, cookies, or upstream signed URLs.
+
+#### 3. Tests Required
+
+- `relay`: regression test that a converter failure falls back to HTTP and replays the original request body.
+- `relay`: adaptor opt-in test for every provider adaptor that should support the conversion interface.
+- `relay/channel`: websocket adapter tests proving stream messages become SSE frames and non-stream messages become an HTTP JSON body.
+- `service`: consume-log `Other` test proving conversion status and used flag are persisted when present on the Gin context.
+
 ### Relay first-byte timeout and channel retry
 
 #### 1. Scope / Trigger

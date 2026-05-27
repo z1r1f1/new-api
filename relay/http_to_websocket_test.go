@@ -4,10 +4,13 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
+	"github.com/QuantumNous/new-api/relay/channel/codex"
+	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -192,6 +195,67 @@ func TestDoRequestWithOptionalHTTPToWebsocketFallsBackWhenUnsupported(t *testing
 	}
 }
 
+type httpToWebsocketFailingAdaptor struct {
+	httpToWebsocketTestAdaptor
+	converterBody  string
+	fallbackBody   string
+	fallbackCalled bool
+}
+
+func (a *httpToWebsocketFailingAdaptor) DoHTTPToWebsocketRequest(_ *gin.Context, _ *relaycommon.RelayInfo, requestBody io.Reader) (*http.Response, error) {
+	body, _ := io.ReadAll(requestBody)
+	a.converterBody = string(body)
+	return nil, errors.New("websocket upstream failed")
+}
+
+func (a *httpToWebsocketFailingAdaptor) DoRequest(_ *gin.Context, _ *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
+	body, _ := io.ReadAll(requestBody)
+	a.fallbackBody = string(body)
+	a.fallbackCalled = true
+	return &http.Response{StatusCode: http.StatusOK}, nil
+}
+
+func TestDoRequestWithOptionalHTTPToWebsocketFallsBackWithReplayableBodyWhenConverterFails(t *testing.T) {
+	withHTTPToWebsocketConversionSetting(t, true)
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(nil)
+	adaptor := &httpToWebsocketFailingAdaptor{}
+	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeResponses}
+
+	resp, err := doRequestWithOptionalHTTPToWebsocket(ctx, info, adaptor, strings.NewReader(`{"model":"gpt-5.5"}`))
+	if err != nil {
+		t.Fatalf("doRequestWithOptionalHTTPToWebsocket returned error: %v", err)
+	}
+	if _, ok := resp.(*http.Response); !ok {
+		t.Fatalf("expected fallback *http.Response, got %T", resp)
+	}
+	if adaptor.converterBody != `{"model":"gpt-5.5"}` {
+		t.Fatalf("expected converter to receive request body, got %q", adaptor.converterBody)
+	}
+	if !adaptor.fallbackCalled {
+		t.Fatal("expected normal HTTP fallback after websocket converter failure")
+	}
+	if adaptor.fallbackBody != adaptor.converterBody {
+		t.Fatalf("expected fallback to replay original request body, converter=%q fallback=%q", adaptor.converterBody, adaptor.fallbackBody)
+	}
+	if got := ctx.GetString(httpToWebsocketConversionStatusKey); got != "fallback_error" {
+		t.Fatalf("expected fallback_error status, got %q", got)
+	}
+	if used, _ := ctx.Get(httpToWebsocketConversionUsedKey); used != false {
+		t.Fatalf("expected websocket used=false after fallback, got %#v", used)
+	}
+}
+
+func TestOpenAIAndCodexAdaptorsSupportHTTPToWebsocketConversion(t *testing.T) {
+	if _, ok := any(&openai.Adaptor{}).(httpToWebsocketConverter); !ok {
+		t.Fatal("expected OpenAI adaptor to implement HTTP-to-websocket conversion")
+	}
+	if _, ok := any(&codex.Adaptor{}).(httpToWebsocketConverter); !ok {
+		t.Fatal("expected Codex adaptor to implement HTTP-to-websocket conversion")
+	}
+}
+
 var _ channel.Adaptor = (*httpToWebsocketTestAdaptor)(nil)
 var _ channel.Adaptor = (*httpToWebsocketUnsupportedAdaptor)(nil)
 var _ channel.Adaptor = (*httpToWebsocketDisabledAdaptor)(nil)
+var _ channel.Adaptor = (*httpToWebsocketFailingAdaptor)(nil)

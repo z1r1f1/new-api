@@ -79,4 +79,9 @@ const (
 	// ContextKeyImageGenerationResponse stores an OpenAI-compatible image response
 	// captured by provider handlers so /v1/images/generations can be mirrored into drawing logs.
 	ContextKeyImageGenerationResponse ContextKey = "image_generation_response"
+
+	// ContextKeyHTTPToWebsocketConversionStatus stores whether an eligible HTTP relay
+	// request was converted to an upstream websocket request, fell back, or was unsupported.
+	ContextKeyHTTPToWebsocketConversionStatus ContextKey = "http_to_websocket_conversion_status"
+	ContextKeyHTTPToWebsocketConversionUsed   ContextKey = "http_to_websocket_conversion_used"
 )
