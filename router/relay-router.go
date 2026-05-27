@@ -100,6 +100,10 @@ func SetRelayRouter(router *gin.Engine) {
 		wsRouter.GET("/realtime", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIRealtime)
 		})
+		// Compatibility route for clients that attempt Responses over WebSocket.
+		wsRouter.GET("/responses", func(c *gin.Context) {
+			controller.Relay(c, types.RelayFormatOpenAIRealtime)
+		})
 	}
 	{
 		//http router

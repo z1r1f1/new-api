@@ -1001,6 +1001,73 @@ httpRouter.POST("/message", func(c *gin.Context) {
 })
 ```
 
+### Responses websocket route compatibility alias
+
+#### 1. Scope / Trigger
+
+- Trigger: any change to relay route registration for OpenAI Responses or
+  realtime-compatible websocket endpoints.
+- Some clients attempt websocket transport against `/v1/responses` even though
+  the canonical realtime websocket endpoint is `/v1/realtime`.
+
+#### 2. Signatures
+
+- Canonical HTTP Responses route:
+  `POST /v1/responses` -> `controller.Relay(c, types.RelayFormatOpenAIResponses)`.
+- Canonical realtime websocket route:
+  `GET /v1/realtime` -> `controller.Relay(c, types.RelayFormatOpenAIRealtime)`.
+- Compatibility websocket route:
+  `GET /v1/responses` -> `controller.Relay(c, types.RelayFormatOpenAIRealtime)`.
+
+#### 3. Contracts
+
+- `GET /v1/responses` must be a websocket compatibility alias only; it must
+  share the same `/v1` relay middleware chain as `/v1/realtime`, including token
+  auth, model request rate limiting, and channel distribution.
+- Do not change `POST /v1/responses` semantics. Native Responses HTTP/SSE
+  requests must continue to use `RelayFormatOpenAIResponses`.
+- Do not implement a separate controller for the alias; separate websocket logic
+  can drift from the realtime relay path.
+
+#### 4. Validation & Error Matrix
+
+- `POST /v1/responses` -> OpenAI Responses HTTP relay path.
+- `GET /v1/realtime` -> OpenAI realtime websocket relay path.
+- `GET /v1/responses` -> same OpenAI realtime websocket relay path.
+- Unsupported methods such as `POST /v1/realtime` or `GET /v1/responses/compact`
+  -> unchanged router behavior.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a websocket client configured with `/v1/responses` reaches the same
+  realtime relay path as `/v1/realtime`.
+- Base: ordinary HTTP/SSE Responses clients continue using `POST /v1/responses`.
+- Bad: routing `GET /v1/responses` through `RelayFormatOpenAIResponses`, because
+  that path expects an HTTP request body rather than a websocket upgrade.
+
+#### 6. Tests Required
+
+- `router`: regression test that both `POST /v1/responses` and
+  `GET /v1/responses` are registered.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+httpRouter.GET("/responses", func(c *gin.Context) {
+    controller.Relay(c, types.RelayFormatOpenAIResponses)
+})
+```
+
+Correct:
+
+```go
+wsRouter.GET("/responses", func(c *gin.Context) {
+    controller.Relay(c, types.RelayFormatOpenAIRealtime)
+})
+```
+
 ### Codex responses stream default
 
 #### 1. Scope / Trigger
