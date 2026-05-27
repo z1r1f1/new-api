@@ -197,6 +197,13 @@ func isPlaygroundPath(path string) bool {
 	return strings.HasPrefix(path, "/pg/")
 }
 
+func isRealtimeWebSocketModelQueryRequest(c *gin.Context) bool {
+	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
+		return true
+	}
+	return c.Request.Method == http.MethodGet && c.Request.URL.Path == "/v1/responses"
+}
+
 func getModelFromRequest(c *gin.Context) (*ModelRequest, error) {
 	if strings.HasPrefix(c.Request.Header.Get("Content-Type"), "application/json") {
 		modelRequest, err := getModelFromJSONBody(c)
@@ -350,14 +357,14 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 			modelRequest.Model = modelName
 		}
 		c.Set("relay_mode", relayMode)
-	} else if !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+	} else if !isRealtimeWebSocketModelQueryRequest(c) && !strings.HasPrefix(c.Request.URL.Path, "/v1/audio/transcriptions") && !strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
 		req, err := getModelFromRequest(c)
 		if err != nil {
 			return nil, false, err
 		}
 		modelRequest.Model = req.Model
 	}
-	if strings.HasPrefix(c.Request.URL.Path, "/v1/realtime") {
+	if isRealtimeWebSocketModelQueryRequest(c) {
 		//wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01
 		modelRequest.Model = c.Query("model")
 	}

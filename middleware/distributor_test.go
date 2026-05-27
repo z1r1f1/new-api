@@ -13,6 +13,29 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func newGetModelRequestTestContext(method, target string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(method, target, nil)
+	return ctx
+}
+
+func TestGetModelRequestReadsResponsesWebSocketCompatibilityModelFromQuery(t *testing.T) {
+	ctx := newGetModelRequestTestContext(http.MethodGet, "/v1/responses?model=gpt-4o-realtime-preview")
+
+	req, shouldSelectChannel, err := getModelRequest(ctx)
+	if err != nil {
+		t.Fatalf("expected responses websocket compatibility request to parse, got error: %v", err)
+	}
+	if !shouldSelectChannel {
+		t.Fatal("expected responses websocket compatibility request to select a channel")
+	}
+	if req.Model != "gpt-4o-realtime-preview" {
+		t.Fatalf("expected model from query, got %q", req.Model)
+	}
+}
+
 func newChannelAffinityRecordTestContext(status int, info *relaycommon.RelayInfo) *gin.Context {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

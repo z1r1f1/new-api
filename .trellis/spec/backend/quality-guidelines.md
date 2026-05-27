@@ -1024,6 +1024,9 @@ httpRouter.POST("/message", func(c *gin.Context) {
 - `GET /v1/responses` must be a websocket compatibility alias only; it must
   share the same `/v1` relay middleware chain as `/v1/realtime`, including token
   auth, model request rate limiting, and channel distribution.
+- The distributor must extract the selected model for both `/v1/realtime` and
+  `GET /v1/responses` from the `model` query parameter. WebSocket compatibility
+  GET requests do not carry a JSON request body.
 - Do not change `POST /v1/responses` semantics. Native Responses HTTP/SSE
   requests must continue to use `RelayFormatOpenAIResponses`.
 - Do not implement a separate controller for the alias; separate websocket logic
@@ -1034,6 +1037,8 @@ httpRouter.POST("/message", func(c *gin.Context) {
 - `POST /v1/responses` -> OpenAI Responses HTTP relay path.
 - `GET /v1/realtime` -> OpenAI realtime websocket relay path.
 - `GET /v1/responses` -> same OpenAI realtime websocket relay path.
+- `GET /v1/responses?model=<name>` -> distributor selects channels for
+  `<name>` instead of returning `Model name not specified`.
 - Unsupported methods such as `POST /v1/realtime` or `GET /v1/responses/compact`
   -> unchanged router behavior.
 
@@ -1049,6 +1054,8 @@ httpRouter.POST("/message", func(c *gin.Context) {
 
 - `router`: regression test that both `POST /v1/responses` and
   `GET /v1/responses` are registered.
+- `middleware`: regression test that `GET /v1/responses?model=<name>` extracts
+  the model from the query string before channel selection.
 
 #### 7. Wrong vs Correct
 
