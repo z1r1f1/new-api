@@ -58,6 +58,8 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  getRequestConversionChain,
+  shouldShowRequestConversion,
 } from '../../lib/format'
 import {
   getLogTypeConfig,
@@ -472,18 +474,12 @@ export function DetailsDialog(props: DetailsDialogProps) {
     return `ID: ${id}`
   })()
 
-  const conversionChain =
-    other && Array.isArray(other.request_conversion)
-      ? other.request_conversion.filter(Boolean)
-      : []
+  const conversionChain = getRequestConversionChain(other)
   const conversionLabel =
     conversionChain.length <= 1
       ? t('Native format')
       : conversionChain.join(' -> ')
-  const showConversion =
-    props.isAdmin &&
-    props.log.type !== 6 &&
-    (other?.request_path || conversionChain.length > 0)
+  const showConversion = shouldShowRequestConversion(other, props.log.type)
 
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
@@ -657,7 +653,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
               )}
             </div>
 
-            {/* Request conversion (admin only, not for refund) */}
+            {/* Request conversion (not for refund) */}
             {showConversion && (
               <DetailSection label={t('Request Conversion')}>
                 <div className='relative min-w-0'>
@@ -1102,35 +1098,33 @@ export function DetailsDialog(props: DetailsDialogProps) {
             )}
 
             {/* Param override */}
-            {other?.po &&
-              Array.isArray(other.po) &&
-              other.po.length > 0 && (
-                <DetailSection
-                  icon={<Settings2 className='size-3.5' aria-hidden='true' />}
-                  label={`${t('Param Override')} (${other.po.length})`}
-                >
-                  {other.po.filter(Boolean).map((line, idx) => {
-                    const parsed = parseAuditLine(line)
-                    if (!parsed) return null
-                    return (
-                      <div
-                        key={idx}
-                        className='bg-background/60 flex min-w-0 flex-col gap-1.5 rounded border p-2 sm:flex-row sm:items-start sm:gap-2'
-                      >
-                        <StatusBadge
-                          variant='neutral'
-                          label={getParamOverrideActionLabel(parsed.action, t)}
-                          className='shrink-0 font-medium'
-                          copyable={false}
-                        />
-                        <span className='min-w-0 font-mono text-[11px] leading-relaxed break-all sm:break-words'>
-                          {parsed.content}
-                        </span>
-                      </div>
-                    )
-                  })}
-                </DetailSection>
-              )}
+            {other?.po && Array.isArray(other.po) && other.po.length > 0 && (
+              <DetailSection
+                icon={<Settings2 className='size-3.5' aria-hidden='true' />}
+                label={`${t('Param Override')} (${other.po.length})`}
+              >
+                {other.po.filter(Boolean).map((line, idx) => {
+                  const parsed = parseAuditLine(line)
+                  if (!parsed) return null
+                  return (
+                    <div
+                      key={idx}
+                      className='bg-background/60 flex min-w-0 flex-col gap-1.5 rounded border p-2 sm:flex-row sm:items-start sm:gap-2'
+                    >
+                      <StatusBadge
+                        variant='neutral'
+                        label={getParamOverrideActionLabel(parsed.action, t)}
+                        className='shrink-0 font-medium'
+                        copyable={false}
+                      />
+                      <span className='min-w-0 font-mono text-[11px] leading-relaxed break-all sm:break-words'>
+                        {parsed.content}
+                      </span>
+                    </div>
+                  )
+                })}
+              </DetailSection>
+            )}
 
             {/* Content */}
             {details && (

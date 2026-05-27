@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { formatTimestampToDate } from '@/lib/format'
 import type { StatusBadgeProps } from '@/components/status-badge'
 import {
   BILLING_PRICING_VARS,
@@ -27,6 +28,9 @@ import type { UsageLog } from '../data/schema'
 import type { LogOtherData } from '../types'
 
 export { normalizeTierLabel }
+
+export type TimestampUnit = 'seconds' | 'milliseconds' | 'auto'
+export type TimestampValue = number | string | null | undefined
 
 const PARAM_OVERRIDE_ACTION_MAP: Record<string, string> = {
   set: 'Set',
@@ -91,6 +95,21 @@ export function isViolationFeeLog(other: LogOtherData | null): boolean {
   )
 }
 
+export function getRequestConversionChain(
+  other: LogOtherData | null
+): string[] {
+  if (!other || !Array.isArray(other.request_conversion)) return []
+  return other.request_conversion.filter(Boolean)
+}
+
+export function shouldShowRequestConversion(
+  other: LogOtherData | null,
+  logType: number
+): boolean {
+  if (logType === 6) return false
+  return Boolean(other?.request_path || getRequestConversionChain(other).length)
+}
+
 /**
  * Parse the 'other' field from JSON string to object
  */
@@ -147,6 +166,48 @@ export function getResponseTimeColor(
 ): 'success' | 'warning' | 'danger' {
   if (completionTokens < 100 || seconds <= 0) return getTimeColor(seconds)
   return getThroughputColor(completionTokens / seconds)
+}
+
+function normalizeUnixTimestamp(timestamp: TimestampValue): number | null {
+  if (timestamp === null || timestamp === undefined || timestamp === '') {
+    return null
+  }
+
+  const value =
+    typeof timestamp === 'number' ? timestamp : Number(timestamp.trim())
+
+  if (!Number.isFinite(value) || value === 0 || value === -1) return null
+  return value
+}
+
+export function detectUnixTimestampUnit(
+  timestamp?: TimestampValue
+): Exclude<TimestampUnit, 'auto'> {
+  const value = normalizeUnixTimestamp(timestamp)
+  if (value === null) return 'seconds'
+  return Math.abs(value) >= 1_000_000_000_000 ? 'milliseconds' : 'seconds'
+}
+
+function timestampToMilliseconds(
+  timestamp: TimestampValue,
+  unit: TimestampUnit
+): number | null {
+  const value = normalizeUnixTimestamp(timestamp)
+  if (value === null) return null
+
+  const resolvedUnit = unit === 'auto' ? detectUnixTimestampUnit(value) : unit
+  return resolvedUnit === 'milliseconds' ? value : value * 1000
+}
+
+export function formatLogTimestampToDate(
+  timestamp?: TimestampValue,
+  unit: TimestampUnit = 'auto'
+): string {
+  const value = normalizeUnixTimestamp(timestamp)
+  if (value === null) return '-'
+
+  const resolvedUnit = unit === 'auto' ? detectUnixTimestampUnit(value) : unit
+  return formatTimestampToDate(value, resolvedUnit)
 }
 
 /**
@@ -282,19 +343,18 @@ export function getTieredBillingSummary(
  * Calculate duration and return formatted result with color variant
  * @param submitTime - Submit timestamp
  * @param finishTime - Finish timestamp
- * @param unit - Unit of the timestamps ('seconds' or 'milliseconds')
+ * @param unit - Unit of the timestamps ('seconds', 'milliseconds', or 'auto')
  */
 export function formatDuration(
-  submitTime?: number,
-  finishTime?: number,
-  unit: 'seconds' | 'milliseconds' = 'milliseconds'
+  submitTime?: TimestampValue,
+  finishTime?: TimestampValue,
+  unit: TimestampUnit = 'milliseconds'
 ): { durationSec: number; variant: StatusBadgeProps['variant'] } | null {
-  if (!submitTime || !finishTime) return null
+  const submitMs = timestampToMilliseconds(submitTime, unit)
+  const finishMs = timestampToMilliseconds(finishTime, unit)
+  if (submitMs === null || finishMs === null) return null
 
-  const durationSec =
-    unit === 'milliseconds'
-      ? (finishTime - submitTime) / 1000
-      : finishTime - submitTime
+  const durationSec = (finishMs - submitMs) / 1000
 
   return { durationSec, variant: durationSec > 60 ? 'red' : 'green' }
 }

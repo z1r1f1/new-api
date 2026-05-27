@@ -351,3 +351,111 @@ func TestOaiResponsesToChatStreamHandlerIncludesResponseFailedDetails(t *testing
 		t.Fatalf("error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeBadResponse)
 	}
 }
+
+func TestOaiResponsesToChatStreamHandlerOpenAIReasoningOnlyFallsBackToContent(t *testing.T) {
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = originalStreamingTimeout
+	})
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(common.RequestIdKey, "test-request")
+
+	streamBody := strings.Join([]string{
+		`data: {"type":"response.created","response":{"model":"gpt-5.5","created_at":123}}`,
+		``,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"长任务分析完成，"}`,
+		``,
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"这是最终结果。"}`,
+		``,
+		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123,"usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18}}}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(streamBody)),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		IsStream:        true,
+		OriginModelName: "gpt-5.5",
+		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
+	}
+
+	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+	if apiErr != nil {
+		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
+	}
+	if usage == nil || usage.TotalTokens != 18 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"reasoning_content":"长任务分析完成，"`) {
+		t.Fatalf("expected original reasoning summary chunk to be preserved, got:\n%s", body)
+	}
+	if !strings.Contains(body, `"content":"长任务分析完成，这是最终结果。"`) {
+		t.Fatalf("expected reasoning-only stream to fall back to visible content, got:\n%s", body)
+	}
+	if !strings.Contains(body, `data: [DONE]`) {
+		t.Fatalf("expected OpenAI stream terminator, got:\n%s", body)
+	}
+}
+
+func TestOaiResponsesToChatStreamHandlerOpenAIHonorsThinkingToContent(t *testing.T) {
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = originalStreamingTimeout
+	})
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(common.RequestIdKey, "test-request")
+
+	streamBody := strings.Join([]string{
+		`data: {"type":"response.reasoning_summary_text.delta","delta":"推理过程"}`,
+		``,
+		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123}}`,
+		``,
+	}, "\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+		Body:       io.NopCloser(strings.NewReader(streamBody)),
+	}
+	info := &relaycommon.RelayInfo{
+		RelayFormat:     types.RelayFormatOpenAI,
+		IsStream:        true,
+		OriginModelName: "gpt-5.5",
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName: "gpt-5.5",
+			ChannelSetting:    dto.ChannelSettings{ThinkingToContent: true},
+		},
+		ThinkingContentInfo: relaycommon.ThinkingContentInfo{
+			IsFirstThinkingContent: true,
+		},
+	}
+
+	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
+	if apiErr != nil {
+		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
+	}
+
+	body := recorder.Body.String()
+	if strings.Contains(body, `"reasoning_content"`) {
+		t.Fatalf("thinking_to_content should not expose reasoning_content directly, got:\n%s", body)
+	}
+	convertedThinking := `"content":"\u003cthink\u003e\n推理过程"`
+	if !strings.Contains(body, convertedThinking) {
+		t.Fatalf("expected thinking_to_content conversion in Responses bridge, got:\n%s", body)
+	}
+	if strings.Count(body, convertedThinking) != 1 {
+		t.Fatalf("expected no fallback duplication when thinking_to_content is enabled, got:\n%s", body)
+	}
+}

@@ -15,6 +15,7 @@ type RetryParam struct {
 	Ctx          *gin.Context
 	TokenGroup   string
 	ModelName    string
+	RelayMode    int
 	Retry        *int
 	resetNextTry bool
 }
@@ -43,6 +44,13 @@ func (p *RetryParam) IncreaseRetry() {
 
 func (p *RetryParam) ResetRetryNextTry() {
 	p.resetNextTry = true
+}
+
+func (p *RetryParam) shouldPreferIdleChatGPTWebImage() bool {
+	if p == nil {
+		return false
+	}
+	return ShouldUseChatGPTWebImageBusyAvoidance(p.RelayMode, p.ModelName)
 }
 
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
@@ -115,7 +123,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			if param.shouldPreferIdleChatGPTWebImage() {
+				channel, _ = model.GetRandomSatisfiedChannelWithPreference(autoGroup, param.ModelName, priorityRetry, PreferIdleChatGPTWebImageChannel)
+			} else {
+				channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
+			}
 			if channel == nil {
 				// Current group has no available channel for this model, try next group
 				// 当前分组没有该模型的可用渠道，尝试下一个分组
@@ -153,7 +165,11 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		if param.shouldPreferIdleChatGPTWebImage() {
+			channel, err = model.GetRandomSatisfiedChannelWithPreference(param.TokenGroup, param.ModelName, param.GetRetry(), PreferIdleChatGPTWebImageChannel)
+		} else {
+			channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
+		}
 		if err != nil {
 			return nil, param.TokenGroup, err
 		}

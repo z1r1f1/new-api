@@ -370,8 +370,20 @@ type chatGPTImageBalanceData struct {
 }
 
 func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPTImageBalanceData, error) {
+	return updateChannelChatGPTImageBalanceWithContext(context.Background(), channel, 90*time.Second)
+}
+
+func updateChannelChatGPTImageBalanceWithContext(ctx context.Context, channel *model.Channel, timeout time.Duration) (float64, *chatGPTImageBalanceData, error) {
 	if channel == nil {
 		return 0, nil, errors.New("channel is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
 	}
 	settings := channel.GetSetting()
 	proxyURL := strings.TrimSpace(settings.Proxy)
@@ -379,9 +391,6 @@ func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPT
 	if err != nil {
 		return 0, nil, err
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
 
 	accessToken, err := chatgptimg.ResolveAccessToken(ctx, oauthKey, proxyURL)
 	if err != nil {
@@ -397,8 +406,8 @@ func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPT
 		DeviceID:   strings.TrimSpace(oauthKey.DeviceID),
 		SessionID:  strings.TrimSpace(oauthKey.SessionID),
 		ProxyURL:   proxyURL,
-		Timeout:    90 * time.Second,
-		SSETimeout: 90 * time.Second,
+		Timeout:    chatGPTImageBalanceClientTimeout(timeout),
+		SSETimeout: chatGPTImageBalanceClientTimeout(timeout),
 	})
 	if err != nil {
 		return 0, nil, err
@@ -427,6 +436,13 @@ func updateChannelChatGPTImageBalance(channel *model.Channel) (float64, *chatGPT
 	balance := float64(info.ImageQuotaRemaining)
 	channel.UpdateBalance(balance)
 	return balance, data, nil
+}
+
+func chatGPTImageBalanceClientTimeout(timeout time.Duration) time.Duration {
+	if timeout > 0 {
+		return timeout
+	}
+	return 90 * time.Second
 }
 
 func updateChannelBalance(channel *model.Channel) (float64, error) {

@@ -88,6 +88,143 @@ func TestBuildChatPromptAddsToolBridgeInstruction(t *testing.T) {
 	}
 }
 
+func TestConvertClaudeRequestUsesChatGPTWebChatPath(t *testing.T) {
+	stream := true
+	maxTokens := uint(128)
+	req := &dto.ClaudeRequest{
+		Model:     "gpt-5.5-thinking",
+		System:    "be concise",
+		MaxTokens: &maxTokens,
+		Stream:    &stream,
+		Messages: []dto.ClaudeMessage{
+			{Role: "user", Content: "读取 AGENTS.md"},
+		},
+		Tools: []dto.Tool{{
+			Name:        "Read",
+			Description: "Reads a file from the local filesystem",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"file_path": map[string]any{"type": "string"},
+				},
+			},
+		}},
+	}
+	info := &relaycommon.RelayInfo{
+		OriginModelName:    "gpt-5.5-thinking",
+		RelayFormat:        types.RelayFormatClaude,
+		ClaudeConvertInfo:  &relaycommon.ClaudeConvertInfo{},
+		ShouldIncludeUsage: true,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			UpstreamModelName:    "gpt-5.5-thinking",
+			SupportStreamOptions: true,
+		},
+	}
+
+	converted, err := (&Adaptor{}).ConvertClaudeRequest(nil, info, req)
+	if err != nil {
+		t.Fatalf("ConvertClaudeRequest returned error: %v", err)
+	}
+	chatReq, ok := converted.(chatRequest)
+	if !ok {
+		t.Fatalf("expected chatRequest, got %T", converted)
+	}
+	if chatReq.Model != "gpt-5.5-thinking" {
+		t.Fatalf("unexpected model: %q", chatReq.Model)
+	}
+	if chatReq.Stream == nil || !*chatReq.Stream {
+		t.Fatalf("expected stream=true to be preserved, got %#v", chatReq.Stream)
+	}
+	if len(chatReq.Messages) != 2 {
+		t.Fatalf("expected system and user messages after conversion, got %#v", chatReq.Messages)
+	}
+	if got := chatReq.Messages[0].Role; got != "system" {
+		t.Fatalf("expected first message to be system, got %q", got)
+	}
+	if len(chatReq.Tools) != 1 || chatReq.Tools[0].Function.Name != "Read" {
+		t.Fatalf("expected Claude tools to be converted for ChatGPT Web tool bridge, got %#v", chatReq.Tools)
+	}
+}
+
+func TestChatGPTWebImagePollMaxWaitDefaultsToTenMinutes(t *testing.T) {
+	t.Setenv("CHATGPT_WEB_IMAGE_POLL_TIMEOUT_SECONDS", "")
+	if got := chatGPTWebImagePollMaxWait(false); got != 10*time.Minute {
+		t.Fatalf("expected normal image poll timeout to default to 10m, got %s", got)
+	}
+	if got := chatGPTWebImagePollMaxWait(true); got != 45*time.Second {
+		t.Fatalf("expected channel-test image poll timeout to stay short, got %s", got)
+	}
+}
+
+func TestChatGPTWebImagePollMaxWaitCanBeExtendedByEnv(t *testing.T) {
+	t.Setenv("CHATGPT_WEB_IMAGE_POLL_TIMEOUT_SECONDS", "900")
+	if got := chatGPTWebImagePollMaxWait(false); got != 15*time.Minute {
+		t.Fatalf("expected env image poll timeout to be 15m, got %s", got)
+	}
+}
+
+func TestChatGPTWebImageOperationContextIgnoresClientCancel(t *testing.T) {
+	type ctxKey string
+	parent := context.WithValue(context.Background(), ctxKey("request_id"), "req-1")
+	parent, cancelParent := context.WithCancel(parent)
+	cancelParent()
+
+	timing := service.NewChatGPTWebTiming()
+	ctx, cancel := chatGPTWebImageOperationContext(parent, false, timing)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		t.Fatalf("image operation context must not be canceled by client context: %v", ctx.Err())
+	default:
+	}
+	if got := ctx.Value(ctxKey("request_id")); got != "req-1" {
+		t.Fatalf("expected context values to be preserved, got %#v", got)
+	}
+	snapshot := timing.Snapshot()
+	if snapshot["image_request_context_detached"] != true {
+		t.Fatalf("expected timing to mark detached context, got %#v", snapshot)
+	}
+}
+
+func TestResolveImageDownloadURLsRetriesUntilReady(t *testing.T) {
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/files/file_ready/download" && r.URL.Path != "/backend-api/files/download/file_ready" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.URL.Path == "/backend-api/files/download/file_ready" {
+			http.Error(w, `{"error":"legacy not ready"}`, http.StatusNotFound)
+			return
+		}
+		attempts++
+		if attempts == 1 {
+			http.Error(w, `{"error":"not ready"}`, http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"download_url":"https://example.test/image.png"}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+	timing := service.NewChatGPTWebTiming()
+	urls := resolveImageDownloadURLsWithWait(context.Background(), client, "conv-1", []string{"file_ready"}, 100*time.Millisecond, time.Millisecond, timing)
+	if len(urls) != 1 || urls[0] != "https://example.test/image.png" {
+		t.Fatalf("expected retried download URL, got %#v", urls)
+	}
+	if attempts < 2 {
+		t.Fatalf("expected at least two attempts, got %d", attempts)
+	}
+	snapshot := timing.Snapshot()
+	if snapshot["image_download_url_attempts"] != attempts {
+		t.Fatalf("expected attempt count in timing, got %#v", snapshot)
+	}
+}
+
 func TestPreemptiveLocalToolResponseForClaudeFileRead(t *testing.T) {
 	service.InitTokenEncoders()
 	stream := true

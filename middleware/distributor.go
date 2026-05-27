@@ -103,6 +103,8 @@ func Distribute() func(c *gin.Context) {
 					}
 				}
 
+				relayMode := relayconstant.Path2RelayMode(c.Request.URL.Path)
+				preferIdleChatGPTWebImage := service.ShouldUseChatGPTWebImageBusyAvoidance(relayMode, modelRequest.Model)
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					preferred, err := model.CacheGetChannel(preferredChannelID)
 					if err == nil && preferred != nil {
@@ -111,6 +113,8 @@ func Distribute() func(c *gin.Context) {
 								abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorAffinityChannelDisabled))
 								return
 							}
+						} else if preferIdleChatGPTWebImage && preferred.Type == constant.ChannelTypeChatGPTImage && service.IsChatGPTWebImageBusy(preferred.Id) {
+							logger.LogDebug(c, "skip busy ChatGPT Web image affinity channel #%d", preferred.Id)
 						} else if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetUserAutoGroup(userGroup)
@@ -136,6 +140,7 @@ func Distribute() func(c *gin.Context) {
 						Ctx:        c,
 						ModelName:  modelRequest.Model,
 						TokenGroup: usingGroup,
+						RelayMode:  relayMode,
 						Retry:      common.GetPointer(0),
 					})
 					if err != nil {
@@ -161,6 +166,16 @@ func Distribute() func(c *gin.Context) {
 		}
 		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
+		selectedRelayMode := relayconstant.Path2RelayMode(c.Request.URL.Path)
+		if selectedRelayMode == relayconstant.RelayModeUnknown {
+			selectedRelayMode = c.GetInt("relay_mode")
+		}
+		releaseBusy := service.AcquireChatGPTWebImageBusy(c, channel, selectedRelayMode, modelRequest.Model)
+		defer func() {
+			if releaseBusy != nil {
+				releaseBusy()
+			}
+		}()
 		c.Next()
 		if channel != nil && shouldRecordChannelAffinity(c) {
 			service.RecordChannelAffinity(c, channel.Id)

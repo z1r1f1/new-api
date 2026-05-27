@@ -182,6 +182,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		Ctx:        c,
 		TokenGroup: relayInfo.TokenGroup,
 		ModelName:  relayInfo.OriginModelName,
+		RelayMode:  relayInfo.RelayMode,
 		Retry:      common.GetPointer(0),
 	}
 	relayInfo.RetryIndex = 0
@@ -209,16 +210,25 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 		c.Request.Body = io.NopCloser(bodyStorage)
 
-		switch relayFormat {
-		case types.RelayFormatOpenAIRealtime:
-			newAPIError = relay.WssHelper(c, relayInfo)
-		case types.RelayFormatClaude:
-			newAPIError = relay.ClaudeHelper(c, relayInfo)
-		case types.RelayFormatGemini:
-			newAPIError = geminiRelayHandler(c, relayInfo)
-		default:
-			newAPIError = relayHandler(c, relayInfo)
-		}
+		func() {
+			releaseBusy := service.AcquireChatGPTWebImageBusy(c, channel, relayInfo.RelayMode, relayInfo.OriginModelName)
+			defer func() {
+				if releaseBusy != nil {
+					releaseBusy()
+				}
+			}()
+
+			switch relayFormat {
+			case types.RelayFormatOpenAIRealtime:
+				newAPIError = relay.WssHelper(c, relayInfo)
+			case types.RelayFormatClaude:
+				newAPIError = relay.ClaudeHelper(c, relayInfo)
+			case types.RelayFormatGemini:
+				newAPIError = geminiRelayHandler(c, relayInfo)
+			default:
+				newAPIError = relayHandler(c, relayInfo)
+			}
+		}()
 
 		if newAPIError == nil {
 			relayInfo.LastError = nil
@@ -390,6 +400,7 @@ func processChannelError(c *gin.Context, channelError types.ChannelError, err *t
 		}
 		service.AppendChannelAffinityAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
+		service.AppendChatGPTWebTimingInfo(c, other)
 		startTime := common.GetContextKeyTime(c, constant.ContextKeyRequestStartTime)
 		if startTime.IsZero() {
 			startTime = time.Now()
@@ -510,6 +521,7 @@ func RelayTask(c *gin.Context) {
 		Ctx:        c,
 		TokenGroup: relayInfo.TokenGroup,
 		ModelName:  relayInfo.OriginModelName,
+		RelayMode:  relayInfo.RelayMode,
 		Retry:      common.GetPointer(0),
 	}
 

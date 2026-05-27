@@ -617,6 +617,23 @@ func TestPollConversationForImagesDoesNotReturnUploadedReference(t *testing.T) {
 	}
 }
 
+func TestPollConversationForImagesReportsCanceledContextSeparately(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := &Client{opts: ClientOptions{BaseURL: "http://example.invalid"}}
+	status, fids, sids := client.PollConversationForImages(ctx, "conv-1", PollOpts{
+		MaxWait:  time.Second,
+		Interval: time.Millisecond,
+	})
+	if status != PollStatusCanceled {
+		t.Fatalf("expected canceled status, got status=%s fids=%#v sids=%#v", status, fids, sids)
+	}
+	if len(fids) != 0 || len(sids) != 0 {
+		t.Fatalf("expected no refs for canceled context, got fids=%#v sids=%#v", fids, sids)
+	}
+}
+
 func TestParseChatSSEExtractsAssistantTextDelta(t *testing.T) {
 	stream := make(chan SSEEvent, 3)
 	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["hel"]}}}}`)}
@@ -1173,6 +1190,26 @@ func TestParseProcessUploadStreamLibraryFileID(t *testing.T) {
 	}
 	if got != "file-lib-1" {
 		t.Fatalf("expected library file id, got %q", got)
+	}
+}
+
+func TestImageDownloadURLAcceptsDirectImageResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/conversation/conv-1/attachment/sed-1/download" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write([]byte{0x89, 0x50, 0x4e, 0x47})
+	}))
+	defer server.Close()
+
+	client := &Client{opts: ClientOptions{BaseURL: server.URL, UserAgent: defaultUserAgent}, hc: server.Client()}
+	downloadURL, err := client.ImageDownloadURL(context.Background(), "conv-1", "sed:sed-1")
+	if err != nil {
+		t.Fatalf("ImageDownloadURL returned error: %v", err)
+	}
+	if downloadURL != server.URL+"/backend-api/conversation/conv-1/attachment/sed-1/download" {
+		t.Fatalf("expected direct attachment URL, got %q", downloadURL)
 	}
 }
 

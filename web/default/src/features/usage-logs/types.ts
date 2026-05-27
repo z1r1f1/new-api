@@ -257,8 +257,8 @@ export interface TaskLog {
   task_id: string
   action: string // MUSIC, LYRICS, GENERATE, TEXT_GENERATE, etc.
   channel_id: number
-  submit_time: number // seconds
-  finish_time?: number // seconds
+  submit_time: number // seconds; legacy/third-party task rows may be milliseconds
+  finish_time?: number // seconds; legacy/third-party task rows may be milliseconds
   progress?: string
   progress_message_en?: string
   data?: string // JSON string

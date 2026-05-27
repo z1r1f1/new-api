@@ -22,12 +22,12 @@ import type { ColumnDef } from '@tanstack/react-table'
 import { Music } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
-import { formatTimestampToDate } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
 import { TASK_ACTIONS, TASK_STATUS } from '../../constants'
+import { formatLogTimestampToDate } from '../../lib/format'
 import { taskActionMapper, taskStatusMapper } from '../../lib/mappers'
 import type { TaskLog } from '../../types'
 import {
@@ -104,11 +104,11 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
         return (
           <div className='flex flex-col gap-0.5'>
             <span className='font-mono text-xs tabular-nums'>
-              {formatTimestampToDate(submitTime, 'seconds')}
+              {formatLogTimestampToDate(submitTime)}
             </span>
             {log.finish_time ? (
               <span className='text-muted-foreground/60 font-mono text-[11px] tabular-nums'>
-                {formatTimestampToDate(log.finish_time, 'seconds')}
+                {formatLogTimestampToDate(log.finish_time)}
               </span>
             ) : (
               <span className='text-muted-foreground/50 text-[11px]'>-</span>
@@ -197,7 +197,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
     createDurationColumn<TaskLog>({
       submitTimeKey: 'submit_time',
       finishTimeKey: 'finish_time',
-      unit: 'seconds',
+      unit: 'auto',
       headerLabel: t('Duration'),
       warningThresholdSec: 300,
     }),

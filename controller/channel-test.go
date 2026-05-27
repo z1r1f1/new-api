@@ -46,6 +46,13 @@ type testResult struct {
 	hasResponseTime    bool
 }
 
+const (
+	chatGPTWebImageQuotaTestModel = "gpt-image-2"
+	chatGPTWebImageQuotaProbePath = "/backend-api/conversation/init"
+)
+
+var updateChatGPTWebImageBalanceForChannelTest = updateChannelChatGPTImageBalanceWithContext
+
 type firstByteResponseWriter struct {
 	gin.ResponseWriter
 	mu          sync.Mutex
@@ -137,9 +144,6 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 		return normalized
 	}
 	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
-		if !common.IsImageGenerationModel(modelName) {
-			return string(constant.EndpointTypeOpenAI)
-		}
 		return string(constant.EndpointTypeImageGeneration)
 	}
 	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
@@ -266,6 +270,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	c.Set("base_url", channel.GetBaseURL())
 	group, _ := model.GetUserGroup(1, false)
 	c.Set("group", group)
+
+	if shouldUseChatGPTWebImageQuotaTest(channel) {
+		c.Request.URL.Path = chatGPTWebImageQuotaProbePath
+		return testChatGPTWebImageQuota(c, channel, tik)
+	}
 
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
 	if newAPIError != nil {
@@ -794,6 +803,89 @@ func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
 		return false
 	}
 	return true
+}
+
+func shouldUseChatGPTWebImageQuotaTest(channel *model.Channel) bool {
+	return channel != nil && channel.Type == constant.ChannelTypeChatGPTImage
+}
+
+func testChatGPTWebImageQuota(c *gin.Context, channel *model.Channel, startedAt time.Time) testResult {
+	balance, data, err := updateChatGPTWebImageBalanceForChannelTest(c.Request.Context(), channel, 0)
+	if err != nil {
+		if errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
+			timeoutErr := fmt.Errorf("模型测试超时：响应时间超过禁用阈值 %.2fs", channelTestTimeoutDuration().Seconds())
+			return testResult{
+				context:     c,
+				localErr:    timeoutErr,
+				newAPIError: types.NewOpenAIError(timeoutErr, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout),
+			}
+		}
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
+		}
+	}
+	if data == nil {
+		err := errors.New("未找到 ChatGPT 图片额度信息")
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
+		}
+	}
+	if data.ImageQuotaRemaining <= 0 {
+		err := fmt.Errorf("%s 图片剩余额度不足：%d", chatGPTWebImageQuotaTestModel, data.ImageQuotaRemaining)
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewOpenAIError(err, types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired),
+		}
+	}
+
+	elapsed := time.Since(startedAt)
+	milliseconds := elapsed.Milliseconds()
+	content := formatChatGPTWebImageQuotaTestContent(data)
+	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
+		ChannelId:      channel.Id,
+		ModelName:      chatGPTWebImageQuotaTestModel,
+		TokenName:      "模型测试",
+		Quota:          0,
+		Content:        content,
+		UseTimeSeconds: int(elapsed.Seconds()),
+		IsStream:       false,
+		Group:          c.GetString("group"),
+		Other: map[string]interface{}{
+			"request_path":                chatGPTWebImageQuotaProbePath,
+			"request_conversion":          []string{"chatgpt_web_image_quota"},
+			"chatgpt_web_image_quota":     data,
+			"chatgpt_web_image_quota_raw": balance,
+			"model":                       chatGPTWebImageQuotaTestModel,
+			"model_price":                 0,
+			"model_ratio":                 0,
+			"completion_ratio":            0,
+			"cache_ratio":                 0,
+			"group_ratio":                 1,
+		},
+	})
+	common.SysLog(fmt.Sprintf("testing ChatGPT Web channel #%d image quota: %s", channel.Id, content))
+	return testResult{
+		context:            c,
+		localErr:           nil,
+		newAPIError:        nil,
+		responseTimeMillis: milliseconds,
+		hasResponseTime:    true,
+	}
+}
+
+func formatChatGPTWebImageQuotaTestContent(data *chatGPTImageBalanceData) string {
+	if data == nil {
+		return chatGPTWebImageQuotaTestModel + " 图片剩余额度未知"
+	}
+	if data.ImageQuotaTotal > 0 {
+		return fmt.Sprintf("%s 图片剩余额度 %d/%d", chatGPTWebImageQuotaTestModel, data.ImageQuotaRemaining, data.ImageQuotaTotal)
+	}
+	return fmt.Sprintf("%s 图片剩余额度 %d", chatGPTWebImageQuotaTestModel, data.ImageQuotaRemaining)
 }
 
 func shouldForceNonStreamChannelTest(channel *model.Channel, endpointType string) bool {

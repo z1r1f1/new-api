@@ -86,3 +86,7 @@ func appendChatGPTWebTimingInfo(ctx *gin.Context, other map[string]interface{}) 
 		other["chatgpt_web_timing"] = snapshot
 	}
 }
+
+func AppendChatGPTWebTimingInfo(ctx *gin.Context, other map[string]interface{}) {
+	appendChatGPTWebTimingInfo(ctx, other)
+}

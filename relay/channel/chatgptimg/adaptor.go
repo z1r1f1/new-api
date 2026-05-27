@@ -107,6 +107,13 @@ const chatGPTWebDeepResearchRecoverMaxWait = 3 * time.Minute
 const chatGPTWebDeepResearchRecoverInterval = 5 * time.Second
 const chatGPTWebHandoffRecoverMaxWait = 45 * time.Second
 const chatGPTWebHandoffRecoverInterval = time.Second
+const chatGPTWebImagePollDefaultMaxWait = 10 * time.Minute
+const chatGPTWebImagePollTestMaxWait = 45 * time.Second
+const chatGPTWebImageRunDefaultTimeout = 20 * time.Minute
+const chatGPTWebHTTPDefaultTimeout = 10 * time.Minute
+const chatGPTWebImageOperationGrace = 2 * time.Minute
+const chatGPTWebImageDownloadURLDefaultMaxWait = 90 * time.Second
+const chatGPTWebImageDownloadURLTestMaxWait = 5 * time.Second
 
 const (
 	chatGPTWebSessionRouteCacheNamespace = "new-api:chatgpt_web_session_route:v1"
@@ -139,8 +146,15 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 	return nil, errors.New("chatgpt web channel: /v1beta/models endpoint not supported")
 }
 
-func (a *Adaptor) ConvertClaudeRequest(*gin.Context, *relaycommon.RelayInfo, *dto.ClaudeRequest) (any, error) {
-	return nil, errors.New("chatgpt web channel: /v1/messages endpoint not supported")
+func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ClaudeRequest) (any, error) {
+	if request == nil {
+		return nil, errors.New("chatgpt web channel: messages are required")
+	}
+	openAIRequest, err := service.ClaudeToOpenAIRequest(*request, info)
+	if err != nil {
+		return nil, err
+	}
+	return a.ConvertOpenAIRequest(c, info, openAIRequest)
 }
 
 func (a *Adaptor) ConvertAudioRequest(*gin.Context, *relaycommon.RelayInfo, dto.AudioRequest) (io.Reader, error) {
@@ -1314,19 +1328,26 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 		return nil, errors.New("chatgpt web channel: prompt is required")
 	}
 
-	client, err := newClientFromRelayInfo(c.Request.Context(), info, timing)
+	testMode := info != nil && info.IsChannelTest
+	requestCtx := context.Background()
+	if c != nil && c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
+	imageCtx, cancelImageCtx := chatGPTWebImageOperationContext(requestCtx, testMode, timing)
+	defer cancelImageCtx()
+
+	client, err := newClientFromRelayInfo(imageCtx, info, timing)
 	if err != nil {
 		return nil, err
 	}
 	uploadStart := time.Now()
-	refs, err := uploadReferenceImages(c.Request.Context(), client, req.ReferenceImages)
+	refs, err := uploadReferenceImages(imageCtx, client, req.ReferenceImages)
 	timing.ObserveSince("reference_upload_ms", uploadStart)
 	timing.Set("reference_count", len(refs))
 	if err != nil {
 		return nil, err
 	}
-	testMode := info != nil && info.IsChannelTest
-	res, err := runImageGeneration(c.Request.Context(), client, req, refs, testMode, timing)
+	res, err := runImageGeneration(imageCtx, client, req, refs, testMode, timing)
 	if err != nil {
 		return nil, err
 	}
@@ -1343,7 +1364,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 		}
 	}
 
-	respPayload, err := buildGenerationResponse(c.Request.Context(), client, req, res, testMode, info, requestPublicBaseURLForImages(c, info), timing)
+	respPayload, err := buildGenerationResponse(imageCtx, client, req, res, testMode, info, requestPublicBaseURLForImages(c, info), timing)
 	if err != nil {
 		return nil, err
 	}
@@ -1591,7 +1612,7 @@ func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo, ti
 		DeviceID:   strings.TrimSpace(oauthKey.DeviceID),
 		SessionID:  strings.TrimSpace(oauthKey.SessionID),
 		ProxyURL:   strings.TrimSpace(info.ChannelSetting.Proxy),
-		Timeout:    150 * time.Second,
+		Timeout:    chatGPTWebHTTPTimeout(),
 		SSETimeout: 300 * time.Second,
 	})
 	if timing != nil {
@@ -1599,6 +1620,58 @@ func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo, ti
 		timing.Set("client_cache_hit", cacheHit)
 	}
 	return client, err
+}
+
+func chatGPTWebHTTPTimeout() time.Duration {
+	return chatGPTWebDurationFromEnv("CHATGPT_WEB_HTTP_TIMEOUT_SECONDS", chatGPTWebHTTPDefaultTimeout, time.Minute)
+}
+
+func chatGPTWebImageRunTimeout() time.Duration {
+	return chatGPTWebDurationFromEnv("CHATGPT_WEB_IMAGE_RUN_TIMEOUT_SECONDS", chatGPTWebImageRunDefaultTimeout, chatGPTWebImagePollDefaultMaxWait)
+}
+
+func chatGPTWebImagePollMaxWait(testMode bool) time.Duration {
+	if testMode {
+		return chatGPTWebImagePollTestMaxWait
+	}
+	return chatGPTWebDurationFromEnv("CHATGPT_WEB_IMAGE_POLL_TIMEOUT_SECONDS", chatGPTWebImagePollDefaultMaxWait, time.Minute)
+}
+
+func chatGPTWebImageDownloadURLMaxWait(testMode bool) time.Duration {
+	if testMode {
+		return chatGPTWebImageDownloadURLTestMaxWait
+	}
+	return chatGPTWebDurationFromEnv("CHATGPT_WEB_IMAGE_DOWNLOAD_URL_TIMEOUT_SECONDS", chatGPTWebImageDownloadURLDefaultMaxWait, 5*time.Second)
+}
+
+func chatGPTWebDurationFromEnv(name string, fallback, minimum time.Duration) time.Duration {
+	seconds := common.GetEnvOrDefault(name, int(fallback/time.Second))
+	duration := time.Duration(seconds) * time.Second
+	if duration < minimum {
+		return fallback
+	}
+	return duration
+}
+
+func chatGPTWebImageOperationContext(parent context.Context, testMode bool, timing *service.ChatGPTWebTiming) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	if testMode {
+		if timing != nil {
+			timing.Set("image_request_context_detached", false)
+		}
+		return context.WithCancel(parent)
+	}
+	timeout := chatGPTWebImageRunTimeout() + chatGPTWebImageOperationGrace
+	if timeout <= 0 {
+		timeout = chatGPTWebImageRunDefaultTimeout + chatGPTWebImageOperationGrace
+	}
+	if timing != nil {
+		timing.Set("image_request_context_detached", true)
+		timing.Set("image_operation_timeout_seconds", int(timeout/time.Second))
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), timeout)
 }
 
 func buildChatPrompt(req chatRequest) string {
@@ -4271,6 +4344,98 @@ func guessExtensionFromDataURLMeta(meta string) string {
 	}
 }
 
+func resolveImageDownloadURLs(ctx context.Context, client *Client, convID string, fileRefs []string, testMode bool, timing *service.ChatGPTWebTiming) []string {
+	return resolveImageDownloadURLsWithWait(ctx, client, convID, fileRefs, chatGPTWebImageDownloadURLMaxWait(testMode), 2*time.Second, timing)
+}
+
+func resolveImageDownloadURLsWithWait(ctx context.Context, client *Client, convID string, fileRefs []string, maxWait, interval time.Duration, timing *service.ChatGPTWebTiming) []string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	refs := dedupeStrings(fileRefs)
+	if client == nil || len(refs) == 0 {
+		return nil
+	}
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+	deadline := time.Now().Add(maxWait)
+	pending := append([]string(nil), refs...)
+	signedURLs := make([]string, 0, len(refs))
+	seenURLs := map[string]struct{}{}
+	attempts := 0
+	errorCount := 0
+	lastErrorLabel := ""
+
+	for {
+		nextPending := pending[:0]
+		for _, ref := range pending {
+			if ctx.Err() != nil {
+				lastErrorLabel = imageDownloadURLErrorLabel(ctx.Err())
+				pending = nextPending
+				break
+			}
+			attempts++
+			downloadURLStart := time.Now()
+			signedURL, err := client.ImageDownloadURL(ctx, convID, ref)
+			if timing != nil {
+				timing.ObserveSince("image_download_url_ms", downloadURLStart)
+			}
+			signedURL = strings.TrimSpace(signedURL)
+			if err != nil || signedURL == "" {
+				errorCount++
+				lastErrorLabel = imageDownloadURLErrorLabel(err)
+				if signedURL == "" && err == nil {
+					lastErrorLabel = "empty_download_url"
+				}
+				nextPending = append(nextPending, ref)
+				continue
+			}
+			if _, ok := seenURLs[signedURL]; ok {
+				continue
+			}
+			seenURLs[signedURL] = struct{}{}
+			signedURLs = append(signedURLs, signedURL)
+		}
+		pending = nextPending
+		if len(signedURLs) > 0 || len(pending) == 0 || maxWait <= 0 || !time.Now().Before(deadline) || ctx.Err() != nil {
+			break
+		}
+		sleepFor := interval
+		if remaining := time.Until(deadline); remaining > 0 && remaining < sleepFor {
+			sleepFor = remaining
+		}
+		sleepContext(ctx, sleepFor)
+	}
+
+	if timing != nil {
+		timing.Set("image_download_url_attempts", attempts)
+		timing.Set("image_download_url_error_count", errorCount)
+		timing.Set("image_download_url_pending_count", len(pending))
+		if lastErrorLabel != "" {
+			timing.Set("image_download_url_last_error", lastErrorLabel)
+		}
+	}
+	return signedURLs
+}
+
+func imageDownloadURLErrorLabel(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, context.Canceled) {
+		return "context_canceled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "context_deadline_exceeded"
+	}
+	var upstreamErr *UpstreamError
+	if errors.As(err, &upstreamErr) && upstreamErr != nil {
+		return fmt.Sprintf("upstream_status_%d", upstreamErr.Status)
+	}
+	return "request_failed"
+}
+
 func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool, timings ...*service.ChatGPTWebTiming) (*imageRunResult, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	runStart := time.Now()
@@ -4279,15 +4444,23 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 			timing.ObserveSince("image_run_total_ms", runStart)
 		}
 	}()
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Minute)
+	imageRunTimeout := chatGPTWebImageRunTimeout()
+	ctx, cancel := context.WithTimeout(ctx, imageRunTimeout)
 	defer cancel()
 
 	result := &imageRunResult{}
 	maxAttempts := 1
-	pollMaxWait := 300 * time.Second
+	pollMaxWait := chatGPTWebImagePollMaxWait(testMode)
 	sameConvMax := 1
-	if testMode {
-		pollMaxWait = 45 * time.Second
+	if pollMaxWait >= imageRunTimeout {
+		pollMaxWait = imageRunTimeout - time.Minute
+		if pollMaxWait < time.Minute {
+			pollMaxWait = imageRunTimeout
+		}
+	}
+	if timing != nil {
+		timing.Set("image_run_timeout_seconds", int(imageRunTimeout/time.Second))
+		timing.Set("image_poll_max_wait_seconds", int(pollMaxWait/time.Second))
 	}
 
 	cr, err := client.ChatRequirementsV2(ctx, timing)
@@ -4531,6 +4704,12 @@ attemptLoop:
 					return nil, noRelayRetry(textOnlyErr, http.StatusUnprocessableEntity)
 				}
 				return nil, noRelayRetry(errors.New("chatgpt web channel: poll timeout"), http.StatusGatewayTimeout)
+			case PollStatusCanceled:
+				ctxErr := ctx.Err()
+				if ctxErr == nil {
+					ctxErr = context.Canceled
+				}
+				return nil, noRelayRetry(fmt.Errorf("chatgpt web channel: image request canceled: %w", ctxErr), http.StatusRequestTimeout)
 			default:
 				if attempt < maxAttempts {
 					continue attemptLoop
@@ -4577,16 +4756,33 @@ attemptLoop:
 		timing.Set("image_ref_count", len(fileRefs))
 		timing.Set("image_preview", result.IsPreview)
 	}
-	for _, ref := range fileRefs {
-		downloadURLStart := time.Now()
-		signedURL, err := client.ImageDownloadURL(ctx, convID, ref)
+	result.SignedURLs = resolveImageDownloadURLs(ctx, client, convID, fileRefs, testMode, timing)
+	if len(result.SignedURLs) == 0 && ctx.Err() == nil && convID != "" {
+		repollStart := time.Now()
+		pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{
+			MaxWait:      chatGPTWebImageDownloadURLMaxWait(testMode),
+			Interval:     2 * time.Second,
+			StableRounds: 1,
+			PreviewWait:  15 * time.Second,
+		})
 		if timing != nil {
-			timing.ObserveSince("image_download_url_ms", downloadURLStart)
+			timing.ObserveSince("image_download_repoll_ms", repollStart)
+			timing.Set("image_download_repoll_status", string(pollStatus))
 		}
-		if err != nil {
-			continue
+		if pollStatus == PollStatusIMG2 || pollStatus == PollStatusPreviewOnly {
+			extraRefs := append([]string{}, fids...)
+			for _, sid := range sids {
+				extraRefs = append(extraRefs, "sed:"+sid)
+			}
+			if len(extraRefs) > 0 {
+				fileRefs = dedupeStrings(append(fileRefs, extraRefs...))
+				result.FileRefs = fileRefs
+				if timing != nil {
+					timing.Set("image_ref_count", len(fileRefs))
+				}
+				result.SignedURLs = resolveImageDownloadURLs(ctx, client, convID, fileRefs, testMode, timing)
+			}
 		}
-		result.SignedURLs = append(result.SignedURLs, signedURL)
 	}
 	if len(result.SignedURLs) == 0 {
 		return nil, errors.New("chatgpt web channel: no downloadable image url returned")

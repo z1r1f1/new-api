@@ -1,8 +1,10 @@
 package controller
 
 import (
+	"context"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -218,9 +220,61 @@ func TestChatGPTImageChannelTestEndpointDependsOnModelKind(t *testing.T) {
 		normalizeChannelTestEndpoint(channel, "gpt-image-2", ""),
 	)
 	require.Equal(t,
-		string(constant.EndpointTypeOpenAI),
+		string(constant.EndpointTypeImageGeneration),
 		normalizeChannelTestEndpoint(channel, "gpt-5.4-pro", ""),
 	)
+}
+
+func TestShouldUseChatGPTWebImageQuotaTest(t *testing.T) {
+	require.True(t, shouldUseChatGPTWebImageQuotaTest(&model.Channel{Type: constant.ChannelTypeChatGPTImage}))
+	require.False(t, shouldUseChatGPTWebImageQuotaTest(&model.Channel{Type: constant.ChannelTypeOpenAI}))
+	require.False(t, shouldUseChatGPTWebImageQuotaTest(nil))
+}
+
+func TestFormatChatGPTWebImageQuotaTestContent(t *testing.T) {
+	require.Equal(t,
+		"gpt-image-2 图片剩余额度 87/100",
+		formatChatGPTWebImageQuotaTestContent(&chatGPTImageBalanceData{ImageQuotaRemaining: 87, ImageQuotaTotal: 100}),
+	)
+	require.Equal(t,
+		"gpt-image-2 图片剩余额度 87",
+		formatChatGPTWebImageQuotaTestContent(&chatGPTImageBalanceData{ImageQuotaRemaining: 87}),
+	)
+	require.Equal(t,
+		"gpt-image-2 图片剩余额度未知",
+		formatChatGPTWebImageQuotaTestContent(nil),
+	)
+}
+
+func TestChatGPTWebImageQuotaTestUsesProbeResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest("POST", chatGPTWebImageQuotaProbePath, nil)
+	ctx.Set("group", "vip")
+
+	oldLogConsumeEnabled := common.LogConsumeEnabled
+	oldProbe := updateChatGPTWebImageBalanceForChannelTest
+	t.Cleanup(func() {
+		common.LogConsumeEnabled = oldLogConsumeEnabled
+		updateChatGPTWebImageBalanceForChannelTest = oldProbe
+	})
+	common.LogConsumeEnabled = false
+
+	var called bool
+	updateChatGPTWebImageBalanceForChannelTest = func(_ context.Context, channel *model.Channel, timeout time.Duration) (float64, *chatGPTImageBalanceData, error) {
+		called = true
+		require.Equal(t, 1111, channel.Id)
+		require.Zero(t, timeout)
+		return 87, &chatGPTImageBalanceData{ImageQuotaRemaining: 87, ImageQuotaTotal: 100}, nil
+	}
+
+	result := testChatGPTWebImageQuota(ctx, &model.Channel{Id: 1111, Type: constant.ChannelTypeChatGPTImage}, time.Now())
+
+	require.True(t, called)
+	require.NoError(t, result.localErr)
+	require.Nil(t, result.newAPIError)
+	require.True(t, result.hasResponseTime)
 }
 
 func TestBuildTestRequestForChatGPTImageTextModelUsesChatRequest(t *testing.T) {

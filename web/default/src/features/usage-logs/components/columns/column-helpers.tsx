@@ -30,7 +30,7 @@ import {
 } from '@/components/ui/tooltip'
 import { DataTableColumnHeader } from '@/components/data-table'
 import { StatusBadge } from '@/components/status-badge'
-import { formatDuration } from '../../lib/format'
+import { formatDuration, type TimestampUnit } from '../../lib/format'
 import { FailReasonDialog } from '../dialogs/fail-reason-dialog'
 
 /**
@@ -133,7 +133,7 @@ const durationDotColor: Record<string, string> = {
 export function createDurationColumn<T>(config: {
   submitTimeKey: string
   finishTimeKey: string
-  unit?: 'seconds' | 'milliseconds'
+  unit?: TimestampUnit
   headerLabel: string
   warningThresholdSec?: number
 }): ColumnDef<T> {

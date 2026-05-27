@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -141,6 +142,67 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	}
 	err = DB.First(&channel, "id = ?", channel.Id).Error
 	return &channel, err
+}
+
+// GetChannelWithPreference mirrors GetChannel while preferring accepted
+// candidates across priorities when a preference predicate is supplied.
+func GetChannelWithPreference(group string, model string, retry int, prefer func(*Channel) bool) (*Channel, error) {
+	if prefer == nil {
+		return GetChannel(group, model, retry)
+	}
+
+	abilities, err := getAllChannelAbilities(group, model)
+	if err != nil {
+		return nil, err
+	}
+	if len(abilities) == 0 {
+		return nil, nil
+	}
+
+	candidates := make([]*Channel, 0, len(abilities))
+	for _, ability := range abilities {
+		channel := Channel{}
+		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, &channel)
+	}
+
+	preferred := make([]*Channel, 0, len(candidates))
+	for _, channel := range candidates {
+		if prefer(channel) {
+			preferred = append(preferred, channel)
+		}
+	}
+	if len(preferred) > 0 {
+		candidates = preferred
+	}
+
+	return selectRandomSatisfiedChannelFromCandidates(candidates, retry, group, model)
+}
+
+func getAllChannelAbilities(group string, modelName string) ([]Ability, error) {
+	var abilities []Ability
+	query := func(model string) *gorm.DB {
+		return DB.Model(&Ability{}).
+			Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
+			Order("priority DESC").
+			Order("weight DESC")
+	}
+	if err := query(modelName).Find(&abilities).Error; err != nil {
+		return nil, err
+	}
+	if len(abilities) > 0 {
+		return abilities, nil
+	}
+	normalized := ratio_setting.FormatMatchingModelName(modelName)
+	if normalized == "" || normalized == modelName {
+		return abilities, nil
+	}
+	if err := query(normalized).Find(&abilities).Error; err != nil {
+		return nil, err
+	}
+	return abilities, nil
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {

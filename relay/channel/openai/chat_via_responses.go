@@ -328,13 +328,14 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	model := info.UpstreamModelName
 
 	var (
-		usage       = &dto.Usage{}
-		outputText  strings.Builder
-		usageText   strings.Builder
-		sentStart   bool
-		sentStop    bool
-		sawToolCall bool
-		streamErr   *types.NewAPIError
+		usage                = &dto.Usage{}
+		outputText           strings.Builder
+		reasoningSummaryText strings.Builder
+		usageText            strings.Builder
+		sentStart            bool
+		sentStop             bool
+		sawToolCall          bool
+		streamErr            *types.NewAPIError
 	)
 
 	toolCallIndexByID := make(map[string]int)
@@ -355,20 +356,16 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		if chunk == nil {
 			return true
 		}
-		if info.RelayFormat == types.RelayFormatOpenAI {
-			if err := helper.ObjectData(c, chunk); err != nil {
-				streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
-				return false
-			}
-			return true
-		}
-
 		chunkData, err := common.Marshal(chunk)
 		if err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeJsonMarshalFailed, http.StatusInternalServerError)
 			return false
 		}
-		if err := HandleStreamFormat(c, info, string(chunkData), false, false); err != nil {
+		thinkToContent := false
+		if info != nil {
+			thinkToContent = info.ChannelSetting.ThinkingToContent
+		}
+		if err := HandleStreamFormat(c, info, string(chunkData), false, thinkToContent); err != nil {
 			streamErr = types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
 			return false
 		}
@@ -436,6 +433,7 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 
 		usageText.WriteString(delta)
+		reasoningSummaryText.WriteString(delta)
 		chunk := &dto.ChatCompletionsStreamResponse{
 			Id:      responseId,
 			Object:  "chat.completion.chunk",
@@ -620,6 +618,16 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 			return sendToolCallDelta(toolCall.ID, "", toolCall.Function.Arguments)
 		}
 		return sendOutputTextDelta(text)
+	}
+
+	sendReasoningSummaryAsContentFallback := func() bool {
+		if outputText.Len() > 0 || sawToolCall || reasoningSummaryText.Len() == 0 {
+			return true
+		}
+		if info != nil && info.ChannelSetting.ThinkingToContent {
+			return true
+		}
+		return sendOutputTextDelta(reasoningSummaryText.String())
 	}
 
 	responseCompleted := false
@@ -812,6 +820,10 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 					}
 				}
 			}
+			if !sendReasoningSummaryAsContentFallback() {
+				sr.Stop(streamErr)
+				return
+			}
 
 			if !sendStartIfNeeded() {
 				sr.Stop(streamErr)
@@ -857,6 +869,12 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 		}
 		return nil, types.NewOpenAIError(fmt.Errorf("failed to flush responses tool-call text buffer"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
 	}
+	if !sendReasoningSummaryAsContentFallback() {
+		if streamErr != nil {
+			return nil, streamErr
+		}
+		return nil, types.NewOpenAIError(fmt.Errorf("failed to flush responses reasoning summary fallback"), types.ErrorCodeBadResponse, http.StatusInternalServerError)
+	}
 
 	if usage.TotalTokens == 0 {
 		usage = service.ResponseText2Usage(c, usageText.String(), info.UpstreamModelName, info.GetEstimatePromptTokens())
@@ -887,7 +905,9 @@ func OaiResponsesToChatStreamHandler(c *gin.Context, info *relaycommon.RelayInfo
 	}
 
 	if info.RelayFormat == types.RelayFormatOpenAI {
-		helper.Done(c)
+		if err := helper.StringData(c, "[DONE]"); err != nil {
+			return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponse, http.StatusInternalServerError)
+		}
 	}
 	return usage, nil
 }

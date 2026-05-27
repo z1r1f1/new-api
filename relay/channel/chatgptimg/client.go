@@ -2345,6 +2345,7 @@ const (
 	PollStatusIMG2        PollStatus = "img2"
 	PollStatusPreviewOnly PollStatus = "preview_only"
 	PollStatusTimeout     PollStatus = "timeout"
+	PollStatusCanceled    PollStatus = "context_canceled"
 	PollStatusError       PollStatus = "error"
 	PollStatusRateLimited PollStatus = "rate_limited"
 	PollStatusImageError  PollStatus = "image_error"
@@ -2444,6 +2445,9 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.Canceled) {
+				return PollStatusCanceled, nil, nil
+			}
 			return PollStatusTimeout, nil, nil
 		default:
 		}
@@ -2656,6 +2660,12 @@ func (c *Client) fetchImageDownloadURL(ctx context.Context, apiURL string) (stri
 	if res.StatusCode >= 400 {
 		return "", &UpstreamError{Status: res.StatusCode, Message: "files/download failed", Body: string(buf)}
 	}
+	if isImageDownloadBody(res.Header.Get("Content-Type"), buf) {
+		if res.Request != nil && res.Request.URL != nil {
+			return res.Request.URL.String(), nil
+		}
+		return apiURL, nil
+	}
 	var out struct {
 		DownloadURL string `json:"download_url"`
 		Status      string `json:"status"`
@@ -2667,6 +2677,26 @@ func (c *Client) fetchImageDownloadURL(ctx context.Context, apiURL string) (stri
 		return "", fmt.Errorf("empty download_url (status=%s)", out.Status)
 	}
 	return out.DownloadURL, nil
+}
+
+func isImageDownloadBody(contentType string, body []byte) bool {
+	ct := strings.ToLower(strings.TrimSpace(strings.Split(contentType, ";")[0]))
+	if strings.HasPrefix(ct, "image/") {
+		return true
+	}
+	if len(body) >= 8 && bytes.Equal(body[:8], []byte{0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a}) {
+		return true
+	}
+	if len(body) >= 3 && bytes.Equal(body[:3], []byte{0xff, 0xd8, 0xff}) {
+		return true
+	}
+	if len(body) >= 12 && string(body[:4]) == "RIFF" && string(body[8:12]) == "WEBP" {
+		return true
+	}
+	if len(body) >= 6 && (string(body[:6]) == "GIF87a" || string(body[:6]) == "GIF89a") {
+		return true
+	}
+	return false
 }
 
 func (c *Client) FetchImage(ctx context.Context, signedURL string, maxBytes int64) ([]byte, string, error) {
@@ -2749,6 +2779,9 @@ func (c *Client) UploadFile(ctx context.Context, data []byte, fileName string) (
 	req1.Header.Set("Accept", "application/json")
 	res1, err := c.hc.Do(req1)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("create file: %w", err)
 	}
 	defer res1.Body.Close()
@@ -2786,6 +2819,9 @@ func (c *Client) UploadFile(ctx context.Context, data []byte, fileName string) (
 	req2.Header.Set("Referer", c.opts.BaseURL+"/")
 	res2, err := c.hc.Do(req2)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("upload PUT: %w", err)
 	}
 	defer res2.Body.Close()
@@ -2803,6 +2839,9 @@ func (c *Client) UploadFile(ctx context.Context, data []byte, fileName string) (
 	req3.Header.Set("Accept", "application/json")
 	res3, err := c.hc.Do(req3)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("register uploaded: %w", err)
 	}
 	defer res3.Body.Close()
@@ -2852,6 +2891,9 @@ func (c *Client) ProcessUploadStream(ctx context.Context, fileID, fileName strin
 	req.Header.Set("Accept", "text/event-stream")
 	res, err := c.hc.Do(req)
 	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
 		return "", fmt.Errorf("process upload stream: %w", err)
 	}
 	defer res.Body.Close()
