@@ -4696,6 +4696,9 @@
     "No custom path prefixes configured. Custom scope will not count any requests.": "Aucun préfixe de chemin personnalisé n’est configuré. La portée personnalisée ne comptera aucune requête.",
     "Current scope": "Portée actuelle",
     "Matched path prefixes": "Préfixes de chemin correspondants",
-    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Les entrées manuelles de la liste noire restent appliquées globalement et ne sont pas limitées par cette portée de comptage."
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Les entrées manuelles de la liste noire restent appliquées globalement et ne sont pas limitées par cette portée de comptage.",
+    "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings": "Contrôlez le comportement de relais direct, la conversion WebSocket et les paramètres de maintien de connexion",
+    "Enable HTTP to WebSocket Conversion": "Activer la conversion HTTP vers WebSocket",
+    "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.": "Convertit les requêtes texte HTTP éligibles vers le WebSocket amont lorsque l’adaptateur du canal sélectionné le prend en charge. Les canaux non pris en charge continuent d’utiliser HTTP."
   }
 }

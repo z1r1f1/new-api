@@ -4696,6 +4696,9 @@
     "No custom path prefixes configured. Custom scope will not count any requests.": "尚未配置自定义路径前缀；自定义范围不会统计任何请求。",
     "Current scope": "当前范围",
     "Matched path prefixes": "匹配的路径前缀",
-    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "手动黑名单条目仍然全站生效，不受此统计范围限制。"
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "手动黑名单条目仍然全站生效，不受此统计范围限制。",
+    "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings": "控制请求透传、WebSocket 转换和连接保活设置",
+    "Enable HTTP to WebSocket Conversion": "启用 HTTP 到 WebSocket 转换",
+    "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.": "当选中的渠道适配器支持时，将符合条件的 HTTP 文本请求转换为上游 WebSocket；不支持的渠道会继续使用 HTTP。"
   }
 }

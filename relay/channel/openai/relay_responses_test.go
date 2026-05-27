@@ -13,6 +13,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestOaiResponsesHandlerNormalizesNilOutputForSDKClients(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(
+			`{"id":"resp_test","object":"response","status":"completed","model":"gpt-5.5","output":null,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}`,
+		)),
+	}
+
+	usage, err := OaiResponsesHandler(c, &relaycommon.RelayInfo{}, resp)
+	if err != nil {
+		t.Fatalf("OaiResponsesHandler returned error: %v", err)
+	}
+	if usage == nil || usage.TotalTokens != 2 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `"output":[]`) {
+		t.Fatalf("expected response output to be normalized to an empty array, got:\n%s", body)
+	}
+	if strings.Contains(body, `"output":null`) {
+		t.Fatalf("expected response output not to be null, got:\n%s", body)
+	}
+}
+
 func TestOaiResponsesStreamHandlerMarksCompletedAsDone(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	originalStreamingTimeout := constant.StreamingTimeout
@@ -57,6 +87,45 @@ func TestOaiResponsesStreamHandlerMarksCompletedAsDone(t *testing.T) {
 	}
 	if recorder.Body.String() == "" {
 		t.Fatal("expected completed event to be forwarded")
+	}
+}
+
+func TestOaiResponsesStreamHandlerNormalizesCompletedOutputForSDKClients(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() {
+		constant.StreamingTimeout = originalStreamingTimeout
+	})
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
+		`data: {"type":"response.completed","response":{"id":"resp_test","object":"response","status":"completed","model":"gpt-5.5","output":null,"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}}`,
+	}, "\n") + "\n"
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+	}
+	info := &relaycommon.RelayInfo{IsStream: true}
+
+	usage, err := OaiResponsesStreamHandler(c, info, resp)
+	if err != nil {
+		t.Fatalf("OaiResponsesStreamHandler returned error: %v", err)
+	}
+	if usage == nil || usage.TotalTokens != 12 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+	out := recorder.Body.String()
+	if !strings.Contains(out, `"output":[]`) {
+		t.Fatalf("expected completed response output to be normalized to an empty array, got:\n%s", out)
+	}
+	if strings.Contains(out, `"output":null`) {
+		t.Fatalf("expected completed response output not to be null, got:\n%s", out)
 	}
 }
 

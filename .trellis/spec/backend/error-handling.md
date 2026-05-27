@@ -104,6 +104,10 @@ When adding a new provider adapter, prefer converting provider response errors t
 
 - Upstream SSE event types `response.error` and `response.failed` are relay
   errors, not successful zero-token completions.
+- Successful Responses final payloads must not expose `response.output` /
+  `output` as `null`. Normalize missing or null output arrays to `[]` before
+  forwarding native `/v1/responses` bodies or `response.completed` SSE events,
+  because SDK clients commonly iterate that field during stream finalization.
 - Error details must be extracted from nested `response.error` first, and from
   top-level `error` when present.
 - Detail extraction must not require `error.type`; `error.message` or
@@ -121,6 +125,8 @@ When adding a new provider adapter, prefer converting provider response errors t
 - `response.error` with top-level `error` -> include top-level error details.
 - No parseable error object -> fall back to
   `responses stream error: <event_type>`.
+- Upstream success body or `response.completed` with `output: null` or missing
+  `output` -> forward the same successful response with `output: []`.
 
 ### 5. Good/Base/Bad Cases
 
@@ -128,15 +134,23 @@ When adding a new provider adapter, prefer converting provider response errors t
   `Invalid tool` and `invalid_tool`.
 - Base: normal `response.completed` streams still mark the stream done and
   settle usage.
+- Base: upstream `response.completed` may omit `response.output`; downstream
+  OpenAI SDK clients must still receive an iterable `output` array.
 - Bad: returning only `responses stream error: response.failed`; this loses the
   actual upstream reason.
 - Bad: treating `response.failed` as a normal stream EOF and recording a
   successful consume log with zero completion tokens.
+- Bad: forwarding `output: null` in a successful Responses final object; Python
+  SDK consumers can fail locally with `TypeError: 'NoneType' object is not
+  iterable`.
 
 ### 6. Tests Required
 
 - `relay/channel/openai`: regression tests for native Responses and bridged
   Responses streams proving `response.failed` includes message/code details.
+- `relay/channel/openai`: regression tests for non-stream Responses and
+  `response.completed` streams proving null/missing `output` is normalized to
+  `[]`.
 - `common`: regression test proving known Responses SSE event names such as
   `response.failed` and `response.error` are not masked as plain domains, while
   real domains, URLs, and IPs still are.

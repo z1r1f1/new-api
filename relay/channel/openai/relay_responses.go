@@ -31,6 +31,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	if err != nil {
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
+	responseBody = normalizeResponsesResponseBodyOutput(responseBody, &responsesResponse)
 	if oaiError := responsesResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
@@ -95,10 +96,14 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 			sr.Error(err)
 			return
 		}
-		sendResponsesStreamData(c, streamResponse, data)
+		forwardData := data
+		if streamResponse.Type == "response.completed" {
+			forwardData = normalizeResponsesStreamResponseOutput(data, &streamResponse)
+		}
+		sendResponsesStreamData(c, streamResponse, forwardData)
 		switch streamResponse.Type {
 		case "response.completed":
-			service.AppendChannelAffinityResponseDebug(c, []byte(data))
+			service.AppendChannelAffinityResponseDebug(c, []byte(forwardData))
 			responseCompleted = true
 			if streamResponse.Response != nil {
 				if streamResponse.Response.Usage != nil {
@@ -177,4 +182,50 @@ func markResponsesStreamCompleted(info *relaycommon.RelayInfo) {
 	}
 	info.StreamStatus.EndReason = relaycommon.StreamEndReasonDone
 	info.StreamStatus.EndError = nil
+}
+
+func normalizeResponsesResponseBodyOutput(data []byte, resp *dto.OpenAIResponsesResponse) []byte {
+	if resp == nil || resp.Output != nil {
+		return data
+	}
+	resp.Output = []dto.ResponsesOutput{}
+
+	var payload map[string]any
+	if err := common.Unmarshal(data, &payload); err != nil {
+		return data
+	}
+	if value, exists := payload["output"]; exists && value != nil {
+		return data
+	}
+	payload["output"] = []any{}
+	normalized, err := common.Marshal(payload)
+	if err != nil {
+		return data
+	}
+	return normalized
+}
+
+func normalizeResponsesStreamResponseOutput(data string, streamResp *dto.ResponsesStreamResponse) string {
+	if streamResp == nil || streamResp.Response == nil || streamResp.Response.Output != nil {
+		return data
+	}
+	streamResp.Response.Output = []dto.ResponsesOutput{}
+
+	var payload map[string]any
+	if err := common.UnmarshalJsonStr(data, &payload); err != nil {
+		return data
+	}
+	response, ok := payload["response"].(map[string]any)
+	if !ok || response == nil {
+		return data
+	}
+	if value, exists := response["output"]; exists && value != nil {
+		return data
+	}
+	response["output"] = []any{}
+	normalized, err := common.Marshal(payload)
+	if err != nil {
+		return data
+	}
+	return string(normalized)
 }
