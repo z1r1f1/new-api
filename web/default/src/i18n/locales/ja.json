@@ -4677,6 +4677,25 @@
     "requests/min": "リクエスト/分",
     "0 disables automatic banning.": "0 は自動BANを無効にします。",
     "Auto-ban Whitelist": "自動BANホワイトリスト",
-    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "ここに指定した IP または CIDR 範囲は自動BANされません。手動ブラックリストの項目は引き続き適用されます。"
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "ここに指定した IP または CIDR 範囲は自動BANされません。手動ブラックリストの項目は引き続き適用されます。",
+    "Auto-ban Counting Scope": "自動封禁の集計範囲",
+    "Choose which request paths count toward the automatic IP ban RPM threshold.": "IP 自動封禁の RPM しきい値に含めるリクエストパスを選択します。",
+    "Relay/model API requests": "中継/モデル API リクエスト",
+    "All requests": "すべてのリクエスト",
+    "Custom path prefixes": "カスタムパスプレフィックス",
+    "Select auto-ban counting scope": "自動封禁の集計範囲を選択",
+    "Auto-ban Path Prefixes": "自動封禁パスプレフィックス",
+    "One path prefix per line. Commas and semicolons are also supported.": "1 行に 1 つのパスプレフィックスを入力します。カンマとセミコロン区切りにも対応しています。",
+    "Counts every HTTP request, including frontend pages and dashboard APIs.": "フロントエンドページやダッシュボード API を含むすべての HTTP リクエストを集計します。",
+    "Only counts paths that match the custom prefixes above.": "上記のカスタムプレフィックスに一致するパスのみ集計します。",
+    "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.": "/v1、/pg、/mj、/suno、動画生成 API などの中継/モデル API パスを集計します。",
+    "Save configuration": "設定を保存",
+    "Detailed counting scope": "詳細な集計範囲",
+    "Review which requests are counted before an IP reaches the automatic ban RPM threshold.": "IP が自動封禁 RPM しきい値に達するまでに、どのリクエストが集計されるか確認します。",
+    "Every HTTP request is included; there is no path-prefix filter.": "すべての HTTP リクエストが対象で、パスプレフィックスのフィルターはありません。",
+    "No custom path prefixes configured. Custom scope will not count any requests.": "カスタムパスプレフィックスが設定されていません。カスタム範囲ではリクエストは集計されません。",
+    "Current scope": "現在の範囲",
+    "Matched path prefixes": "一致するパスプレフィックス",
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "手動ブラックリストの項目は引き続き全体に適用され、この集計範囲では制限されません。"
   }
 }

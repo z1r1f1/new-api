@@ -26,6 +26,17 @@ var (
 	updateIPBlacklistList = model.UpdateOption
 )
 
+var defaultAutoBanRelayPathPrefixes = []string{
+	"/v1",
+	"/v1beta",
+	"/pg/chat/completions",
+	"/pg/images",
+	"/mj",
+	"/suno",
+	"/kling/v1",
+	"/jimeng",
+}
+
 func IPBlacklist() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		setting := system_setting.GetIPBlacklistSetting()
@@ -118,6 +129,9 @@ func autoBanIPIfNeeded(c *gin.Context, setting *system_setting.IPBlacklistSettin
 	if !setting.AutoBanEnabled || setting.AutoBanRpm <= 0 || len(candidates) == 0 {
 		return false
 	}
+	if !shouldCountAutoBanRequest(c.Request.URL.Path, setting) {
+		return false
+	}
 
 	clientIP, ok := selectAutoBanClientIP(candidates, common.SplitIPList(setting.AutoBanWhitelist))
 	if !ok {
@@ -137,6 +151,64 @@ func autoBanIPIfNeeded(c *gin.Context, setting *system_setting.IPBlacklistSettin
 	})
 	c.Abort()
 	return true
+}
+
+func shouldCountAutoBanRequest(path string, setting *system_setting.IPBlacklistSetting) bool {
+	switch normalizeAutoBanScope(setting.AutoBanScope) {
+	case system_setting.IPAutoBanScopeAll:
+		return true
+	case system_setting.IPAutoBanScopeCustom:
+		return hasAutoBanPathPrefix(path, splitAutoBanPathPrefixes(setting.AutoBanPathPrefixes))
+	default:
+		return hasAutoBanPathPrefix(path, defaultAutoBanRelayPathPrefixes)
+	}
+}
+
+func normalizeAutoBanScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case system_setting.IPAutoBanScopeAll:
+		return system_setting.IPAutoBanScopeAll
+	case system_setting.IPAutoBanScopeCustom:
+		return system_setting.IPAutoBanScopeCustom
+	default:
+		return system_setting.IPAutoBanScopeRelay
+	}
+}
+
+func splitAutoBanPathPrefixes(raw string) []string {
+	normalized := strings.NewReplacer(",", "\n", ";", "\n").Replace(raw)
+	parts := strings.Split(normalized, "\n")
+	prefixes := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+
+	for _, part := range parts {
+		prefix := strings.TrimSpace(part)
+		if prefix == "" {
+			continue
+		}
+		if !strings.HasPrefix(prefix, "/") {
+			prefix = "/" + prefix
+		}
+		if _, ok := seen[prefix]; ok {
+			continue
+		}
+		seen[prefix] = struct{}{}
+		prefixes = append(prefixes, prefix)
+	}
+
+	return prefixes
+}
+
+func hasAutoBanPathPrefix(path string, prefixes []string) bool {
+	if path == "" {
+		path = "/"
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func selectAutoBanClientIP(candidates []blacklistClientIP, whitelist []string) (blacklistClientIP, bool) {

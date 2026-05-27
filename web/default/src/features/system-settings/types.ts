@@ -331,6 +331,8 @@ export type SecuritySettings = {
   'ip_blacklist_setting.auto_ban_enabled': boolean
   'ip_blacklist_setting.auto_ban_rpm': number
   'ip_blacklist_setting.auto_ban_whitelist': string
+  'ip_blacklist_setting.auto_ban_scope': string
+  'ip_blacklist_setting.auto_ban_path_prefixes': string
 }
 
 export type UpstreamChannel = {

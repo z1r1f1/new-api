@@ -45,6 +45,8 @@ const defaultSecuritySettings: SecuritySettings = {
   'ip_blacklist_setting.auto_ban_enabled': true,
   'ip_blacklist_setting.auto_ban_rpm': 0,
   'ip_blacklist_setting.auto_ban_whitelist': '',
+  'ip_blacklist_setting.auto_ban_scope': 'relay',
+  'ip_blacklist_setting.auto_ban_path_prefixes': '',
 }
 
 export function SecuritySettings() {

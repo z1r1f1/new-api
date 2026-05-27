@@ -4677,6 +4677,25 @@
     "requests/min": "requests/min",
     "0 disables automatic banning.": "0 disables automatic banning.",
     "Auto-ban Whitelist": "Auto-ban Whitelist",
-    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply."
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.",
+    "Auto-ban Counting Scope": "Auto-ban Counting Scope",
+    "Choose which request paths count toward the automatic IP ban RPM threshold.": "Choose which request paths count toward the automatic IP ban RPM threshold.",
+    "Relay/model API requests": "Relay/model API requests",
+    "All requests": "All requests",
+    "Custom path prefixes": "Custom path prefixes",
+    "Select auto-ban counting scope": "Select auto-ban counting scope",
+    "Auto-ban Path Prefixes": "Auto-ban Path Prefixes",
+    "One path prefix per line. Commas and semicolons are also supported.": "One path prefix per line. Commas and semicolons are also supported.",
+    "Counts every HTTP request, including frontend pages and dashboard APIs.": "Counts every HTTP request, including frontend pages and dashboard APIs.",
+    "Only counts paths that match the custom prefixes above.": "Only counts paths that match the custom prefixes above.",
+    "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.": "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.",
+    "Save configuration": "Save configuration",
+    "Detailed counting scope": "Detailed counting scope",
+    "Review which requests are counted before an IP reaches the automatic ban RPM threshold.": "Review which requests are counted before an IP reaches the automatic ban RPM threshold.",
+    "Every HTTP request is included; there is no path-prefix filter.": "Every HTTP request is included; there is no path-prefix filter.",
+    "No custom path prefixes configured. Custom scope will not count any requests.": "No custom path prefixes configured. Custom scope will not count any requests.",
+    "Current scope": "Current scope",
+    "Matched path prefixes": "Matched path prefixes",
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Manual blacklist entries are still enforced globally and are not limited by this counting scope."
   }
 }

@@ -23,6 +23,16 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import {
   Form,
@@ -35,8 +45,48 @@ import {
 } from '@/components/ui/form'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
+
+const autoBanScopes = ['all', 'relay', 'custom'] as const
+type AutoBanScope = (typeof autoBanScopes)[number]
+
+const defaultAutoBanRelayPathPrefixes = [
+  '/v1',
+  '/v1beta',
+  '/pg/chat/completions',
+  '/pg/images',
+  '/mj',
+  '/suno',
+  '/kling/v1',
+  '/jimeng',
+]
+
+const normalizeAutoBanScope = (scope: string): AutoBanScope => {
+  return autoBanScopes.includes(scope as AutoBanScope)
+    ? (scope as AutoBanScope)
+    : 'relay'
+}
+
+const splitAutoBanPathPrefixes = (raw: string): string[] => {
+  const prefixes = raw
+    .replaceAll(',', '\n')
+    .replaceAll(';', '\n')
+    .split('\n')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((prefix) => (prefix.startsWith('/') ? prefix : `/${prefix}`))
+
+  return [...new Set(prefixes)]
+}
 
 const ipBlacklistSchema = z.object({
   ip_blacklist_setting: z.object({
@@ -45,6 +95,8 @@ const ipBlacklistSchema = z.object({
     auto_ban_enabled: z.boolean(),
     auto_ban_rpm: z.coerce.number().int().min(0).max(100000000),
     auto_ban_whitelist: z.string(),
+    auto_ban_scope: z.enum(autoBanScopes),
+    auto_ban_path_prefixes: z.string(),
   }),
 })
 
@@ -58,6 +110,8 @@ type IPBlacklistSectionProps = {
     'ip_blacklist_setting.auto_ban_enabled': boolean
     'ip_blacklist_setting.auto_ban_rpm': number
     'ip_blacklist_setting.auto_ban_whitelist': string
+    'ip_blacklist_setting.auto_ban_scope': string
+    'ip_blacklist_setting.auto_ban_path_prefixes': string
   }
 }
 
@@ -72,6 +126,11 @@ const buildFormDefaults = (
     auto_ban_enabled: defaults['ip_blacklist_setting.auto_ban_enabled'],
     auto_ban_rpm: defaults['ip_blacklist_setting.auto_ban_rpm'],
     auto_ban_whitelist: defaults['ip_blacklist_setting.auto_ban_whitelist'],
+    auto_ban_scope: normalizeAutoBanScope(
+      defaults['ip_blacklist_setting.auto_ban_scope']
+    ),
+    auto_ban_path_prefixes:
+      defaults['ip_blacklist_setting.auto_ban_path_prefixes'],
   },
 })
 
@@ -86,6 +145,11 @@ const normalizeDefaults = (
     defaults['ip_blacklist_setting.auto_ban_rpm'],
   'ip_blacklist_setting.auto_ban_whitelist':
     defaults['ip_blacklist_setting.auto_ban_whitelist'],
+  'ip_blacklist_setting.auto_ban_scope': normalizeAutoBanScope(
+    defaults['ip_blacklist_setting.auto_ban_scope']
+  ),
+  'ip_blacklist_setting.auto_ban_path_prefixes':
+    defaults['ip_blacklist_setting.auto_ban_path_prefixes'],
 })
 
 const normalizeFormValues = (
@@ -99,6 +163,10 @@ const normalizeFormValues = (
     values.ip_blacklist_setting.auto_ban_rpm,
   'ip_blacklist_setting.auto_ban_whitelist':
     values.ip_blacklist_setting.auto_ban_whitelist.trim(),
+  'ip_blacklist_setting.auto_ban_scope':
+    values.ip_blacklist_setting.auto_ban_scope,
+  'ip_blacklist_setting.auto_ban_path_prefixes':
+    values.ip_blacklist_setting.auto_ban_path_prefixes.trim(),
 })
 
 export function IPBlacklistSection(props: IPBlacklistSectionProps) {
@@ -114,6 +182,10 @@ export function IPBlacklistSection(props: IPBlacklistSectionProps) {
     resolver: zodResolver(ipBlacklistSchema),
     defaultValues: formDefaults,
   })
+  const autoBanScope = form.watch('ip_blacklist_setting.auto_ban_scope')
+  const autoBanPathPrefixes = form.watch(
+    'ip_blacklist_setting.auto_ban_path_prefixes'
+  )
 
   useEffect(() => {
     form.reset(buildFormDefaults(props.defaultValues))
@@ -140,6 +212,57 @@ export function IPBlacklistSection(props: IPBlacklistSectionProps) {
     }
 
     form.reset(buildFormDefaults(normalized))
+  }
+
+  const getAutoBanScopeDescription = () => {
+    switch (autoBanScope) {
+      case 'all':
+        return t(
+          'Counts every HTTP request, including frontend pages and dashboard APIs.'
+        )
+      case 'custom':
+        return t('Only counts paths that match the custom prefixes above.')
+      default:
+        return t(
+          'Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.'
+        )
+    }
+  }
+
+  const getAutoBanScopeDetail = () => {
+    switch (autoBanScope) {
+      case 'all':
+        return {
+          modeLabel: t('All requests'),
+          summary: t(
+            'Counts every HTTP request, including frontend pages and dashboard APIs.'
+          ),
+          prefixes: [],
+          emptyText: t(
+            'Every HTTP request is included; there is no path-prefix filter.'
+          ),
+        }
+      case 'custom': {
+        const prefixes = splitAutoBanPathPrefixes(autoBanPathPrefixes)
+        return {
+          modeLabel: t('Custom path prefixes'),
+          summary: t('Only counts paths that match the custom prefixes above.'),
+          prefixes,
+          emptyText: t(
+            'No custom path prefixes configured. Custom scope will not count any requests.'
+          ),
+        }
+      }
+      default:
+        return {
+          modeLabel: t('Relay/model API requests'),
+          summary: t(
+            'Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.'
+          ),
+          prefixes: defaultAutoBanRelayPathPrefixes,
+          emptyText: '',
+        }
+    }
   }
 
   return (
@@ -283,13 +406,179 @@ export function IPBlacklistSection(props: IPBlacklistSectionProps) {
                 </FormItem>
               )}
             />
+
+            <FormField
+              control={form.control}
+              name='ip_blacklist_setting.auto_ban_scope'
+              render={({ field }) => (
+                <FormItem>
+                  <div className='flex items-center justify-between gap-2'>
+                    <FormLabel>{t('Auto-ban Counting Scope')}</FormLabel>
+                    <Dialog>
+                      <DialogTrigger
+                        render={
+                          <Button type='button' variant='outline' size='sm' />
+                        }
+                      >
+                        {t('View details')}
+                      </DialogTrigger>
+                      <DialogContent className='sm:max-w-lg'>
+                        <DialogHeader>
+                          <DialogTitle>
+                            {t('Detailed counting scope')}
+                          </DialogTitle>
+                          <DialogDescription>
+                            {t(
+                              'Review which requests are counted before an IP reaches the automatic ban RPM threshold.'
+                            )}
+                          </DialogDescription>
+                        </DialogHeader>
+
+                        <AutoBanScopeDetailContent
+                          detail={getAutoBanScopeDetail()}
+                        />
+
+                        <DialogFooter>
+                          <DialogClose
+                            render={<Button type='button' variant='outline' />}
+                          >
+                            {t('Close')}
+                          </DialogClose>
+                        </DialogFooter>
+                      </DialogContent>
+                    </Dialog>
+                  </div>
+                  <FormControl>
+                    <Select
+                      items={[
+                        {
+                          value: 'relay',
+                          label: t('Relay/model API requests'),
+                        },
+                        { value: 'all', label: t('All requests') },
+                        {
+                          value: 'custom',
+                          label: t('Custom path prefixes'),
+                        },
+                      ]}
+                      value={field.value}
+                      onValueChange={field.onChange}
+                    >
+                      <SelectTrigger className='w-full'>
+                        <SelectValue
+                          placeholder={t('Select auto-ban counting scope')}
+                        />
+                      </SelectTrigger>
+                      <SelectContent alignItemWithTrigger={false}>
+                        <SelectGroup>
+                          <SelectItem value='relay'>
+                            {t('Relay/model API requests')}
+                          </SelectItem>
+                          <SelectItem value='all'>
+                            {t('All requests')}
+                          </SelectItem>
+                          <SelectItem value='custom'>
+                            {t('Custom path prefixes')}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Choose which request paths count toward the automatic IP ban RPM threshold.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          </div>
+
+          {autoBanScope === 'custom' ? (
+            <FormField
+              control={form.control}
+              name='ip_blacklist_setting.auto_ban_path_prefixes'
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t('Auto-ban Path Prefixes')}</FormLabel>
+                  <FormControl>
+                    <Textarea
+                      placeholder={'/v1&#10;/pg/chat/completions'}
+                      rows={5}
+                      {...field}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'One path prefix per line. Commas and semicolons are also supported.'
+                    )}
+                  </FormDescription>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+          ) : null}
+
+          <div className='rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground'>
+            {getAutoBanScopeDescription()}
           </div>
 
           <Button type='submit' disabled={updateOption.isPending}>
-            {updateOption.isPending ? t('Saving...') : t('Save IP blacklist')}
+            {updateOption.isPending ? t('Saving...') : t('Save configuration')}
           </Button>
         </form>
       </Form>
     </SettingsSection>
+  )
+}
+
+type AutoBanScopeDetailContentProps = {
+  detail: {
+    modeLabel: string
+    summary: string
+    prefixes: string[]
+    emptyText: string
+  }
+}
+
+function AutoBanScopeDetailContent(props: AutoBanScopeDetailContentProps) {
+  const { t } = useTranslation()
+
+  return (
+    <div className='space-y-4'>
+      <div className='rounded-lg border p-3'>
+        <div className='text-muted-foreground text-xs font-medium tracking-wide uppercase'>
+          {t('Current scope')}
+        </div>
+        <div className='mt-1 font-medium'>{props.detail.modeLabel}</div>
+        <p className='text-muted-foreground mt-1 text-sm'>
+          {props.detail.summary}
+        </p>
+      </div>
+
+      <div className='space-y-2'>
+        <div className='text-sm font-medium'>{t('Matched path prefixes')}</div>
+        {props.detail.prefixes.length > 0 ? (
+          <ul className='grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm sm:grid-cols-2'>
+            {props.detail.prefixes.map((prefix) => (
+              <li key={prefix} className='font-mono text-xs'>
+                {prefix}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className='text-muted-foreground rounded-lg border bg-muted/30 p-3 text-sm'>
+            {props.detail.emptyText}
+          </p>
+        )}
+      </div>
+
+      <p className='text-muted-foreground rounded-lg bg-muted/40 p-3 text-sm'>
+        {t(
+          'Manual blacklist entries are still enforced globally and are not limited by this counting scope.'
+        )}
+      </p>
+    </div>
   )
 }

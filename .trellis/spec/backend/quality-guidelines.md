@@ -361,6 +361,8 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
   - `ip_blacklist_setting.auto_ban_enabled`
   - `ip_blacklist_setting.auto_ban_rpm`
   - `ip_blacklist_setting.auto_ban_whitelist`
+  - `ip_blacklist_setting.auto_ban_scope`
+  - `ip_blacklist_setting.auto_ban_path_prefixes`
 - Shared parser: `common.SplitIPList(raw string) []string`
 - Matcher: `common.IsIpInCIDRList(ip net.IP, cidrList []string) bool`
 
@@ -382,6 +384,17 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
   inert by default. This preserves compatibility for deployments that set a
   positive threshold before the explicit enable key existed.
 - `auto_ban_whitelist` only exempts IPs from automatic ban; it must not bypass explicit manual blacklist entries.
+- `auto_ban_scope` controls which request paths are counted for automatic ban
+  RPM, but it must not scope manual blacklist enforcement:
+  - `relay` is the default and only counts model/relay API paths such as
+    `/v1`, `/v1beta`, `/pg/chat/completions`, `/pg/images`, `/mj`, `/suno`,
+    `/kling/v1`, and `/jimeng`.
+  - `all` preserves the legacy behavior and counts every HTTP request,
+    including frontend page loads and dashboard APIs.
+  - `custom` only counts paths matching `auto_ban_path_prefixes`; prefixes use
+    newline/comma/semicolon separators and are matched with `strings.HasPrefix`.
+- Empty or unknown `auto_ban_scope` values must normalize to `relay` to avoid
+  false-positive bans from ordinary dashboard traffic on upgraded deployments.
 
 #### 4. Validation & Error Matrix
 
@@ -393,6 +406,10 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 - `auto_ban_enabled=true`, `auto_ban_rpm<=0` -> no automatic ban.
 - `auto_ban_enabled=true`, request count for the selected non-whitelisted client IP reaches `auto_ban_rpm` in the current minute -> append the IP to `list`, persist `ip_blacklist_setting.list`, return HTTP 403 `当前 IP 请求频率过高，已被自动封禁`.
 - Client IP in `auto_ban_whitelist` -> skip automatic ban counting for that IP, but still enforce the manual blacklist.
+- `auto_ban_scope=relay`, `/api/status` -> do not count toward automatic ban.
+- `auto_ban_scope=relay`, `/v1/chat/completions` -> count toward automatic ban.
+- `auto_ban_scope=all`, `/api/status` -> count toward automatic ban.
+- `auto_ban_scope=custom`, path not matching `auto_ban_path_prefixes` -> do not count.
 - Invalid entries in the blacklist are ignored by `common.IsIpInCIDRList`; do not fail startup or option loading.
 
 #### 5. Good/Base/Bad Cases
@@ -403,9 +420,15 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 - Good: `203.0.113.10` in `auto_ban_whitelist` is not auto-banned even when it exceeds the RPM threshold.
 - Good: `127.0.0.1` in `auto_ban_whitelist` with `X-Real-IP: 203.0.113.9`
   counts and bans `203.0.113.9`, not the local reverse proxy.
+- Good: default `auto_ban_scope=relay` prevents frequent dashboard/API page
+  loads from automatically banning a user who has no model relay traffic.
+- Good: `auto_ban_scope=custom` with `/api/token` only counts token endpoints,
+  not unrelated `/api/status` checks.
 - Base: disabled manual blacklist with automatic ban disabled and any list is allowed.
 - Bad: adding the middleware only to `/api`, leaving `/v1` relay or frontend routes unprotected.
 - Bad: auto-banning every `X-Forwarded-For` value; spoofed headers could ban unrelated victims. Select one non-whitelisted client candidate for automatic counting.
+- Bad: using `all` as the upgraded default; normal browser boot/login/API polling
+  can exceed low RPM thresholds and cause false automatic bans.
 
 #### 6. Tests Required
 
@@ -413,6 +436,8 @@ return splitAccessRestrictionValues(token.ModelLimits, func(r rune) bool {
 - Middleware-test both blocked and allowed request paths.
 - Middleware-test automatic ban threshold behavior, whitelist exemption, and
   reverse-proxy fallback from a whitelisted proxy IP to a forwarded client IP.
+- Middleware-test automatic ban scope behavior for default/relay, all, and
+  custom-prefix modes.
 
 #### 7. Wrong vs Correct
 

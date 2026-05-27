@@ -4677,6 +4677,25 @@
     "requests/min": "requêtes/min",
     "0 disables automatic banning.": "0 désactive le bannissement automatique.",
     "Auto-ban Whitelist": "Liste blanche du bannissement auto",
-    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "Les IP ou plages CIDR indiquées ici ne seront jamais bannies automatiquement. Les entrées manuelles de liste noire restent appliquées."
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "Les IP ou plages CIDR indiquées ici ne seront jamais bannies automatiquement. Les entrées manuelles de liste noire restent appliquées.",
+    "Auto-ban Counting Scope": "Portée du comptage d’auto-ban",
+    "Choose which request paths count toward the automatic IP ban RPM threshold.": "Choisissez quels chemins de requête comptent dans le seuil RPM de bannissement automatique des IP.",
+    "Relay/model API requests": "Requêtes API relais/modèle",
+    "All requests": "Toutes les requêtes",
+    "Custom path prefixes": "Préfixes de chemin personnalisés",
+    "Select auto-ban counting scope": "Sélectionner la portée du comptage automatique",
+    "Auto-ban Path Prefixes": "Préfixes de chemin d’auto-ban",
+    "One path prefix per line. Commas and semicolons are also supported.": "Un préfixe de chemin par ligne. Les virgules et points-virgules sont également pris en charge.",
+    "Counts every HTTP request, including frontend pages and dashboard APIs.": "Compte toutes les requêtes HTTP, y compris les pages frontend et les API du tableau de bord.",
+    "Only counts paths that match the custom prefixes above.": "Ne compte que les chemins correspondant aux préfixes personnalisés ci-dessus.",
+    "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.": "Compte les chemins API relais/modèle tels que /v1, /pg, /mj, /suno et les API de génération vidéo.",
+    "Save configuration": "Enregistrer la configuration",
+    "Detailed counting scope": "Portée détaillée du comptage",
+    "Review which requests are counted before an IP reaches the automatic ban RPM threshold.": "Vérifiez quelles requêtes sont comptabilisées avant qu’une IP atteigne le seuil RPM de bannissement automatique.",
+    "Every HTTP request is included; there is no path-prefix filter.": "Chaque requête HTTP est incluse ; aucun filtre de préfixe de chemin n’est appliqué.",
+    "No custom path prefixes configured. Custom scope will not count any requests.": "Aucun préfixe de chemin personnalisé n’est configuré. La portée personnalisée ne comptera aucune requête.",
+    "Current scope": "Portée actuelle",
+    "Matched path prefixes": "Préfixes de chemin correspondants",
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Les entrées manuelles de la liste noire restent appliquées globalement et ne sont pas limitées par cette portée de comptage."
   }
 }

@@ -4677,6 +4677,25 @@
     "requests/min": "запросов/мин",
     "0 disables automatic banning.": "0 отключает автоматическую блокировку.",
     "Auto-ban Whitelist": "Белый список автоблокировки",
-    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "IP или CIDR-диапазоны здесь никогда не будут заблокированы автоматически. Ручной черный список продолжает действовать."
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "IP или CIDR-диапазоны здесь никогда не будут заблокированы автоматически. Ручной черный список продолжает действовать.",
+    "Auto-ban Counting Scope": "Область подсчета авто-блокировки",
+    "Choose which request paths count toward the automatic IP ban RPM threshold.": "Выберите, какие пути запросов учитываются в пороге RPM для автоматической блокировки IP.",
+    "Relay/model API requests": "Запросы API ретрансляции/моделей",
+    "All requests": "Все запросы",
+    "Custom path prefixes": "Пользовательские префиксы путей",
+    "Select auto-ban counting scope": "Выберите область подсчета авто-блокировки",
+    "Auto-ban Path Prefixes": "Префиксы путей авто-блокировки",
+    "One path prefix per line. Commas and semicolons are also supported.": "Один префикс пути на строку. Также поддерживаются запятые и точки с запятой.",
+    "Counts every HTTP request, including frontend pages and dashboard APIs.": "Учитывает все HTTP-запросы, включая страницы фронтенда и API панели управления.",
+    "Only counts paths that match the custom prefixes above.": "Учитывает только пути, совпадающие с пользовательскими префиксами выше.",
+    "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.": "Учитывает пути API ретрансляции/моделей, такие как /v1, /pg, /mj, /suno, и API генерации видео.",
+    "Save configuration": "Сохранить конфигурацию",
+    "Detailed counting scope": "Подробная область подсчета",
+    "Review which requests are counted before an IP reaches the automatic ban RPM threshold.": "Просмотрите, какие запросы учитываются до достижения IP порога RPM для автоматической блокировки.",
+    "Every HTTP request is included; there is no path-prefix filter.": "Учитывается каждый HTTP-запрос; фильтр по префиксу пути отсутствует.",
+    "No custom path prefixes configured. Custom scope will not count any requests.": "Пользовательские префиксы путей не настроены. Пользовательская область не будет учитывать запросы.",
+    "Current scope": "Текущая область",
+    "Matched path prefixes": "Совпадающие префиксы путей",
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Ручные записи черного списка по-прежнему применяются глобально и не ограничиваются этой областью подсчета."
   }
 }

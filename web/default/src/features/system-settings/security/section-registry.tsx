@@ -72,6 +72,10 @@ const SECURITY_SECTIONS = [
             settings['ip_blacklist_setting.auto_ban_rpm'],
           'ip_blacklist_setting.auto_ban_whitelist':
             settings['ip_blacklist_setting.auto_ban_whitelist'],
+          'ip_blacklist_setting.auto_ban_scope':
+            settings['ip_blacklist_setting.auto_ban_scope'],
+          'ip_blacklist_setting.auto_ban_path_prefixes':
+            settings['ip_blacklist_setting.auto_ban_path_prefixes'],
         }}
       />
     ),

@@ -4677,6 +4677,25 @@
     "requests/min": "请求/分钟",
     "0 disables automatic banning.": "0 表示禁用自动封禁。",
     "Auto-ban Whitelist": "自动封禁白名单",
-    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "这里的 IP 或 CIDR 网段不会被自动封禁；手动黑名单仍然生效。"
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "这里的 IP 或 CIDR 网段不会被自动封禁；手动黑名单仍然生效。",
+    "Auto-ban Counting Scope": "自动封禁统计范围",
+    "Choose which request paths count toward the automatic IP ban RPM threshold.": "选择哪些请求路径计入 IP 自动封禁 RPM 阈值。",
+    "Relay/model API requests": "中转/模型 API 请求",
+    "All requests": "全站请求",
+    "Custom path prefixes": "自定义路径前缀",
+    "Select auto-ban counting scope": "选择自动封禁统计范围",
+    "Auto-ban Path Prefixes": "自动封禁路径前缀",
+    "One path prefix per line. Commas and semicolons are also supported.": "每行一个路径前缀，也支持逗号和分号分隔。",
+    "Counts every HTTP request, including frontend pages and dashboard APIs.": "统计所有 HTTP 请求，包括前端页面和控制台 API。",
+    "Only counts paths that match the custom prefixes above.": "仅统计匹配上方自定义前缀的路径。",
+    "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.": "统计中转/模型 API 路径，例如 /v1、/pg、/mj、/suno 和视频生成 API。",
+    "Save configuration": "保存配置",
+    "Detailed counting scope": "详细统计范围",
+    "Review which requests are counted before an IP reaches the automatic ban RPM threshold.": "查看哪些请求会在 IP 达到自动封禁 RPM 阈值前被计入统计。",
+    "Every HTTP request is included; there is no path-prefix filter.": "所有 HTTP 请求都会计入统计，没有路径前缀过滤。",
+    "No custom path prefixes configured. Custom scope will not count any requests.": "尚未配置自定义路径前缀；自定义范围不会统计任何请求。",
+    "Current scope": "当前范围",
+    "Matched path prefixes": "匹配的路径前缀",
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "手动黑名单条目仍然全站生效，不受此统计范围限制。"
   }
 }

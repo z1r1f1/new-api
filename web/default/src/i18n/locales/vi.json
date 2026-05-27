@@ -4677,6 +4677,25 @@
     "requests/min": "yêu cầu/phút",
     "0 disables automatic banning.": "0 sẽ tắt tự động chặn.",
     "Auto-ban Whitelist": "Danh sách cho phép tự động chặn",
-    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "Các IP hoặc dải CIDR ở đây sẽ không bao giờ bị tự động chặn. Các mục danh sách chặn thủ công vẫn có hiệu lực."
+    "IPs or CIDR ranges here will never be automatically banned. Manual blacklist entries still apply.": "Các IP hoặc dải CIDR ở đây sẽ không bao giờ bị tự động chặn. Các mục danh sách chặn thủ công vẫn có hiệu lực.",
+    "Auto-ban Counting Scope": "Phạm vi đếm tự động cấm",
+    "Choose which request paths count toward the automatic IP ban RPM threshold.": "Chọn các đường dẫn yêu cầu được tính vào ngưỡng RPM tự động cấm IP.",
+    "Relay/model API requests": "Yêu cầu API chuyển tiếp/mô hình",
+    "All requests": "Tất cả yêu cầu",
+    "Custom path prefixes": "Tiền tố đường dẫn tùy chỉnh",
+    "Select auto-ban counting scope": "Chọn phạm vi đếm tự động cấm",
+    "Auto-ban Path Prefixes": "Tiền tố đường dẫn tự động cấm",
+    "One path prefix per line. Commas and semicolons are also supported.": "Mỗi dòng một tiền tố đường dẫn. Cũng hỗ trợ dấu phẩy và dấu chấm phẩy.",
+    "Counts every HTTP request, including frontend pages and dashboard APIs.": "Đếm mọi yêu cầu HTTP, bao gồm trang frontend và API bảng điều khiển.",
+    "Only counts paths that match the custom prefixes above.": "Chỉ đếm các đường dẫn khớp với tiền tố tùy chỉnh ở trên.",
+    "Counts relay/model API paths such as /v1, /pg, /mj, /suno, and video generation APIs.": "Đếm các đường dẫn API chuyển tiếp/mô hình như /v1, /pg, /mj, /suno và API tạo video.",
+    "Save configuration": "Lưu cấu hình",
+    "Detailed counting scope": "Phạm vi đếm chi tiết",
+    "Review which requests are counted before an IP reaches the automatic ban RPM threshold.": "Xem các yêu cầu nào được tính trước khi một IP đạt ngưỡng RPM tự động cấm.",
+    "Every HTTP request is included; there is no path-prefix filter.": "Mọi yêu cầu HTTP đều được tính; không có bộ lọc tiền tố đường dẫn.",
+    "No custom path prefixes configured. Custom scope will not count any requests.": "Chưa cấu hình tiền tố đường dẫn tùy chỉnh. Phạm vi tùy chỉnh sẽ không đếm yêu cầu nào.",
+    "Current scope": "Phạm vi hiện tại",
+    "Matched path prefixes": "Tiền tố đường dẫn khớp",
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Các mục danh sách đen thủ công vẫn được áp dụng toàn cục và không bị giới hạn bởi phạm vi đếm này."
   }
 }
