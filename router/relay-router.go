@@ -94,14 +94,15 @@ func SetRelayRouter(router *gin.Engine) {
 	relayV1Router.Use(middleware.TokenAuth())
 	relayV1Router.Use(middleware.ModelRequestRateLimit())
 	{
+		// Responses WebSocket route. Channel selection happens after the first
+		// response.create event because the model is inside the WebSocket payload.
+		relayV1Router.GET("/responses", controller.ResponsesWebSocket)
+	}
+	{
 		// WebSocket 路由（统一到 Relay）
 		wsRouter := relayV1Router.Group("")
 		wsRouter.Use(middleware.Distribute())
 		wsRouter.GET("/realtime", func(c *gin.Context) {
-			controller.Relay(c, types.RelayFormatOpenAIRealtime)
-		})
-		// Compatibility route for clients that attempt Responses over WebSocket.
-		wsRouter.GET("/responses", func(c *gin.Context) {
 			controller.Relay(c, types.RelayFormatOpenAIRealtime)
 		})
 	}

@@ -4696,9 +4696,6 @@
     "No custom path prefixes configured. Custom scope will not count any requests.": "No custom path prefixes configured. Custom scope will not count any requests.",
     "Current scope": "Current scope",
     "Matched path prefixes": "Matched path prefixes",
-    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Manual blacklist entries are still enforced globally and are not limited by this counting scope.",
-    "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings": "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings",
-    "Enable HTTP to WebSocket Conversion": "Enable HTTP to WebSocket Conversion",
-    "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.": "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP."
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Manual blacklist entries are still enforced globally and are not limited by this counting scope."
   }
 }

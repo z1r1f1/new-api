@@ -4696,9 +4696,6 @@
     "No custom path prefixes configured. Custom scope will not count any requests.": "Пользовательские префиксы путей не настроены. Пользовательская область не будет учитывать запросы.",
     "Current scope": "Текущая область",
     "Matched path prefixes": "Совпадающие префиксы путей",
-    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Ручные записи черного списка по-прежнему применяются глобально и не ограничиваются этой областью подсчета.",
-    "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings": "Управляйте сквозной передачей запросов, преобразованием WebSocket и параметрами поддержания соединения",
-    "Enable HTTP to WebSocket Conversion": "Включить преобразование HTTP в WebSocket",
-    "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.": "Преобразует подходящие текстовые HTTP-запросы в WebSocket к вышестоящему сервису, если выбранный адаптер канала это поддерживает. Неподдерживаемые каналы продолжают использовать HTTP."
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Ручные записи черного списка по-прежнему применяются глобально и не ограничиваются этой областью подсчета."
   }
 }

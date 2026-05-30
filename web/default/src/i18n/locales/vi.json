@@ -4696,9 +4696,6 @@
     "No custom path prefixes configured. Custom scope will not count any requests.": "Chưa cấu hình tiền tố đường dẫn tùy chỉnh. Phạm vi tùy chỉnh sẽ không đếm yêu cầu nào.",
     "Current scope": "Phạm vi hiện tại",
     "Matched path prefixes": "Tiền tố đường dẫn khớp",
-    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Các mục danh sách đen thủ công vẫn được áp dụng toàn cục và không bị giới hạn bởi phạm vi đếm này.",
-    "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings": "Kiểm soát chuyển tiếp nguyên trạng, chuyển đổi WebSocket và cài đặt giữ kết nối",
-    "Enable HTTP to WebSocket Conversion": "Bật chuyển đổi HTTP sang WebSocket",
-    "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.": "Chuyển các yêu cầu văn bản HTTP đủ điều kiện sang WebSocket upstream khi adapter kênh đã chọn hỗ trợ. Các kênh không hỗ trợ sẽ tiếp tục dùng HTTP."
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Các mục danh sách đen thủ công vẫn được áp dụng toàn cục và không bị giới hạn bởi phạm vi đếm này."
   }
 }

@@ -82,7 +82,6 @@ const jsonString = z.string().refine((value) => {
 const schema = z.object({
   global: z.object({
     pass_through_request_enabled: z.boolean(),
-    http_to_websocket_conversion_enabled: z.boolean(),
     thinking_model_blacklist: jsonString,
     chat_completions_to_responses_policy: jsonString,
   }),
@@ -97,7 +96,6 @@ type GlobalModelSettingsFormInput = z.input<typeof schema>
 
 type FlatGlobalModelSettings = {
   'global.pass_through_request_enabled': boolean
-  'global.http_to_websocket_conversion_enabled': boolean
   'global.thinking_model_blacklist': string
   'global.chat_completions_to_responses_policy': string
   'general_setting.ping_interval_enabled': boolean
@@ -109,8 +107,6 @@ const flattenGlobalValues = (
 ): FlatGlobalModelSettings => ({
   'global.pass_through_request_enabled':
     values.global.pass_through_request_enabled,
-  'global.http_to_websocket_conversion_enabled':
-    values.global.http_to_websocket_conversion_enabled,
   'global.thinking_model_blacklist': normalizeJsonText(
     values.global.thinking_model_blacklist,
     '[]'
@@ -193,7 +189,7 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
     <SettingsSection
       title={t('Global Model Configuration')}
       description={t(
-        'Control passthrough behavior, WebSocket conversion, and connection keep-alive settings'
+        'Control passthrough behavior and connection keep-alive settings'
       )}
     >
       <Form {...form}>
@@ -222,32 +218,6 @@ export function GlobalSettingsCard({ defaultValues }: GlobalSettingsCardProps) {
               </FormItem>
             )}
           />
-
-          <FormField
-            control={form.control}
-            name='global.http_to_websocket_conversion_enabled'
-            render={({ field }) => (
-              <FormItem className='flex flex-row items-center justify-between rounded-lg border p-4'>
-                <div className='space-y-0.5'>
-                  <FormLabel className='text-base'>
-                    {t('Enable HTTP to WebSocket Conversion')}
-                  </FormLabel>
-                  <FormDescription>
-                    {t(
-                      'Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.'
-                    )}
-                  </FormDescription>
-                </div>
-                <FormControl>
-                  <Switch
-                    checked={field.value}
-                    onCheckedChange={field.onChange}
-                  />
-                </FormControl>
-              </FormItem>
-            )}
-          />
-
           <FormField
             control={form.control}
             name='global.thinking_model_blacklist'

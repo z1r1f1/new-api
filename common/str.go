@@ -268,3 +268,12 @@ func MaskSensitiveInfo(str string) string {
 
 	return str
 }
+
+func LocalLogPreview(str string) string {
+	const maxLen = 2000
+	str = strings.TrimSpace(str)
+	if len(str) <= maxLen {
+		return str
+	}
+	return str[:maxLen] + "...(truncated)"
+}

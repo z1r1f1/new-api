@@ -17,7 +17,6 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
-	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 )
 
@@ -340,88 +339,6 @@ func TestDoApiRequestFirstByteTimeoutSkipsCodexToClaudeChannel(t *testing.T) {
 	body, readErr := io.ReadAll(resp.Body)
 	require.NoError(t, readErr)
 	require.Equal(t, "ok", string(body))
-}
-
-func TestDoHTTPToWebsocketRequestStreamsWebsocketMessagesAsSSE(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	upgrader := websocket.Upgrader{}
-	var receivedBody string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		require.NoError(t, err)
-		defer conn.Close()
-
-		messageType, payload, err := conn.ReadMessage()
-		require.NoError(t, err)
-		require.Equal(t, websocket.TextMessage, messageType)
-		receivedBody = string(payload)
-
-		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.output_text.delta","delta":"hi"}`)))
-		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`[DONE]`)))
-	}))
-	t.Cleanup(server.Close)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	info := &relaycommon.RelayInfo{
-		IsStream:    true,
-		RelayFormat: types.RelayFormatOpenAIResponses,
-		RelayMode:   relayconstant.RelayModeResponses,
-		ChannelMeta: &relaycommon.ChannelMeta{},
-	}
-	resp, err := DoHTTPToWebsocketRequest(contextAwareTestAdaptor{url: server.URL + "/v1/responses"}, ctx, info, strings.NewReader(`{"input":"hi"}`))
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, `{"input":"hi"}`, receivedBody)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
-	require.Contains(t, string(body), `data: {"type":"response.output_text.delta","delta":"hi"}`+"\n\n")
-	require.Contains(t, string(body), "data: [DONE]\n\n")
-}
-
-func TestDoHTTPToWebsocketRequestReturnsFirstMessageForNonStream(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	upgrader := websocket.Upgrader{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		conn, err := upgrader.Upgrade(w, r, nil)
-		require.NoError(t, err)
-		defer conn.Close()
-
-		_, _, err = conn.ReadMessage()
-		require.NoError(t, err)
-		require.NoError(t, conn.WriteMessage(websocket.TextMessage, []byte(`{"id":"resp_test","object":"response","output":[]}`)))
-	}))
-	t.Cleanup(server.Close)
-
-	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	ctx.Request.Header.Set("Content-Type", "application/json")
-
-	info := &relaycommon.RelayInfo{
-		RelayFormat: types.RelayFormatOpenAIResponses,
-		RelayMode:   relayconstant.RelayModeResponses,
-		ChannelMeta: &relaycommon.ChannelMeta{},
-	}
-	resp, err := DoHTTPToWebsocketRequest(contextAwareTestAdaptor{url: server.URL + "/v1/responses"}, ctx, info, strings.NewReader(`{"input":"hi"}`))
-	require.NoError(t, err)
-	require.NotNil(t, resp)
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, resp.Header.Get("Content-Type"), "application/json")
-	require.JSONEq(t, `{"id":"resp_test","object":"response","output":[]}`, string(body))
 }
 
 func TestShouldApplyUpstreamFirstByteTimeoutSkipsImagesTestsAndTasks(t *testing.T) {

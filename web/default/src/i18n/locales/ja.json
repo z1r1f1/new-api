@@ -4696,9 +4696,6 @@
     "No custom path prefixes configured. Custom scope will not count any requests.": "カスタムパスプレフィックスが設定されていません。カスタム範囲ではリクエストは集計されません。",
     "Current scope": "現在の範囲",
     "Matched path prefixes": "一致するパスプレフィックス",
-    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "手動ブラックリストの項目は引き続き全体に適用され、この集計範囲では制限されません。",
-    "Control passthrough behavior, WebSocket conversion, and connection keep-alive settings": "リクエストのパススルー、WebSocket 変換、接続キープアライブ設定を制御します",
-    "Enable HTTP to WebSocket Conversion": "HTTP から WebSocket への変換を有効化",
-    "Convert eligible HTTP text requests to upstream WebSocket when the selected channel adapter supports it. Unsupported channels continue using HTTP.": "選択したチャネルアダプターが対応している場合、対象の HTTP テキストリクエストを上流 WebSocket に変換します。未対応のチャネルは HTTP を継続して使用します。"
+    "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "手動ブラックリストの項目は引き続き全体に適用され、この集計範囲では制限されません。"
   }
 }

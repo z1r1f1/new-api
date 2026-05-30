@@ -138,30 +138,64 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
-### HTTP-to-WebSocket relay conversion
+### Responses WebSocket relay
 
 #### 1. Scope / Trigger
 
-- Trigger: changes to `relay/http_to_websocket.go`, `relay/channel/http_to_websocket.go`, provider adaptor methods named `DoHTTPToWebsocketRequest`, or the global setting `global.http_to_websocket_conversion_enabled`.
+- Trigger: changes to `GET /v1/responses`, `controller.ResponsesWebSocket`, `relay/responses_websocket.go`, or upstream Responses WebSocket framing.
+- The legacy generic HTTP-to-WebSocket conversion path is forbidden. Ordinary HTTP relay requests must not be converted by sending their JSON body as one WebSocket text frame.
 
-#### 2. Contracts
+#### 2. Signatures
 
-- The global switch defaults to disabled. When enabled, only text HTTP relay modes currently eligible in `relay/http_to_websocket.go` may attempt conversion; native realtime/websocket, image, task, and channel-test paths must not be forced through this adapter.
-- Provider adaptors opt in by implementing `DoHTTPToWebsocketRequest`. Unsupported adaptors must fall back to their normal HTTP path and record `http_to_websocket_conversion_status=unsupported`.
-- Converted requests must use a replayable upstream request body so a websocket dial/write failure can safely fall back to the normal HTTP request with the same JSON payload.
-- The generic upstream websocket adapter derives the target URL by rewriting `http`/`https` to `ws`/`wss`, sends the converted upstream request body as one websocket text message, and exposes upstream websocket messages back to existing response handlers as either:
-  - SSE `data: ...\n\n` frames for stream requests; or
-  - the first websocket message as the JSON body for non-stream requests.
-- Successful conversion records `http_to_websocket_conversion_status=converted` and `http_to_websocket_conversion_used=true` in consume-log `Other`.
-- Websocket converter failure records `http_to_websocket_conversion_status=fallback_error` and `http_to_websocket_conversion_used=false`, then retries the same request through the normal HTTP adaptor path.
-- Do not log websocket request bodies, auth headers, cookies, or upstream signed URLs.
+- HTTP Responses remains `POST /v1/responses` and must continue through the normal HTTP relay path.
+- Responses WebSocket is `GET /v1/responses` with `Upgrade: websocket` and `Sec-WebSocket-Protocol: responses` when the client provides a subprotocol.
+- The first client message must be a JSON event with `type: "response.create"`. It may either wrap the Responses payload under `response` or provide a flat payload at the top level.
 
-#### 3. Tests Required
+#### 3. Contracts
 
-- `relay`: regression test that a converter failure falls back to HTTP and replays the original request body.
-- `relay`: adaptor opt-in test for every provider adaptor that should support the conversion interface.
-- `relay/channel`: websocket adapter tests proving stream messages become SSE frames and non-stream messages become an HTTP JSON body.
-- `service`: consume-log `Other` test proving conversion status and used flag are persisted when present on the Gin context.
+- Channel selection for Responses WebSocket happens after parsing the first `response.create` event because the model is in the WebSocket payload, not the HTTP handshake. Do not attach the normal `Distribute()` middleware to this route.
+- Before forwarding upstream, normalize the payload to an upstream `response.create` event and remove transport-only fields such as `event_id`, `stream`, `stream_options`, and `background`.
+- Preserve provider adapter conversion, model mapping, disabled-field removal, parameter override, affinity debug, quota pre-consume, and final usage settlement.
+- Model request rate limiting for WebSocket must be checked per `response.create`; the handshake itself must not consume the model request quota.
+
+#### 4. Validation & Error Matrix
+
+- First event missing `type` -> send WebSocket `error` event with HTTP-style status `400`.
+- First event type other than `response.create` -> send WebSocket `error` event with status `400`.
+- Missing `model` in `response.create` -> send WebSocket `error` event with status `400`.
+- New `response.create` while another response is in progress -> send/return conflict status `409`.
+- Unsupported channel type for Responses WebSocket -> fail the selected channel attempt and retry according to normal relay retry policy.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: `GET /v1/responses` WebSocket, first frame `{"type":"response.create","response":{"model":"gpt-5.5","input":"hi"}}`, then upstream receives a normalized `response.create` frame.
+- Base: `POST /v1/responses` continues through the normal HTTP `ResponsesHelper` path with no WebSocket conversion.
+- Bad: `POST /v1/responses` with a normal HTTP JSON body is rewritten to `wss://...` and sent as a raw text frame; this causes upstream protocol/parsing failures and must not be reintroduced.
+
+#### 6. Tests Required
+
+- `relay`: normalize wrapper and flat `response.create` frames, remove transport fields, build error events with status.
+- `relay`: upstream write/control failures clear current state and release/refund the in-flight call.
+- `service`: Responses usage mapping copies input/output token details and fallback completion details.
+- `middleware`: WebSocket handshake skips the ordinary middleware quota and per-event commit records success only after a successful response.
+- `router/controller`: `GET /v1/responses` routes to `ResponsesWebSocket`; `POST /v1/responses` routes to the HTTP Responses relay.
+
+#### 7. Wrong vs Correct
+
+##### Wrong
+
+```go
+// Do not convert ordinary HTTP bodies into upstream WebSocket frames.
+resp, err := doRequestWithOptionalHTTPToWebsocket(c, info, adaptor, requestBody)
+```
+
+##### Correct
+
+```go
+// HTTP stays HTTP. Native Responses WebSocket is handled by GET /v1/responses.
+resp, err := adaptor.DoRequest(c, info, requestBody)
+```
+
 
 ### Relay first-byte timeout and channel retry
 
@@ -1049,80 +1083,6 @@ Correct:
 ```go
 httpRouter.POST("/message", func(c *gin.Context) {
     controller.Relay(c, types.RelayFormatClaude)
-})
-```
-
-### Responses websocket route compatibility alias
-
-#### 1. Scope / Trigger
-
-- Trigger: any change to relay route registration for OpenAI Responses or
-  realtime-compatible websocket endpoints.
-- Some clients attempt websocket transport against `/v1/responses` even though
-  the canonical realtime websocket endpoint is `/v1/realtime`.
-
-#### 2. Signatures
-
-- Canonical HTTP Responses route:
-  `POST /v1/responses` -> `controller.Relay(c, types.RelayFormatOpenAIResponses)`.
-- Canonical realtime websocket route:
-  `GET /v1/realtime` -> `controller.Relay(c, types.RelayFormatOpenAIRealtime)`.
-- Compatibility websocket route:
-  `GET /v1/responses` -> `controller.Relay(c, types.RelayFormatOpenAIRealtime)`.
-
-#### 3. Contracts
-
-- `GET /v1/responses` must be a websocket compatibility alias only; it must
-  share the same `/v1` relay middleware chain as `/v1/realtime`, including token
-  auth, model request rate limiting, and channel distribution.
-- The distributor must extract the selected model for both `/v1/realtime` and
-  `GET /v1/responses` from the `model` query parameter. WebSocket compatibility
-  GET requests do not carry a JSON request body.
-- Do not change `POST /v1/responses` semantics. Native Responses HTTP/SSE
-  requests must continue to use `RelayFormatOpenAIResponses`.
-- Do not implement a separate controller for the alias; separate websocket logic
-  can drift from the realtime relay path.
-
-#### 4. Validation & Error Matrix
-
-- `POST /v1/responses` -> OpenAI Responses HTTP relay path.
-- `GET /v1/realtime` -> OpenAI realtime websocket relay path.
-- `GET /v1/responses` -> same OpenAI realtime websocket relay path.
-- `GET /v1/responses?model=<name>` -> distributor selects channels for
-  `<name>` instead of returning `Model name not specified`.
-- Unsupported methods such as `POST /v1/realtime` or `GET /v1/responses/compact`
-  -> unchanged router behavior.
-
-#### 5. Good/Base/Bad Cases
-
-- Good: a websocket client configured with `/v1/responses` reaches the same
-  realtime relay path as `/v1/realtime`.
-- Base: ordinary HTTP/SSE Responses clients continue using `POST /v1/responses`.
-- Bad: routing `GET /v1/responses` through `RelayFormatOpenAIResponses`, because
-  that path expects an HTTP request body rather than a websocket upgrade.
-
-#### 6. Tests Required
-
-- `router`: regression test that both `POST /v1/responses` and
-  `GET /v1/responses` are registered.
-- `middleware`: regression test that `GET /v1/responses?model=<name>` extracts
-  the model from the query string before channel selection.
-
-#### 7. Wrong vs Correct
-
-Wrong:
-
-```go
-httpRouter.GET("/responses", func(c *gin.Context) {
-    controller.Relay(c, types.RelayFormatOpenAIResponses)
-})
-```
-
-Correct:
-
-```go
-wsRouter.GET("/responses", func(c *gin.Context) {
-    controller.Relay(c, types.RelayFormatOpenAIRealtime)
 })
 ```
 
