@@ -638,7 +638,6 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 	if state == nil {
 		return true, true
 	}
-	state.info.SetFirstResponseTime()
 
 	var streamResponse dto.ResponsesStreamResponse
 	if err := common.Unmarshal(message, &streamResponse); err != nil {
@@ -648,18 +647,26 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 
 	switch streamResponse.Type {
 	case "response.completed", "response.done", "response.incomplete":
+		state.info.SetFirstResponseTime()
 		s.rememberResponsesWSToolCalls(state, streamResponse.Response)
 		s.applyTerminalResponseUsage(state, streamResponse.Response)
 		s.finishCall(state, true)
 	case "response.failed", "response.cancelled", "response.canceled", "response.error", "error":
+		state.info.SetFirstResponseTime()
 		apiErr := newResponsesWSUpstreamAPIError(streamResponse, message)
 		return s.handleTerminalUpstreamError(state, apiErr)
 	case "response.output_text.delta":
-		state.outputText.WriteString(streamResponse.Delta)
+		if streamResponse.Delta != "" {
+			state.info.SetFirstResponseTime()
+			state.outputText.WriteString(streamResponse.Delta)
+		}
 		if apiErr := newResponsesWSTextualUpstreamError(state.outputText.String()); apiErr != nil {
 			return s.handleTerminalUpstreamError(state, apiErr)
 		}
 	case dto.ResponsesOutputTypeItemDone:
+		if responsesWSOutputItemMarksFirstResponse(streamResponse.Item) {
+			state.info.SetFirstResponseTime()
+		}
 		state.observeResponsesWSToolCallItem(streamResponse.Item)
 		if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
 			if state.info != nil && state.info.ResponsesUsageInfo != nil && state.info.ResponsesUsageInfo.BuiltInTools != nil {
@@ -671,9 +678,29 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 	case dto.ResponsesOutputTypeItemAdded:
 		state.observeResponsesWSToolCallItem(streamResponse.Item)
 	case "response.function_call_arguments.delta":
-		state.appendResponsesWSToolCallArguments(streamResponse.ItemID, streamResponse.Delta)
+		if streamResponse.Delta != "" {
+			state.info.SetFirstResponseTime()
+			state.appendResponsesWSToolCallArguments(streamResponse.ItemID, streamResponse.Delta)
+		}
 	}
 	return true, true
+}
+
+func responsesWSOutputItemMarksFirstResponse(item *dto.ResponsesOutput) bool {
+	if item == nil {
+		return false
+	}
+	switch item.Type {
+	case "function_call", dto.BuildInCallWebSearchCall, dto.ResponsesOutputTypeImageGenerationCall:
+		return true
+	case "message":
+		for _, content := range item.Content {
+			if strings.TrimSpace(content.Text) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *responsesWSSession) handleTerminalUpstreamError(state *responsesWSCallState, apiErr *types.NewAPIError) (bool, bool) {

@@ -157,6 +157,11 @@ When adding or modifying a channel:
 - Before forwarding upstream, normalize the payload to an upstream `response.create` event and remove transport-only fields such as `event_id`, `stream`, `stream_options`, and `background`.
 - Preserve provider adapter conversion, model mapping, disabled-field removal, parameter override, affinity debug, quota pre-consume, and final usage settlement.
 - Model request rate limiting for WebSocket must be checked per `response.create`; the handshake itself must not consume the model request quota.
+- First-response timing for Responses WebSocket must not be set by protocol-only
+  lifecycle frames such as `response.created`, `response.in_progress`, or empty
+  item skeletons. Set it when the first meaningful upstream output arrives:
+  output text delta, function-call arguments delta, meaningful output item done,
+  terminal completion, or terminal error.
 - Upstream Responses WebSocket state errors that arrive as either terminal
   events or early assistant text are relay errors, not successful assistant
   content. This includes usage-limit/rate-limit text and
@@ -176,6 +181,10 @@ When adding or modifying a channel:
 - Missing `model` in `response.create` -> send WebSocket `error` event with status `400`.
 - New `response.create` while another response is in progress -> send/return conflict status `409`.
 - Unsupported channel type for Responses WebSocket -> fail the selected channel attempt and retry according to normal relay retry policy.
+- Protocol-only upstream frames before model output -> do not update `frt`.
+- First `response.output_text.delta`, non-empty
+  `response.function_call_arguments.delta`, meaningful `response.output_item.done`,
+  terminal completion, or terminal error -> update `frt` once.
 - Text delta beginning with `status_code=429` plus usage-limit/rate-limit or
   previous-response-not-found details -> convert to `types.NewAPIError` with
   status `429`, process channel error, and retry when retry policy permits.
@@ -189,6 +198,9 @@ When adding or modifying a channel:
 #### 5. Good/Base/Bad Cases
 
 - Good: `GET /v1/responses` WebSocket, first frame `{"type":"response.create","response":{"model":"gpt-5.5","input":"hi"}}`, then upstream receives a normalized `response.create` frame.
+- Good: upstream sends `response.created` at 200 ms and first
+  `response.output_text.delta` at 5 s; request logs record FRT around 5 s, not
+  0.2 s.
 - Good: upstream emits text `status_code=429, Previous response with id ... not found`; relay records a 429-style channel error. If the request is stateless, normal retry policy may try another channel. If it carries `function_call_output + previous_response_id` and the prior function call was observed in this WebSocket session, relay prepends the stored `function_call`, removes `previous_response_id`, and retries as a stateless input.
 - Base: `POST /v1/responses` continues through the normal HTTP `ResponsesHelper` path with no WebSocket conversion.
 - Base: normal assistant text that merely mentions `HTTP 429` is not treated as
@@ -204,6 +216,8 @@ When adding or modifying a channel:
 #### 6. Tests Required
 
 - `relay`: normalize wrapper and flat `response.create` frames, remove transport fields, build error events with status.
+- `relay`: protocol-only upstream frames must not mark FRT; output text/function
+  arguments/terminal events should mark FRT.
 - `relay`: textual 429 usage-limit / previous-response-not-found errors become
   429 relay errors; retry is allowed for stateless requests and for stateful
   tool-output continuations only when the proxy can replay the matching stored
