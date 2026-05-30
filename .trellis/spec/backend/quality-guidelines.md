@@ -303,6 +303,14 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   than hook-instance state. Route changes unmount the playground component; if
   the SSE object is only held by the unmounted hook, the browser can close the
   request and the backend records `client_gone` / `context canceled`.
+- Streaming playground chat must construct `sse.js` sources with `start: false`,
+  attach `open`/`message`/`error`/`readystatechange` listeners, and only then
+  call `stream()`. Fast responses can otherwise finish before listeners are
+  attached: the browser network tab shows chunks and `[DONE]`, but React never
+  receives the terminal event and later marks the message interrupted.
+- Playground assistant messages whose status is `error` are UI artifacts and
+  must not be sent back as assistant context in subsequent chat-completion
+  payloads.
 - Legacy/orphan wait messages that still display `Task ID:` / `任务 ID：` may be
   used to recreate the pending task marker and run one recovery poll.
 - Terminal task handling must update the assistant message to `complete` or

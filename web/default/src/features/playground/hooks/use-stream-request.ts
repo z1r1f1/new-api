@@ -39,6 +39,8 @@ export function useStreamRequest() {
       debugId?: string,
       onUpstreamRequest?: (request: unknown) => void
     ) => {
+      activePlaygroundSseSource?.close()
+
       const source = new SSE(API_ENDPOINTS.CHAT_COMPLETIONS, {
         headers: {
           ...getCommonHeaders(),
@@ -46,9 +48,9 @@ export function useStreamRequest() {
         },
         method: 'POST',
         payload: JSON.stringify(payload),
+        start: false,
       })
 
-      activePlaygroundSseSource?.close()
       activePlaygroundSseSource = source
       let isStreamComplete = false
 
@@ -85,7 +87,7 @@ export function useStreamRequest() {
       source.addEventListener('message', (e: MessageEvent) => {
         void captureUpstreamRequest()
         onRawMessage?.(e.data)
-        if (e.data === '[DONE]') {
+        if (e.data.trim() === '[DONE]') {
           isStreamComplete = true
           closeSource()
           onComplete()

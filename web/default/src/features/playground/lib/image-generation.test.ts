@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
+import type { Message, PlaygroundConfig } from '../types'
 import {
   buildImageGenerationPayload,
   extractImageGenerationWaitTaskId,
@@ -8,7 +9,6 @@ import {
 } from './image-generation'
 import { formatMessageForAPI } from './message-utils'
 import { buildChatCompletionPayload } from './payload-builder'
-import type { Message, PlaygroundConfig } from '../types'
 
 const config: PlaygroundConfig = {
   model: 'gpt-image-2',
@@ -29,6 +29,13 @@ function message(from: Message['from'], content: string): Message {
     from,
     versions: [{ id: 'v1', content }],
     status: from === 'assistant' ? 'complete' : undefined,
+  }
+}
+
+function assistantErrorMessage(content: string): Message {
+  return {
+    ...message('assistant', content),
+    status: 'error',
   }
 }
 
@@ -141,6 +148,32 @@ describe('formatMessageForAPI', () => {
 })
 
 describe('buildChatCompletionPayload', () => {
+  test('excludes previous playground error assistant messages from API context', () => {
+    const payload = buildChatCompletionPayload(
+      [
+        message('user', '你好'),
+        assistantErrorMessage(
+          'Request error occurred: Generation was interrupted'
+        ),
+        message('user', '再试一次'),
+      ],
+      config,
+      {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      }
+    )
+
+    assert.deepEqual(payload.messages, [
+      { role: 'user', content: '你好' },
+      { role: 'user', content: '再试一次' },
+    ])
+  })
+
   test('adds web search options when search is enabled', () => {
     const payload = buildChatCompletionPayload(
       [message('user', 'hi')],

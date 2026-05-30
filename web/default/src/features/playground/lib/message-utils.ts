@@ -156,6 +156,13 @@ export function formatMessageForAPI(message: Message): ChatCompletionMessage {
 export function isValidMessage(message: Message): boolean {
   if (!message || !message.from || !message.versions.length) return false
 
+  if (
+    message.from === MESSAGE_ROLES.ASSISTANT &&
+    message.status === MESSAGE_STATUS.ERROR
+  ) {
+    return false
+  }
+
   const content = message.versions[0]?.content
   if (content === undefined) return false
 
