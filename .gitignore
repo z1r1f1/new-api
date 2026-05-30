@@ -38,3 +38,4 @@ token_estimator_test.go
 .gitnexus
 .test
 skills-lock.json
+.playwright-mcp

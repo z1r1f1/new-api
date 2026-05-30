@@ -21,6 +21,7 @@ import type { ModelSettings } from '../types'
 import {
   MODELS_DEFAULT_SECTION,
   getModelsSectionContent,
+  getModelsSectionMeta,
 } from './section-registry.tsx'
 
 const MAX_REQUEST_PREFIX_CHARS = 65536
@@ -81,6 +82,7 @@ export function ModelSettings() {
       defaultSettings={defaultModelSettings}
       defaultSection={MODELS_DEFAULT_SECTION}
       getSectionContent={getModelsSectionContent}
+      getSectionMeta={getModelsSectionMeta}
     />
   )
 }

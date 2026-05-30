@@ -132,7 +132,7 @@ export const CHANNEL_STATUS_CONFIG = {
   [CHANNEL_STATUS.UNKNOWN]: {
     variant: 'neutral' as const,
     label: 'Unknown',
-    showDot: true,
+    showDot: false,
   },
   [CHANNEL_STATUS.ENABLED]: {
     variant: 'success' as const,
@@ -140,12 +140,12 @@ export const CHANNEL_STATUS_CONFIG = {
     showDot: true,
   },
   [CHANNEL_STATUS.MANUAL_DISABLED]: {
-    variant: 'neutral' as const,
+    variant: 'danger' as const,
     label: 'Disabled',
-    showDot: true,
+    showDot: false,
   },
   [CHANNEL_STATUS.AUTO_DISABLED]: {
-    variant: 'danger' as const,
+    variant: 'warning' as const,
     label: 'Auto Disabled',
     showDot: true,
   },

@@ -253,12 +253,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     sendChat(newMessages)
   }
 
-  const handleCopyMessage = (message: MessageType) => {
-    // Copy is handled in MessageActions component
-    // eslint-disable-next-line no-console
-    console.log('Message copied:', message.key)
-  }
-
   const handleRegenerateMessage = (message: MessageType) => {
     // Find the message index and regenerate from there
     const messageIndex = messages.findIndex((m) => m.key === message.key)
@@ -563,7 +557,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
         <div className='flex flex-1 flex-col overflow-hidden'>
           <PlaygroundChat
             messages={messages}
-            onCopyMessage={handleCopyMessage}
             onRegenerateMessage={handleRegenerateMessage}
             onEditMessage={handleEditMessage}
             onDeleteMessage={handleDeleteMessage}

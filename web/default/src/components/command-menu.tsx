@@ -35,7 +35,7 @@ import {
   CommandList,
   CommandSeparator,
 } from '@/components/ui/command'
-import { getNavGroupsForPath } from './layout/lib/workspace-registry'
+import { getNavGroupsForPath } from './layout/lib/sidebar-view-registry'
 import { filterNavGroupsByRole } from './layout/lib/role-filter'
 import { ScrollArea } from './ui/scroll-area'
 
@@ -48,13 +48,15 @@ export function CommandMenu() {
   const sidebarData = useSidebarData()
   const userRole = useAuthStore((state) => state.auth.user?.role)
 
-  // 根据当前路径从工作区注册表获取对应的侧边栏配置
-  const allNavGroups = getNavGroupsForPath(pathname, t) || sidebarData.navGroups
-  const configFilteredNavGroups = useSidebarConfig(allNavGroups)
-  const navGroups = React.useMemo(
-    () => filterNavGroupsByRole(configFilteredNavGroups, userRole),
-    [configFilteredNavGroups, userRole]
+  // Use the active nested sidebar view's nav groups when one matches;
+  // otherwise apply root sidebar config and role filters.
+  const viewNavGroups = getNavGroupsForPath(pathname, t)
+  const configFilteredRootNavGroups = useSidebarConfig(sidebarData.navGroups)
+  const rootNavGroups = React.useMemo(
+    () => filterNavGroupsByRole(configFilteredRootNavGroups, userRole),
+    [configFilteredRootNavGroups, userRole]
   )
+  const navGroups = viewNavGroups ?? rootNavGroups
 
   const runCommand = React.useCallback(
     (command: () => unknown) => {
