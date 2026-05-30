@@ -753,32 +753,34 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 }
 
 type ImageConvOpts struct {
-	Prompt         string
-	UpstreamModel  string
-	ConvID         string
-	ParentMsgID    string
-	MessageID      string
-	ChatToken      string
-	ProofToken     string
-	ConduitToken   string
-	TimezoneOffset int
-	SSETimeout     time.Duration
-	References     []*UploadedFile
+	Prompt             string
+	UpstreamModel      string
+	ConvID             string
+	ParentMsgID        string
+	MessageID          string
+	ChatToken          string
+	ProofToken         string
+	ConduitToken       string
+	TimezoneOffset     int
+	SSETimeout         time.Duration
+	References         []*UploadedFile
+	CaptureRequestBody func([]byte)
 }
 
 type ChatConvOpts struct {
-	Prompt         string
-	UpstreamModel  string
-	ThinkingEffort string
-	DeepResearch   bool
-	ConvID         string
-	ParentMsgID    string
-	MessageID      string
-	ChatToken      string
-	ProofToken     string
-	ConduitToken   string
-	TimezoneOffset int
-	SSETimeout     time.Duration
+	Prompt             string
+	UpstreamModel      string
+	ThinkingEffort     string
+	DeepResearch       bool
+	ConvID             string
+	ParentMsgID        string
+	MessageID          string
+	ChatToken          string
+	ProofToken         string
+	ConduitToken       string
+	TimezoneOffset     int
+	SSETimeout         time.Duration
+	CaptureRequestBody func([]byte)
 }
 
 func applyChatGPTWebDeepResearchPayload(payload map[string]any, userMessage map[string]any, enabled bool) {
@@ -1048,6 +1050,9 @@ func (c *Client) StreamFConversation(ctx context.Context, opt ImageConvOpts) (<-
 	if opt.ConduitToken != "" {
 		req.Header.Set("X-Conduit-Token", opt.ConduitToken)
 	}
+	if opt.CaptureRequestBody != nil {
+		opt.CaptureRequestBody(body)
+	}
 	local := *c.hc
 	local.Timeout = 0
 	res, err := local.Do(req)
@@ -1145,6 +1150,9 @@ func (c *Client) StreamChatConversation(ctx context.Context, opt ChatConvOpts) (
 	}
 	if opt.ConduitToken != "" {
 		req.Header.Set("X-Conduit-Token", opt.ConduitToken)
+	}
+	if opt.CaptureRequestBody != nil {
+		opt.CaptureRequestBody(body)
 	}
 	local := *c.hc
 	local.Timeout = 0

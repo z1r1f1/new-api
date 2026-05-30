@@ -311,6 +311,11 @@ When adding a new endpoint, match the response shape of adjacent endpoints in th
   `{"success": true, "data": {"upstream_request": ..., "body_bytes": ..., "body_truncated": ..., "captured_at": ...}}`.
 - Frontend callers that poll this endpoint must suppress global business-error
   handling for `success:false` misses.
+- Provider adapters that bypass `relay/channel.DoApiRequest` and create their
+  own upstream `http.Request` values must call
+  `service.RecordPlaygroundUpstreamRequestDebug` for the final user-facing
+  upstream request body. `relay/channel/chatgptimg` is one such adapter because
+  it posts ChatGPT Web payloads directly to `/backend-api/f/conversation`.
 
 #### 4. Validation & Error Matrix
 
@@ -325,11 +330,17 @@ When adding a new endpoint, match the response shape of adjacent endpoints in th
 
 - Good: a streaming playground chat can poll `/pg/debug/:debug_id` while SSE is
   still opening without producing browser 404 console errors.
+- Good: ChatGPT Web / `chatgptimg` playground requests capture the final
+  `/backend-api/f/conversation` payload even though they bypass the common
+  channel request helper.
 - Base: relay chat/image responses continue to use their OpenAI-compatible
   status and body shapes.
 - Bad: returning HTTP `404` for an uncaptured debug record; browsers report the
   expected polling miss as a network error and the frontend may retry loudly.
 - Bad: showing toast errors for `success:false` debug polling misses.
+- Bad: only capturing bodies inside `relay/channel.DoApiRequest`; custom
+  clients that hand-build upstream HTTP requests will keep returning
+  `debug data not found` for otherwise successful playground requests.
 
 #### 6. Tests Required
 
@@ -337,6 +348,8 @@ When adding a new endpoint, match the response shape of adjacent endpoints in th
   `200` with `success:false`.
 - `service`: keep normalization, per-user storage, expiry, and data-url
   redaction tests passing.
+- `relay/channel/chatgptimg`: regression tests proving `StreamChatConversation`
+  and `StreamFConversation` invoke the final upstream request-body capture hook.
 - `web/default`: type-check any frontend polling changes and lint the touched
   file when the full repository lint has unrelated existing failures.
 

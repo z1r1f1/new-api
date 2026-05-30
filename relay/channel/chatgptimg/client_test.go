@@ -173,6 +173,63 @@ func TestChatConversationPayloadIncludesWebModelAndThinkingEffort(t *testing.T) 
 	}
 }
 
+func TestStreamChatConversationCapturesFinalPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+	var captured []byte
+	opt := ChatConvOpts{
+		Prompt:         "hi",
+		UpstreamModel:  "gpt-5-5-thinking",
+		ThinkingEffort: "standard",
+		ParentMsgID:    "client-created-root",
+		ChatToken:      "requirements-token",
+		SSETimeout:     time.Second,
+		CaptureRequestBody: func(body []byte) {
+			captured = append([]byte(nil), body...)
+		},
+	}
+	stream, err := client.StreamChatConversation(context.Background(), opt)
+	if err != nil {
+		t.Fatalf("StreamChatConversation returned error: %v", err)
+	}
+	for range stream {
+	}
+	if len(captured) == 0 {
+		t.Fatal("expected final chat upstream payload to be captured")
+	}
+	var payload map[string]any
+	if err := common.Unmarshal(captured, &payload); err != nil {
+		t.Fatalf("captured payload is not valid json: %v", err)
+	}
+	if got := payload["model"]; got != "gpt-5-5-thinking" {
+		t.Fatalf("captured unexpected model: %#v", got)
+	}
+	if _, ok := payload["messages"]; !ok {
+		t.Fatalf("captured final payload missing messages: %#v", payload)
+	}
+}
+
 func TestImageConversationPayloadUsesImageModelAndGenerationHints(t *testing.T) {
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -253,6 +310,62 @@ func TestImageConversationPayloadUsesImageModelAndGenerationHints(t *testing.T) 
 	}
 	if hints, ok := bodies[1]["system_hints"].([]any); !ok || len(hints) != 0 {
 		t.Fatalf("conversation sent unexpected system_hints: %#v", bodies[1]["system_hints"])
+	}
+}
+
+func TestStreamFConversationCapturesFinalPayload(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+	var captured []byte
+	opt := ImageConvOpts{
+		Prompt:        "draw",
+		UpstreamModel: "gpt-image-2",
+		ParentMsgID:   "client-created-root",
+		ChatToken:     "requirements-token",
+		SSETimeout:    time.Second,
+		CaptureRequestBody: func(body []byte) {
+			captured = append([]byte(nil), body...)
+		},
+	}
+	stream, err := client.StreamFConversation(context.Background(), opt)
+	if err != nil {
+		t.Fatalf("StreamFConversation returned error: %v", err)
+	}
+	for range stream {
+	}
+	if len(captured) == 0 {
+		t.Fatal("expected final image upstream payload to be captured")
+	}
+	var payload map[string]any
+	if err := common.Unmarshal(captured, &payload); err != nil {
+		t.Fatalf("captured payload is not valid json: %v", err)
+	}
+	if got := payload["model"]; got != "gpt-image-2" {
+		t.Fatalf("captured unexpected model: %#v", got)
+	}
+	if _, ok := payload["messages"]; !ok {
+		t.Fatalf("captured final payload missing messages: %#v", payload)
 	}
 }
 

@@ -1347,7 +1347,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 	if err != nil {
 		return nil, err
 	}
-	res, err := runImageGeneration(imageCtx, client, req, refs, testMode, timing)
+	res, err := runImageGeneration(imageCtx, client, req, refs, testMode, playgroundDebugCapture(c), timing)
 	if err != nil {
 		return nil, err
 	}
@@ -1428,7 +1428,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		return nil, err
 	}
 	if info != nil && info.IsChannelTest {
-		content, conversationID, usedPrompt, err := runChatCompletionProbe(c.Request.Context(), client, req, prompt, timing)
+		content, conversationID, usedPrompt, err := runChatCompletionProbe(c.Request.Context(), client, req, prompt, playgroundDebugCapture(c), timing)
 		if err != nil {
 			return nil, err
 		}
@@ -1482,13 +1482,13 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		}, nil
 	}
 	if req.Stream != nil && *req.Stream {
-		started, err := startChatStream(c.Request.Context(), client, req, prompt, timing)
+		started, err := startChatStream(c.Request.Context(), client, req, prompt, playgroundDebugCapture(c), timing)
 		if err != nil {
 			return nil, err
 		}
 		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info, requestPublicBaseURLForImages(c, info), route, timing), nil
 	}
-	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt, timing)
+	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt, playgroundDebugCapture(c), timing)
 	if err != nil {
 		return nil, err
 	}
@@ -1586,6 +1586,15 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 		Body:       io.NopCloser(bytes.NewReader(payloadBytes)),
 	}, nil
+}
+
+func playgroundDebugCapture(c *gin.Context) func([]byte) {
+	if !service.ShouldCapturePlaygroundUpstreamRequestDebug(c) {
+		return nil
+	}
+	return func(body []byte) {
+		service.RecordPlaygroundUpstreamRequestDebug(c, body)
+	}
 }
 
 func newClientFromRelayInfo(ctx context.Context, info *relaycommon.RelayInfo, timings ...*service.ChatGPTWebTiming) (*Client, error) {
@@ -2149,11 +2158,11 @@ type chatStreamStart struct {
 	Prompt   string
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string, timings ...*service.ChatGPTWebTiming) (string, string, string, imageBaseline, bool, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (string, string, string, imageBaseline, bool, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	started, err := startChatStream(ctx, client, req, prompt, timing)
+	started, err := startChatStream(ctx, client, req, prompt, captureRequestBody, timing)
 	if err != nil {
 		return "", "", "", imageBaseline{}, false, err
 	}
@@ -2193,11 +2202,11 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 	return result.Content, result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, nil
 }
 
-func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string, timings ...*service.ChatGPTWebTiming) (string, string, string, error) {
+func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (string, string, string, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	started, err := startChatStream(ctx, client, req, prompt, timing)
+	started, err := startChatStream(ctx, client, req, prompt, captureRequestBody, timing)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -3104,7 +3113,7 @@ func splitInlineDataImageURL(dataURL string) (contentType, b64 string, ok bool) 
 	return contentType, b64, true
 }
 
-func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string, timings ...*service.ChatGPTWebTiming) (*chatStreamStart, error) {
+func startChatStream(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (*chatStreamStart, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	cr, err := client.ChatRequirementsV2(ctx, timing)
 	if err != nil {
@@ -3149,16 +3158,17 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 		timing.Set("deep_research", req.DeepResearch)
 	}
 	convOpt := ChatConvOpts{
-		Prompt:         actualPrompt,
-		UpstreamModel:  webModel,
-		ThinkingEffort: thinkingEffort,
-		DeepResearch:   req.DeepResearch,
-		ConvID:         convID,
-		ParentMsgID:    continuation.ParentID,
-		MessageID:      uuid.NewString(),
-		ChatToken:      cr.Token,
-		ProofToken:     proofToken,
-		SSETimeout:     300 * time.Second,
+		Prompt:             actualPrompt,
+		UpstreamModel:      webModel,
+		ThinkingEffort:     thinkingEffort,
+		DeepResearch:       req.DeepResearch,
+		ConvID:             convID,
+		ParentMsgID:        continuation.ParentID,
+		MessageID:          uuid.NewString(),
+		ChatToken:          cr.Token,
+		ProofToken:         proofToken,
+		SSETimeout:         300 * time.Second,
+		CaptureRequestBody: captureRequestBody,
 	}
 	prepareStart := time.Now()
 	if conduitToken, conduitErr := client.PrepareChatConversation(ctx, convOpt); conduitErr == nil {
@@ -4436,7 +4446,7 @@ func imageDownloadURLErrorLabel(err error) string {
 	return "request_failed"
 }
 
-func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool, timings ...*service.ChatGPTWebTiming) (*imageRunResult, error) {
+func runImageGeneration(ctx context.Context, client *Client, req generationRequest, refs []*UploadedFile, testMode bool, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (*imageRunResult, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	runStart := time.Now()
 	defer func() {
@@ -4578,14 +4588,15 @@ attemptLoop:
 				}
 			}
 			convOpt := ImageConvOpts{
-				Prompt:        prompt,
-				UpstreamModel: chatGPTWebImageConversationModel(req),
-				ConvID:        convID,
-				ParentMsgID:   parentID,
-				MessageID:     messageID,
-				ChatToken:     cr.Token,
-				ProofToken:    proofToken,
-				References:    activeRefs,
+				Prompt:             prompt,
+				UpstreamModel:      chatGPTWebImageConversationModel(req),
+				ConvID:             convID,
+				ParentMsgID:        parentID,
+				MessageID:          messageID,
+				ChatToken:          cr.Token,
+				ProofToken:         proofToken,
+				References:         activeRefs,
+				CaptureRequestBody: captureRequestBody,
 			}
 			if turn > 1 {
 				convOpt.MessageID = uuid.NewString()
