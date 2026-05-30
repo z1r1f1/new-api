@@ -3314,6 +3314,7 @@
     "Request Header Override": "Переопределение заголовков запроса",
     "Request Header Overrides": "Переопределения заголовков запроса",
     "Request ID": "ID запроса",
+    "Request Protocol": "Протокол запроса",
     "Request Limits": "Лимиты запросов",
     "Request Model": "Запрошенная модель",
     "Request Model:": "Модель запроса:",

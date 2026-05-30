@@ -39,6 +39,7 @@ type responsesWSCreateEvent struct {
 type responsesWSCreateRequest struct {
 	Request  dto.OpenAIResponsesRequest
 	Generate json.RawMessage
+	Raw      json.RawMessage
 }
 
 type responsesWSErrorEvent struct {
@@ -53,6 +54,8 @@ type responsesWSCallState struct {
 	usage      *dto.Usage
 	outputText strings.Builder
 	commitRate middleware.ModelRequestRateLimitCommit
+	create     responsesWSCreateRequest
+	retryParam *service.RetryParam
 }
 
 type responsesWSSession struct {
@@ -191,9 +194,11 @@ func normalizeResponsesWSCreateEvent(message []byte) (responsesWSCreateRequest, 
 	}
 	req.Stream = nil
 	req.StreamOptions = nil
+	rawPayload := append(json.RawMessage(nil), payload...)
 	return responsesWSCreateRequest{
 		Request:  req,
 		Generate: generate,
+		Raw:      rawPayload,
 	}, event.EventID, nil
 }
 
@@ -272,14 +277,29 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 		return err
 	}
 
+	retryParam := s.newRetryParam(req.Model)
+	return s.connectAndSendWithRetry(create, commitRate, retryParam)
+}
+
+func (s *responsesWSSession) newRetryParam(modelName string) *service.RetryParam {
 	retryParam := &service.RetryParam{
-		Ctx:        s.c,
-		TokenGroup: common.GetContextKeyString(s.c, appconstant.ContextKeyUsingGroup),
-		ModelName:  req.Model,
-		Retry:      common.GetPointer(0),
+		Ctx:       s.c,
+		ModelName: modelName,
+		Retry:     common.GetPointer(0),
 	}
-	if retryParam.TokenGroup == "" {
-		retryParam.TokenGroup = common.GetContextKeyString(s.c, appconstant.ContextKeyTokenGroup)
+	if s.c != nil {
+		retryParam.TokenGroup = common.GetContextKeyString(s.c, appconstant.ContextKeyUsingGroup)
+		if retryParam.TokenGroup == "" {
+			retryParam.TokenGroup = common.GetContextKeyString(s.c, appconstant.ContextKeyTokenGroup)
+		}
+	}
+	return retryParam
+}
+
+func (s *responsesWSSession) connectAndSendWithRetry(create responsesWSCreateRequest, commitRate middleware.ModelRequestRateLimitCommit, retryParam *service.RetryParam) *types.NewAPIError {
+	req := create.Request
+	if retryParam == nil {
+		retryParam = s.newRetryParam(req.Model)
 	}
 
 	var lastErr *types.NewAPIError
@@ -306,6 +326,7 @@ func (s *responsesWSSession) connectAndSendFirst(create responsesWSCreateRequest
 			commitRate(false)
 			return apiErr
 		}
+		state.retryParam = retryParam
 
 		adaptor := GetAdaptor(state.info.ApiType)
 		if adaptor == nil {
@@ -391,10 +412,16 @@ func (s *responsesWSSession) processChannelError(channel *appmodel.Channel, apiE
 
 func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commitRate middleware.ModelRequestRateLimitCommit) (*responsesWSCallState, []byte, *types.NewAPIError) {
 	req := create.Request
+	service.ApplyOpenAIResponsesCompatRequestParamsFromRawBody(&req, create.Raw, responsesWSRequestHeaders(s.c))
 	common.SetContextKey(s.c, appconstant.ContextKeyRequestStartTime, time.Now())
 	relayInfo := relaycommon.GenRelayInfoResponses(s.c, &req)
 	relayInfo.RequestId = fmt.Sprintf("%s-ws-%d", relayInfo.RequestId, s.nextEventIndex)
 	s.nextEventIndex++
+	requestInput, err := helper.BuildBillingExprRequestInputFromRequest(&req, relayInfo.RequestHeaders)
+	if err != nil {
+		return nil, nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.BillingRequestInput = &requestInput
 
 	meta := req.GetTokenCountMeta()
 	if setting.ShouldCheckPromptSensitive() && meta != nil {
@@ -432,7 +459,22 @@ func (s *responsesWSSession) prepareCall(create responsesWSCreateRequest, commit
 		info:       relayInfo,
 		usage:      &dto.Usage{},
 		commitRate: commitRate,
+		create:     create,
 	}, payload, nil
+}
+
+func responsesWSRequestHeaders(c *gin.Context) map[string]string {
+	if c == nil || c.Request == nil {
+		return nil
+	}
+	headers := make(map[string]string, len(c.Request.Header))
+	for key, values := range c.Request.Header {
+		if len(values) == 0 {
+			continue
+		}
+		headers[key] = values[0]
+	}
+	return headers
 }
 
 func buildResponsesWSCreatePayload(c *gin.Context, relayInfo *relaycommon.RelayInfo, req dto.OpenAIResponsesRequest, generate json.RawMessage) ([]byte, *types.NewAPIError) {
@@ -562,14 +604,21 @@ func (s *responsesWSSession) startTargetReader() {
 		for {
 			messageType, message, err := target.ReadMessage()
 			if err != nil {
-				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-					logger.LogError(s.c, "responses websocket upstream read failed: "+err.Error())
+				if !s.hasTarget() || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+					return
 				}
+				logger.LogError(s.c, "responses websocket upstream read failed: "+err.Error())
 				s.failCurrent()
 				_ = s.client.Close()
 				return
 			}
-			s.observeUpstreamMessage(message)
+			forward, keepReading := s.observeUpstreamMessage(message)
+			if !keepReading {
+				return
+			}
+			if !forward {
+				continue
+			}
 			if err := s.writeClient(messageType, message); err != nil {
 				logger.LogError(s.c, "responses websocket client write failed: "+err.Error())
 				s.failCurrent()
@@ -580,26 +629,34 @@ func (s *responsesWSSession) startTargetReader() {
 	}()
 }
 
-func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
+func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool) {
 	state := s.getCurrent()
 	if state == nil {
-		return
+		return true, true
 	}
 	state.info.SetFirstResponseTime()
 
 	var streamResponse dto.ResponsesStreamResponse
 	if err := common.Unmarshal(message, &streamResponse); err != nil {
-		return
+		return true, true
 	}
+	service.AppendChannelAffinityResponseDebug(s.c, message)
 
 	switch streamResponse.Type {
 	case "response.completed", "response.done", "response.incomplete":
 		s.applyTerminalResponseUsage(state, streamResponse.Response)
 		s.finishCall(state, true)
-	case "response.failed", "response.cancelled", "response.canceled":
-		s.finishCall(state, false)
+	case "response.failed", "response.cancelled", "response.canceled", "response.error", "error":
+		apiErr := newResponsesWSUpstreamAPIError(streamResponse, message)
+		return s.handleTerminalUpstreamError(state, apiErr)
 	case "response.output_text.delta":
+		previousLen := state.outputText.Len()
 		state.outputText.WriteString(streamResponse.Delta)
+		if previousLen == 0 {
+			if apiErr := newResponsesWSUsageLimitTextError(state.outputText.String()); apiErr != nil {
+				return s.handleTerminalUpstreamError(state, apiErr)
+			}
+		}
 	case dto.ResponsesOutputTypeItemDone:
 		if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
 			if state.info != nil && state.info.ResponsesUsageInfo != nil && state.info.ResponsesUsageInfo.BuiltInTools != nil {
@@ -608,9 +665,214 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) {
 				}
 			}
 		}
-	case "error":
-		s.finishCall(state, false)
 	}
+	return true, true
+}
+
+func (s *responsesWSSession) handleTerminalUpstreamError(state *responsesWSCallState, apiErr *types.NewAPIError) (bool, bool) {
+	if state == nil {
+		return false, false
+	}
+	if apiErr == nil {
+		s.finishCall(state, false)
+		return true, true
+	}
+	retryParam := state.retryParam
+	if retryParam == nil {
+		retryParam = s.newRetryParam(state.create.Request.Model)
+		state.retryParam = retryParam
+	}
+
+	processedErr, shouldRetry := s.processChannelError(s.lockedChannel, apiErr, retryParam)
+	if shouldRetry && s.canRetryTerminalUpstreamError(state, apiErr) {
+		s.finishCall(state, false)
+		s.closeTarget()
+		retryParam.IncreaseRetry()
+		if retryErr := s.connectAndSendWithRetry(state.create, state.commitRate, retryParam); retryErr == nil {
+			return false, false
+		} else {
+			processedErr = retryErr
+		}
+	}
+
+	s.finishCall(state, false)
+	s.closeTarget()
+	s.sendError("", processedErr)
+	if s.client != nil {
+		_ = s.client.Close()
+	}
+	return false, false
+}
+
+func (s *responsesWSSession) canRetryTerminalUpstreamError(state *responsesWSCallState, apiErr *types.NewAPIError) bool {
+	if s.c == nil || s.client == nil {
+		return false
+	}
+	if state == nil || apiErr == nil {
+		return false
+	}
+	if state.create.Request.Model == "" {
+		return false
+	}
+	if state.outputText.Len() == 0 {
+		return true
+	}
+	return isResponsesWSUsageLimitError(apiErr)
+}
+
+func newResponsesWSUpstreamAPIError(streamResp dto.ResponsesStreamResponse, message []byte) *types.NewAPIError {
+	statusCode := responsesWSUpstreamErrorStatus(message, streamResp)
+	oaiErr, ok := extractResponsesWSUpstreamOpenAIError(streamResp, message)
+	if !ok {
+		eventType := strings.TrimSpace(streamResp.Type)
+		if eventType == "" {
+			eventType = "unknown"
+		}
+		return types.NewOpenAIError(
+			errors.New("responses websocket upstream error: "+eventType),
+			types.ErrorCodeBadResponseStatusCode,
+			statusCode,
+		)
+	}
+	if detected := statusCodeFromResponsesWSErrorDetail(oaiErr); detected != 0 {
+		statusCode = detected
+	}
+	return types.WithOpenAIError(*oaiErr, statusCode)
+}
+
+func newResponsesWSUsageLimitTextError(text string) *types.NewAPIError {
+	if !looksLikeResponsesWSUsageLimit(text) {
+		return nil
+	}
+	return types.NewOpenAIError(
+		errors.New(common.MaskSensitiveInfo(strings.TrimSpace(text))),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusTooManyRequests,
+	)
+}
+
+func extractResponsesWSUpstreamOpenAIError(streamResp dto.ResponsesStreamResponse, message []byte) (*types.OpenAIError, bool) {
+	if streamResp.Response != nil {
+		if oaiErr := streamResp.Response.GetOpenAIError(); responsesWSOpenAIErrorHasDetail(oaiErr) {
+			return oaiErr, true
+		}
+	}
+
+	var obj map[string]json.RawMessage
+	if len(message) == 0 || common.Unmarshal(message, &obj) != nil {
+		return nil, false
+	}
+
+	if raw, ok := obj["error"]; ok {
+		if oaiErr, ok := parseResponsesWSOpenAIError(raw); ok {
+			return oaiErr, true
+		}
+	}
+
+	rawResponse, ok := obj["response"]
+	if !ok {
+		return nil, false
+	}
+	var responseObj map[string]json.RawMessage
+	if common.Unmarshal(rawResponse, &responseObj) != nil {
+		return nil, false
+	}
+	if raw, ok := responseObj["error"]; ok {
+		if oaiErr, ok := parseResponsesWSOpenAIError(raw); ok {
+			return oaiErr, true
+		}
+	}
+	return nil, false
+}
+
+func parseResponsesWSOpenAIError(raw json.RawMessage) (*types.OpenAIError, bool) {
+	var value any
+	if common.Unmarshal(raw, &value) != nil {
+		return nil, false
+	}
+	oaiErr := dto.GetOpenAIError(value)
+	if !responsesWSOpenAIErrorHasDetail(oaiErr) {
+		return nil, false
+	}
+	return oaiErr, true
+}
+
+func responsesWSOpenAIErrorHasDetail(oaiErr *types.OpenAIError) bool {
+	if oaiErr == nil {
+		return false
+	}
+	return strings.TrimSpace(oaiErr.Message) != "" ||
+		strings.TrimSpace(oaiErr.Type) != "" ||
+		strings.TrimSpace(oaiErr.Param) != "" ||
+		strings.TrimSpace(common.Interface2String(oaiErr.Code)) != "" ||
+		len(oaiErr.Metadata) > 0
+}
+
+func responsesWSUpstreamErrorStatus(message []byte, streamResp dto.ResponsesStreamResponse) int {
+	status := http.StatusInternalServerError
+	var obj map[string]json.RawMessage
+	if len(message) == 0 || common.Unmarshal(message, &obj) != nil {
+		return status
+	}
+	if raw, ok := obj["status"]; ok {
+		var statusCode int
+		if common.Unmarshal(raw, &statusCode) == nil && statusCode >= 100 && statusCode <= 599 {
+			return statusCode
+		}
+	}
+	if rawResponse, ok := obj["response"]; ok {
+		var responseObj map[string]json.RawMessage
+		if common.Unmarshal(rawResponse, &responseObj) == nil {
+			if raw, ok := responseObj["status_code"]; ok {
+				var statusCode int
+				if common.Unmarshal(raw, &statusCode) == nil && statusCode >= 100 && statusCode <= 599 {
+					return statusCode
+				}
+			}
+		}
+	}
+	if streamResp.Type == "error" {
+		return http.StatusInternalServerError
+	}
+	return status
+}
+
+func statusCodeFromResponsesWSErrorDetail(oaiErr *types.OpenAIError) int {
+	if oaiErr == nil {
+		return 0
+	}
+	detail := strings.Join([]string{
+		oaiErr.Message,
+		oaiErr.Type,
+		common.Interface2String(oaiErr.Code),
+	}, " ")
+	if looksLikeResponsesWSUsageLimit(detail) {
+		return http.StatusTooManyRequests
+	}
+	return 0
+}
+
+func isResponsesWSUsageLimitError(apiErr *types.NewAPIError) bool {
+	if apiErr == nil {
+		return false
+	}
+	if apiErr.StatusCode == http.StatusTooManyRequests {
+		return true
+	}
+	return looksLikeResponsesWSUsageLimit(apiErr.Error())
+}
+
+func looksLikeResponsesWSUsageLimit(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "you've hit your usage limit") ||
+		strings.Contains(lower, "you have hit your usage limit") ||
+		strings.Contains(lower, "usage limit") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "429")
 }
 
 func (s *responsesWSSession) applyTerminalResponseUsage(state *responsesWSCallState, response *dto.OpenAIResponsesResponse) {
@@ -745,7 +1007,7 @@ func (s *responsesWSSession) writeTarget(messageType int, message []byte) error 
 }
 
 func (s *responsesWSSession) sendError(eventID string, apiErr *types.NewAPIError) {
-	if apiErr == nil {
+	if apiErr == nil || s.client == nil {
 		return
 	}
 	payload, err := buildResponsesWSErrorPayload(eventID, apiErr)

@@ -237,3 +237,34 @@ func TestGenerateTextOtherInfoRecordsFastConversionAndResponseTier(t *testing.T)
 		t.Fatalf("expected response_service_tier=default, got %#v", other["response_service_tier"])
 	}
 }
+
+func TestGenerateTextOtherInfoRecordsRequestProtocol(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	now := time.Now()
+
+	httpCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	httpCtx.Request = httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"gpt-5.5"}`))
+	httpCtx.Request.Header.Set("Content-Type", "application/json")
+	httpOther := GenerateTextOtherInfo(httpCtx, &relaycommon.RelayInfo{
+		StartTime:         now,
+		FirstResponseTime: now,
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+	}, 1, 1, 1, 0, 0, 0, -1)
+	if httpOther["request_protocol"] != "http" {
+		t.Fatalf("expected request_protocol=http, got %#v", httpOther["request_protocol"])
+	}
+
+	wsCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	wsCtx.Request = httptest.NewRequest("GET", "/v1/responses", nil)
+	wsCtx.Request.Header.Set("Connection", "Upgrade")
+	wsCtx.Request.Header.Set("Upgrade", "websocket")
+	wsCtx.Request.Header.Set("Sec-WebSocket-Key", "test")
+	wsOther := GenerateTextOtherInfo(wsCtx, &relaycommon.RelayInfo{
+		StartTime:         now,
+		FirstResponseTime: now,
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+	}, 1, 1, 1, 0, 0, 0, -1)
+	if wsOther["request_protocol"] != "websocket" {
+		t.Fatalf("expected request_protocol=websocket, got %#v", wsOther["request_protocol"])
+	}
+}

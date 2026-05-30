@@ -484,6 +484,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const requestProtocol =
+    typeof other?.request_protocol === 'string'
+      ? other.request_protocol.trim().toLowerCase()
+      : ''
   const responseServiceTier =
     typeof other?.response_service_tier === 'string'
       ? other.response_service_tier.trim()
@@ -559,6 +563,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   label={t('Upstream Request ID')}
                   value={props.log.upstream_request_id}
                   mono
+                />
+              )}
+
+              {requestProtocol && (
+                <DetailRow
+                  label={t('Request Protocol')}
+                  value={
+                    <StatusBadge
+                      label={
+                        requestProtocol === 'websocket' ? 'WebSocket' : 'HTTP'
+                      }
+                      variant={
+                        requestProtocol === 'websocket' ? 'purple' : 'blue'
+                      }
+                      size='sm'
+                      copyable={false}
+                    />
+                  }
                 />
               )}
 

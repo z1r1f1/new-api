@@ -279,16 +279,16 @@ func TokenAuth() func(c *gin.Context) {
 		if c.Request.Header.Get("Sec-WebSocket-Protocol") != "" {
 			// Sec-WebSocket-Protocol: realtime, openai-insecure-api-key.sk-xxx, openai-beta.realtime-v1
 			// read sk from Sec-WebSocket-Protocol
-			key := c.Request.Header.Get("Sec-WebSocket-Protocol")
-			parts := strings.Split(key, ",")
+			protocolHeader := c.Request.Header.Get("Sec-WebSocket-Protocol")
+			parts := strings.Split(protocolHeader, ",")
 			for _, part := range parts {
 				part = strings.TrimSpace(part)
 				if strings.HasPrefix(part, "openai-insecure-api-key") {
-					key = strings.TrimPrefix(part, "openai-insecure-api-key.")
+					key := strings.TrimPrefix(part, "openai-insecure-api-key.")
+					c.Request.Header.Set("Authorization", "Bearer "+key)
 					break
 				}
 			}
-			c.Request.Header.Set("Authorization", "Bearer "+key)
 		}
 		// 检查path包含/v1/messages 或 /v1/models
 		if strings.Contains(c.Request.URL.Path, "/v1/messages") || strings.Contains(c.Request.URL.Path, "/v1/models") {

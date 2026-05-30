@@ -25,6 +25,7 @@ func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {
 		"response": {
 			"model": "gpt-5.3-codex-spark",
 			"input": "hi",
+			"fast": true,
 			"store": false,
 			"stream": true,
 			"stream_options": {"include_usage": true}
@@ -44,6 +45,13 @@ func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {
 	}
 	if strings.TrimSpace(string(create.Generate)) != "false" {
 		t.Fatalf("generate = %s, want false", create.Generate)
+	}
+	var raw map[string]any
+	if err := common.Unmarshal(create.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal raw request: %v", err)
+	}
+	if raw["fast"] != true {
+		t.Fatalf("raw request should preserve compatibility fields such as fast: %s", create.Raw)
 	}
 	if req.Stream != nil {
 		t.Fatalf("stream = %v, want nil", req.Stream)
@@ -167,6 +175,72 @@ func TestBuildResponsesWSErrorPayloadIncludesStatus(t *testing.T) {
 	}
 	if data.Error == nil || data.Error.Code != string(types.ErrorCodeInvalidRequest) {
 		t.Fatalf("unexpected error body: %#v", data.Error)
+	}
+}
+
+func TestResponsesWSUpstreamUsageLimitErrorUses429(t *testing.T) {
+	message := []byte(`{
+		"type": "response.failed",
+		"response": {
+			"status": "failed",
+			"error": {
+				"message": "You've hit your usage limit. To continue using Codex, try again later.",
+				"type": "rate_limit_error",
+				"code": "usage_limit"
+			}
+		}
+	}`)
+	var streamResp dto.ResponsesStreamResponse
+	if err := common.Unmarshal(message, &streamResp); err != nil {
+		t.Fatalf("unmarshal stream response: %v", err)
+	}
+
+	apiErr := newResponsesWSUpstreamAPIError(streamResp, message)
+	if apiErr == nil {
+		t.Fatal("apiErr is nil")
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusTooManyRequests)
+	}
+	if !strings.Contains(apiErr.Error(), "usage limit") {
+		t.Fatalf("error should include upstream detail, got %q", apiErr.Error())
+	}
+}
+
+func TestResponsesWSTopLevelErrorPreservesStatus(t *testing.T) {
+	message := []byte(`{
+		"type": "error",
+		"status": 400,
+		"error": {
+			"message": "Unsupported parameter: stream_options",
+			"type": "invalid_request_error",
+			"code": "unsupported_parameter"
+		}
+	}`)
+	var streamResp dto.ResponsesStreamResponse
+	if err := common.Unmarshal(message, &streamResp); err != nil {
+		t.Fatalf("unmarshal stream response: %v", err)
+	}
+
+	apiErr := newResponsesWSUpstreamAPIError(streamResp, message)
+	if apiErr == nil {
+		t.Fatal("apiErr is nil")
+	}
+	if apiErr.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusBadRequest)
+	}
+	if !strings.Contains(apiErr.Error(), "Unsupported parameter") {
+		t.Fatalf("error should include top-level detail, got %q", apiErr.Error())
+	}
+}
+
+func TestResponsesWSUsageLimitTextError(t *testing.T) {
+	apiErr := newResponsesWSUsageLimitTextError("You've hit your usage limit. Try again later.")
+	if apiErr == nil {
+		t.Fatal("apiErr is nil")
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusTooManyRequests)
 	}
 }
 

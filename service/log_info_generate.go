@@ -79,6 +79,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo
+	AppendRequestProtocolInfo(ctx, other)
 	appendServiceTierInfo(ctx, relayInfo, adminInfo, other)
 	appendRequestEffortInfo(ctx, relayInfo, adminInfo, other)
 	appendRequestPath(ctx, relayInfo, other)
@@ -90,6 +91,29 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendStreamStatus(relayInfo, other)
 	appendChatGPTWebTimingInfo(ctx, other)
 	return other
+}
+
+func AppendRequestProtocolInfo(ctx *gin.Context, other map[string]interface{}) {
+	if other == nil {
+		return
+	}
+	other["request_protocol"] = requestProtocol(ctx)
+}
+
+func requestProtocol(ctx *gin.Context) string {
+	if ctx == nil || ctx.Request == nil {
+		return "http"
+	}
+	header := ctx.Request.Header
+	if strings.EqualFold(strings.TrimSpace(header.Get("Upgrade")), "websocket") ||
+		strings.TrimSpace(header.Get("Sec-WebSocket-Key")) != "" {
+		return "websocket"
+	}
+	if strings.Contains(strings.ToLower(header.Get("Connection")), "upgrade") &&
+		strings.EqualFold(strings.TrimSpace(header.Get("Upgrade")), "websocket") {
+		return "websocket"
+	}
+	return "http"
 }
 
 func appendServiceTierInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, adminInfo map[string]interface{}, other map[string]interface{}) {
