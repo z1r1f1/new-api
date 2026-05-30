@@ -15,6 +15,7 @@ import {
   saveConfig,
   saveMessages,
   saveSessions,
+  updateStoredSessionMessages,
   upsertPendingImageTask,
 } from './storage'
 
@@ -130,6 +131,46 @@ describe('playground storage user scope', () => {
       loadPendingImageTasks(2).map((task) => task.taskId),
       ['task-user-2']
     )
+  })
+
+  test('updates inactive session messages in durable storage', () => {
+    saveSessions(
+      [
+        session('active-session', 'Active', [
+          message('active-message', 'active'),
+        ]),
+        session('background-session', 'Background', [
+          message('background-message', 'old'),
+        ]),
+      ],
+      1
+    )
+    saveActiveSessionId('active-session', 1)
+    saveMessages([message('active-message', 'active')], 1)
+
+    const result = updateStoredSessionMessages(
+      'background-session',
+      (messages) =>
+        messages.map((item) =>
+          item.key === 'background-message'
+            ? {
+                ...item,
+                versions: [{ ...item.versions[0], content: 'new' }],
+              }
+            : item
+        ),
+      1
+    )
+
+    const reloaded = loadSessionState(1)
+    const backgroundSession = reloaded.sessions.find(
+      (item) => item.id === 'background-session'
+    )
+
+    assert.equal(result.updated, true)
+    assert.equal(result.activeSessionId, 'active-session')
+    assert.equal(backgroundSession?.messages[0]?.versions[0]?.content, 'new')
+    assert.equal(loadMessages(1)?.[0]?.versions[0]?.content, 'active')
   })
 
   test('clears only the selected user scope', () => {

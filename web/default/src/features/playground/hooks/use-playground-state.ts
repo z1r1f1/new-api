@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import {
   DEBUG_TABS,
   DEFAULT_CONFIG,
@@ -30,11 +30,13 @@ import {
   saveMessages,
   loadWorkbenchState,
   saveWorkbenchState,
-  buildSessionTitle,
   createPlaygroundSession,
   loadSessionState,
   saveActiveSessionId,
   saveSessions,
+  updateStoredSessionMessages,
+  getPlaygroundStorageScopeKey,
+  PLAYGROUND_SESSION_MESSAGES_UPDATED_EVENT,
   type PlaygroundStorageScope,
   type PlaygroundSessionState,
 } from '../lib'
@@ -108,6 +110,28 @@ export function usePlaygroundState(storageUserId: PlaygroundStorageScope) {
     DEBUG_TABS.PREVIEW
   )
 
+  useEffect(() => {
+    const scopeKey = getPlaygroundStorageScopeKey(storageUserId)
+    const handleSessionMessagesUpdated = (event: Event) => {
+      const detail = (event as CustomEvent<{ scope?: string }>).detail
+      if (detail?.scope !== scopeKey) return
+
+      const nextSessionState = loadSessionState(storageUserId)
+      setSessionState(nextSessionState)
+      setMessages(getActiveSessionMessages(nextSessionState))
+    }
+
+    window.addEventListener(
+      PLAYGROUND_SESSION_MESSAGES_UPDATED_EVENT,
+      handleSessionMessagesUpdated
+    )
+    return () =>
+      window.removeEventListener(
+        PLAYGROUND_SESSION_MESSAGES_UPDATED_EVENT,
+        handleSessionMessagesUpdated
+      )
+  }, [storageUserId])
+
   // Update config with automatic save
   const updateConfig = useCallback(
     <K extends keyof PlaygroundConfig>(key: K, value: PlaygroundConfig[K]) => {
@@ -157,38 +181,38 @@ export function usePlaygroundState(storageUserId: PlaygroundStorageScope) {
     [storageUserId]
   )
 
-  // Update messages with automatic save
-  const updateMessages = useCallback(
-    (updater: Message[] | ((prev: Message[]) => Message[])) => {
-      setMessages((prev) => {
-        const newMessages =
-          typeof updater === 'function' ? updater(prev) : updater
-        setSessionState((prevSessionState) => {
-          const now = new Date().toISOString()
-          const updatedSessions = prevSessionState.sessions.map((session) => {
-            if (session.id !== prevSessionState.activeSessionId) return session
+  const updateSessionMessages = useCallback(
+    (
+      sessionId: string,
+      updater: Message[] | ((prev: Message[]) => Message[])
+    ) => {
+      const result = updateStoredSessionMessages(
+        sessionId,
+        updater,
+        storageUserId
+      )
+      if (!result.updated || !result.messages) return
 
-            return {
-              ...session,
-              title:
-                session.title && session.title !== 'New session'
-                  ? session.title
-                  : buildSessionTitle(newMessages),
-              messages: newMessages,
-              updatedAt: now,
-            }
-          })
-          saveSessions(updatedSessions, storageUserId)
-          return {
-            ...prevSessionState,
-            sessions: updatedSessions,
-          }
-        })
-        saveMessages(newMessages, storageUserId)
-        return newMessages
+      setSessionState({
+        sessions: result.sessions,
+        activeSessionId: result.activeSessionId,
       })
+      if (result.activeSessionId === sessionId) {
+        setMessages(result.messages)
+      }
     },
     [storageUserId]
+  )
+
+  // Update active-session messages with automatic save
+  const updateMessages = useCallback(
+    (updater: Message[] | ((prev: Message[]) => Message[])) => {
+      updateSessionMessages(
+        loadSessionState(storageUserId).activeSessionId,
+        updater
+      )
+    },
+    [storageUserId, updateSessionMessages]
   )
 
   // Clear all messages
@@ -372,6 +396,7 @@ export function usePlaygroundState(storageUserId: PlaygroundStorageScope) {
     updateWorkbenchState,
     replaceWorkbenchState,
     updateMessages,
+    updateSessionMessages,
     clearMessages,
     resetConfig,
     replaceConfig,

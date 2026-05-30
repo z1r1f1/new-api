@@ -286,6 +286,10 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
 - A pending task must remain in localStorage while its assistant message is
   still `loading` or `streaming`; this is the durable client-side pointer that
   lets the playground resume after route changes or refreshes.
+- Long-running playground chat and image callbacks must update the originating
+  session/message by stable ids, not the currently visible session. Persist the
+  update through `updateStoredSessionMessages` so a route change or remount does
+  not strand the assistant message in `loading`/`streaming`.
 - Legacy/orphan wait messages that still display `Task ID:` / `任务 ID：` may be
   used to recreate the pending task marker and run one recovery poll.
 - Terminal task handling must update the assistant message to `complete` or
@@ -293,7 +297,9 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   terminal poll, keep the pending task so the next mount can poll once more and
   render the completed image.
 - Waiting text should be refreshed from the original `startedAt` timestamp, not
-  reset on remount, so elapsed time remains monotonic.
+  reset on remount, so elapsed time remains monotonic. Use an active-page timer
+  as well as the polling loop so elapsed text continues to repaint between poll
+  requests.
 - Completed task responses with `b64_json` should render a markdown image using
   `/pg/images/generations/:task_id/image/:index` instead of embedding large
   base64 strings in saved chat messages.
@@ -306,6 +312,8 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   task id -> recreate the pending marker and resume polling.
 - Pending task exists but matching assistant message is complete/error/missing
   -> remove the stale pending task.
+- Streaming/non-streaming chat completes after navigating away -> saved session
+  messages must still receive the final assistant content or error.
 - Poll returns `succeeded`/`success`/`completed` -> render image markdown and
   mark the message complete.
 - Poll returns failure status -> render the provider/task failure message and
@@ -321,6 +329,9 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   embedded task id recovers on the next playground mount.
 - Good: wait text updates elapsed seconds while polling and preserves the
   original task start time across remounts.
+- Good: a text chat request started in the playground keeps writing to the
+  original session after route changes; returning to the playground shows the
+  latest streamed/final content instead of an abandoned loading message.
 - Base: synchronous image-generation responses without a task id still render
   directly from the response payload.
 - Bad: deleting the pending task before the message update is committed; a route
@@ -332,6 +343,8 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   URL.
 - `web/default`: unit test for wait text elapsed calculation from `startedAt`.
 - `web/default`: unit test for extracting localized task ids from wait text.
+- `web/default`: unit test for updating inactive session messages in durable
+  storage.
 - `web/default`: run typecheck and a production build for hook changes.
 
 #### 7. Wrong vs Correct

@@ -69,6 +69,10 @@ interface UseChatHandlerOptions {
   activeSessionId: string
   storageUserId?: PlaygroundStorageScope
   onMessageUpdate: (updater: (prev: Message[]) => Message[]) => void
+  onSessionMessageUpdate: (
+    sessionId: string,
+    updater: (prev: Message[]) => Message[]
+  ) => void
   onDebugUpdate: (
     updater: (prev: PlaygroundDebugData) => PlaygroundDebugData
   ) => void
@@ -179,6 +183,7 @@ export function useChatHandler({
   activeSessionId,
   storageUserId,
   onMessageUpdate,
+  onSessionMessageUpdate,
   onDebugUpdate,
   onDebugTabChange,
   searchEnabled = false,
@@ -191,12 +196,30 @@ export function useChatHandler({
     taskId: string
     messageKey: string
   } | null>(null)
+  const currentChatTaskRef = useRef<{
+    sessionId: string
+    messageKey: string
+  } | null>(null)
   const currentMessagesRef = useRef(currentMessages)
   const streamResponseRef = useRef('')
 
   useEffect(() => {
     currentMessagesRef.current = currentMessages
   }, [currentMessages])
+
+  const commitSessionMessageUpdate = useCallback(
+    (sessionId: string, updater: (prev: Message[]) => Message[]) => {
+      onSessionMessageUpdate(sessionId, updater)
+    },
+    [onSessionMessageUpdate]
+  )
+
+  const commitActiveMessageUpdate = useCallback(
+    (updater: (prev: Message[]) => Message[]) => {
+      onMessageUpdate(updater)
+    },
+    [onMessageUpdate]
+  )
 
   const getPayloadModel = useCallback(
     (payload: PlaygroundRequestPayload) => {
@@ -322,9 +345,14 @@ export function useChatHandler({
 
   // Handle stream update
   const handleStreamUpdate = useCallback(
-    (type: 'reasoning' | 'content', chunk: string) => {
-      onMessageUpdate((prev) =>
-        updateLastAssistantMessage(prev, (message) => {
+    (
+      sessionId: string,
+      messageKey: string,
+      type: 'reasoning' | 'content',
+      chunk: string
+    ) => {
+      commitSessionMessageUpdate(sessionId, (prev) =>
+        updateAssistantMessageByKey(prev, messageKey, (message) => {
           if (message.status === MESSAGE_STATUS.ERROR) return message
 
           if (type === 'reasoning') {
@@ -348,42 +376,60 @@ export function useChatHandler({
         })
       )
     },
-    [onMessageUpdate]
+    [commitSessionMessageUpdate]
   )
 
   // Handle stream complete
   const handleStreamComplete = useCallback(() => {
-    onMessageUpdate((prev) =>
-      updateLastAssistantMessage(prev, (message) =>
+    const task = currentChatTaskRef.current
+    if (!task) return
+    commitSessionMessageUpdate(task.sessionId, (prev) =>
+      updateAssistantMessageByKey(prev, task.messageKey, (message) =>
         message.status === MESSAGE_STATUS.COMPLETE ||
         message.status === MESSAGE_STATUS.ERROR
           ? message
           : { ...finalizeMessage(message), status: MESSAGE_STATUS.COMPLETE }
       )
     )
-  }, [onMessageUpdate])
+    currentChatTaskRef.current = null
+  }, [commitSessionMessageUpdate])
 
   // Handle stream error
   const handleStreamError = useCallback(
     (error: string, errorCode?: string) => {
+      const task = currentChatTaskRef.current
       toast.error(error)
-      onMessageUpdate((prev) =>
+      if (task) {
+        commitSessionMessageUpdate(task.sessionId, (prev) =>
+          updateAssistantMessageByKey(prev, task.messageKey, (message) =>
+            applyErrorToAssistantMessage(message, error, errorCode)
+          )
+        )
+        currentChatTaskRef.current = null
+        return
+      }
+      commitActiveMessageUpdate((prev) =>
         updateAssistantMessageWithError(prev, error, errorCode)
       )
     },
-    [onMessageUpdate]
+    [commitActiveMessageUpdate, commitSessionMessageUpdate]
   )
 
   const handleImageGenerationError = useCallback(
-    (messageKey: string, error: string, errorCode?: string) => {
+    (
+      sessionId: string,
+      messageKey: string,
+      error: string,
+      errorCode?: string
+    ) => {
       toast.error(error)
-      onMessageUpdate((prev) =>
+      commitSessionMessageUpdate(sessionId, (prev) =>
         updateAssistantMessageByKey(prev, messageKey, (message) =>
           applyErrorToAssistantMessage(message, error, errorCode)
         )
       )
     },
-    [onMessageUpdate]
+    [commitSessionMessageUpdate]
   )
 
   // Send streaming chat request
@@ -391,10 +437,13 @@ export function useChatHandler({
     (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
       const payload = getChatPayload(messages, overridePayload)
       const debugId = createPlaygroundDebugId()
+      const sessionId = activeSessionId
+      const messageKey = getLastAssistantMessageKey(messages)
+      currentChatTaskRef.current = { sessionId, messageKey }
       startDebugRequest(payload, true)
       sendStreamRequest(
         payload,
-        handleStreamUpdate,
+        (type, chunk) => handleStreamUpdate(sessionId, messageKey, type, chunk),
         () => {
           completeDebugResponse(streamResponseRef.current.trim())
           handleStreamComplete()
@@ -409,6 +458,7 @@ export function useChatHandler({
       )
     },
     [
+      activeSessionId,
       getChatPayload,
       startDebugRequest,
       sendStreamRequest,
@@ -426,6 +476,8 @@ export function useChatHandler({
     async (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
       const payload = getChatPayload(messages, overridePayload)
       const debugId = createPlaygroundDebugId()
+      const sessionId = activeSessionId
+      const messageKey = getLastAssistantMessageKey(messages)
       startDebugRequest(payload, false)
 
       try {
@@ -438,8 +490,8 @@ export function useChatHandler({
         const choice = response.choices?.[0]
         if (!choice) return
 
-        onMessageUpdate((prev) =>
-          updateLastAssistantMessage(prev, (message) => ({
+        commitSessionMessageUpdate(sessionId, (prev) =>
+          updateAssistantMessageByKey(prev, messageKey, (message) => ({
             ...finalizeMessage(
               {
                 ...message,
@@ -469,15 +521,20 @@ export function useChatHandler({
           ERROR_MESSAGES.API_REQUEST_ERROR
         const errorCode = err?.response?.data?.error?.code || undefined
         completeDebugResponse({ error: errorMessage, errorCode })
-        handleStreamError(errorMessage, errorCode)
+        toast.error(errorMessage)
+        commitSessionMessageUpdate(sessionId, (prev) =>
+          updateAssistantMessageByKey(prev, messageKey, (message) =>
+            applyErrorToAssistantMessage(message, errorMessage, errorCode)
+          )
+        )
       }
     },
     [
+      activeSessionId,
       getChatPayload,
       startDebugRequest,
       completeDebugResponse,
-      onMessageUpdate,
-      handleStreamError,
+      commitSessionMessageUpdate,
       updateDebugUpstreamRequest,
       fetchAndUpdateDebugUpstreamRequest,
     ]
@@ -485,6 +542,7 @@ export function useChatHandler({
 
   const updateImageGenerationMessage = useCallback(
     (
+      sessionId: string,
       messageKey: string,
       taskId: string,
       taskData:
@@ -494,7 +552,7 @@ export function useChatHandler({
       attempt: number,
       startedAt: number
     ) => {
-      onMessageUpdate((prev) =>
+      commitSessionMessageUpdate(sessionId, (prev) =>
         updateAssistantMessageByKey(prev, messageKey, (message) => ({
           ...message,
           versions: [
@@ -513,12 +571,12 @@ export function useChatHandler({
         }))
       )
     },
-    [onMessageUpdate, t]
+    [commitSessionMessageUpdate, t]
   )
 
   const completeImageGenerationMessage = useCallback(
-    (messageKey: string, content: string) => {
-      onMessageUpdate((prev) =>
+    (sessionId: string, messageKey: string, content: string) => {
+      commitSessionMessageUpdate(sessionId, (prev) =>
         updateAssistantMessageByKey(prev, messageKey, (message) => ({
           ...finalizeMessage({
             ...message,
@@ -533,7 +591,7 @@ export function useChatHandler({
         }))
       )
     },
-    [onMessageUpdate]
+    [commitSessionMessageUpdate]
   )
 
   const sleep = useCallback((ms: number, signal: AbortSignal) => {
@@ -559,6 +617,7 @@ export function useChatHandler({
     async (
       ms: number,
       signal: AbortSignal,
+      sessionId: string,
       messageKey: string,
       taskId: string,
       taskData:
@@ -579,6 +638,7 @@ export function useChatHandler({
 
         tick += 1
         updateImageGenerationMessage(
+          sessionId,
           messageKey,
           taskId,
           taskData,
@@ -595,6 +655,7 @@ export function useChatHandler({
       taskId: string,
       signal: AbortSignal,
       startedAt: number,
+      sessionId: string,
       messageKey: string
     ) => {
       const maxAttempts = 240
@@ -607,6 +668,7 @@ export function useChatHandler({
 
         if (!isTerminalImageTaskStatus(status)) {
           updateImageGenerationMessage(
+            sessionId,
             messageKey,
             taskId,
             taskData,
@@ -616,6 +678,7 @@ export function useChatHandler({
           await sleepWithImageGenerationProgress(
             5000,
             signal,
+            sessionId,
             messageKey,
             taskId,
             taskData,
@@ -702,6 +765,7 @@ export function useChatHandler({
     }
     setIsImageGenerating(true)
     updateImageGenerationMessage(
+      pendingTask.sessionId,
       pendingTask.messageKey,
       pendingTask.taskId,
       null,
@@ -715,6 +779,7 @@ export function useChatHandler({
           task.taskId,
           abortController.signal,
           task.startedAt,
+          task.sessionId,
           task.messageKey
         )
         if (task.debugId) {
@@ -726,6 +791,7 @@ export function useChatHandler({
         completeDebugResponse(taskResult)
         currentImageTaskRef.current = null
         completeImageGenerationMessage(
+          task.sessionId,
           task.messageKey,
           imageTaskResultToMarkdown(task.taskId, taskResult, t)
         )
@@ -746,7 +812,12 @@ export function useChatHandler({
         )
         const errorCode = readImageErrorCode(error)
         completeDebugResponse({ error: errorMessage, errorCode })
-        handleImageGenerationError(task.messageKey, errorMessage, errorCode)
+        handleImageGenerationError(
+          task.sessionId,
+          task.messageKey,
+          errorMessage,
+          errorCode
+        )
       } finally {
         if (imageAbortControllerRef.current === abortController) {
           imageAbortControllerRef.current = null
@@ -779,6 +850,34 @@ export function useChatHandler({
   ])
 
   useEffect(() => {
+    const refreshActiveImageWaitMessages = () => {
+      loadPendingImageTasks(storageUserId)
+        .filter((task) => task.sessionId === activeSessionId)
+        .forEach((task) => {
+          const pendingMessage = currentMessagesRef.current.find(
+            (message) => message.key === task.messageKey
+          )
+          if (!isActiveImageTaskMessage(pendingMessage)) {
+            return
+          }
+
+          updateImageGenerationMessage(
+            task.sessionId,
+            task.messageKey,
+            task.taskId,
+            null,
+            Math.floor((Date.now() - task.startedAt) / 1000),
+            task.startedAt
+          )
+        })
+    }
+
+    refreshActiveImageWaitMessages()
+    const intervalId = window.setInterval(refreshActiveImageWaitMessages, 1000)
+    return () => window.clearInterval(intervalId)
+  }, [activeSessionId, storageUserId, updateImageGenerationMessage])
+
+  useEffect(() => {
     loadPendingImageTasks(storageUserId)
       .filter((task) => task.sessionId === activeSessionId)
       .forEach((task) => {
@@ -808,6 +907,7 @@ export function useChatHandler({
       const payload = getImagePayload(messages, overridePayload)
       const debugId = createPlaygroundDebugId()
       const startedAt = Date.now()
+      const sessionId = activeSessionId
       const messageKey = getLastAssistantMessageKey(messages)
       startDebugRequest(payload, false)
 
@@ -826,7 +926,7 @@ export function useChatHandler({
             {
               taskId,
               messageKey,
-              sessionId: activeSessionId,
+              sessionId,
               debugId,
               startedAt,
               updatedAt: new Date().toISOString(),
@@ -834,6 +934,7 @@ export function useChatHandler({
             storageUserId
           )
           updateImageGenerationMessage(
+            sessionId,
             messageKey,
             taskId,
             submitData,
@@ -844,6 +945,7 @@ export function useChatHandler({
             taskId,
             abortController.signal,
             startedAt,
+            sessionId,
             messageKey
           )
           await fetchAndUpdateDebugUpstreamRequest(debugId)
@@ -853,6 +955,7 @@ export function useChatHandler({
           completeDebugResponse(taskResult)
           currentImageTaskRef.current = null
           completeImageGenerationMessage(
+            sessionId,
             messageKey,
             imageTaskResultToMarkdown(taskId, taskResult, t)
           )
@@ -860,6 +963,7 @@ export function useChatHandler({
         }
 
         completeImageGenerationMessage(
+          sessionId,
           messageKey,
           imageResponseToMarkdown(submitData) ||
             t(
@@ -884,7 +988,12 @@ export function useChatHandler({
         )
         const errorCode = readImageErrorCode(error)
         completeDebugResponse({ error: errorMessage, errorCode })
-        handleImageGenerationError(messageKey, errorMessage, errorCode)
+        handleImageGenerationError(
+          sessionId,
+          messageKey,
+          errorMessage,
+          errorCode
+        )
       } finally {
         if (imageAbortControllerRef.current === abortController) {
           imageAbortControllerRef.current = null
@@ -946,6 +1055,8 @@ export function useChatHandler({
     imageAbortControllerRef.current?.abort()
     setIsImageGenerating(false)
     stopStream()
+    const chatTask = currentChatTaskRef.current
+    currentChatTaskRef.current = null
     onDebugUpdate((prev) => ({
       ...prev,
       response:
@@ -954,7 +1065,24 @@ export function useChatHandler({
           : prev.response,
       isStreaming: false,
     }))
-    onMessageUpdate((prev) =>
+    const updateStoppedMessage = (message: Message) =>
+      message.status === MESSAGE_STATUS.LOADING ||
+      message.status === MESSAGE_STATUS.STREAMING
+        ? { ...finalizeMessage(message), status: MESSAGE_STATUS.COMPLETE }
+        : message
+
+    if (chatTask) {
+      commitSessionMessageUpdate(chatTask.sessionId, (prev) =>
+        updateAssistantMessageByKey(
+          prev,
+          chatTask.messageKey,
+          updateStoppedMessage
+        )
+      )
+      return
+    }
+
+    commitActiveMessageUpdate((prev) =>
       updateLastAssistantMessage(prev, (message) =>
         message.status === MESSAGE_STATUS.LOADING ||
         message.status === MESSAGE_STATUS.STREAMING
@@ -962,7 +1090,13 @@ export function useChatHandler({
           : message
       )
     )
-  }, [stopStream, onDebugUpdate, onMessageUpdate, storageUserId])
+  }, [
+    stopStream,
+    onDebugUpdate,
+    commitActiveMessageUpdate,
+    commitSessionMessageUpdate,
+    storageUserId,
+  ])
 
   return {
     sendChat,

@@ -45,6 +45,9 @@ export type PlaygroundStorageScope = string | number | null | undefined
 
 const maxStoredSessions = 30
 
+export const PLAYGROUND_SESSION_MESSAGES_UPDATED_EVENT =
+  'playground:session-messages-updated'
+
 function parseJSON(value: string | null): unknown {
   if (!value) return null
   return JSON.parse(value)
@@ -70,6 +73,34 @@ function normalizeStorageScope(scope: PlaygroundStorageScope): string | null {
 function getStorageKey(key: string, scope?: PlaygroundStorageScope): string {
   const normalizedScope = normalizeStorageScope(scope)
   return normalizedScope ? `${key}:${normalizedScope}` : key
+}
+
+export function getPlaygroundStorageScopeKey(
+  scope?: PlaygroundStorageScope
+): string {
+  return normalizeStorageScope(scope) ?? 'legacy'
+}
+
+function emitSessionMessagesUpdated(
+  sessionId: string,
+  scope?: PlaygroundStorageScope
+): void {
+  if (
+    typeof window === 'undefined' ||
+    typeof window.dispatchEvent !== 'function' ||
+    typeof CustomEvent === 'undefined'
+  ) {
+    return
+  }
+
+  window.dispatchEvent(
+    new CustomEvent(PLAYGROUND_SESSION_MESSAGES_UPDATED_EVENT, {
+      detail: {
+        scope: getPlaygroundStorageScopeKey(scope),
+        sessionId,
+      },
+    })
+  )
 }
 
 function removeLegacyStorageKey(
@@ -186,6 +217,15 @@ function trimSessions(sessions: PlaygroundSession[]): PlaygroundSession[] {
   return [...sessions]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .slice(0, maxStoredSessions)
+}
+
+type MessageUpdater = Message[] | ((prev: Message[]) => Message[])
+
+function applyMessageUpdater(
+  messages: Message[],
+  updater: MessageUpdater
+): Message[] {
+  return typeof updater === 'function' ? updater(messages) : updater
 }
 
 function createSession(messages: Message[] = []): PlaygroundSession {
@@ -486,6 +526,50 @@ export function loadSessionState(
   return {
     sessions,
     activeSessionId: activeSession.id,
+  }
+}
+
+export function updateStoredSessionMessages(
+  sessionId: string,
+  updater: MessageUpdater,
+  scope?: PlaygroundStorageScope
+): PlaygroundSessionState & { messages: Message[] | null; updated: boolean } {
+  const state = loadSessionState(scope)
+  let updatedMessages: Message[] | null = null
+  const now = new Date().toISOString()
+
+  const sessions = state.sessions.map((session) => {
+    if (session.id !== sessionId) return session
+
+    const messages = applyMessageUpdater(session.messages, updater)
+    updatedMessages = messages
+
+    return {
+      ...session,
+      title:
+        session.title && session.title !== 'New session'
+          ? session.title
+          : buildSessionTitle(messages),
+      messages,
+      updatedAt: now,
+    }
+  })
+
+  if (!updatedMessages) {
+    return { ...state, messages: null, updated: false }
+  }
+
+  saveSessions(sessions, scope)
+  if (state.activeSessionId === sessionId) {
+    saveMessages(updatedMessages, scope)
+  }
+  emitSessionMessagesUpdated(sessionId, scope)
+
+  return {
+    sessions,
+    activeSessionId: state.activeSessionId,
+    messages: updatedMessages,
+    updated: true,
   }
 }
 
