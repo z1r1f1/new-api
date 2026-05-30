@@ -616,7 +616,7 @@ func (s *responsesWSSession) startTargetReader() {
 				_ = s.client.Close()
 				return
 			}
-			forward, keepReading := s.observeUpstreamMessage(message)
+			message, forward, keepReading := s.observeUpstreamMessage(message)
 			if !keepReading {
 				return
 			}
@@ -633,15 +633,15 @@ func (s *responsesWSSession) startTargetReader() {
 	}()
 }
 
-func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool) {
+func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, bool, bool) {
 	state := s.getCurrent()
 	if state == nil {
-		return true, true
+		return message, true, true
 	}
 
 	var streamResponse dto.ResponsesStreamResponse
 	if err := common.Unmarshal(message, &streamResponse); err != nil {
-		return true, true
+		return message, true, true
 	}
 	service.AppendChannelAffinityResponseDebug(s.c, message)
 
@@ -650,25 +650,28 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 		state.info.SetFirstResponseTime()
 		s.rememberResponsesWSToolCalls(state, streamResponse.Response)
 		s.applyTerminalResponseUsage(state, streamResponse.Response)
+		message = normalizeResponsesWSTerminalMessageForClient(message, state, &streamResponse)
 		s.finishCall(state, true)
 	case "response.failed", "response.cancelled", "response.canceled", "response.error", "error":
 		state.info.SetFirstResponseTime()
 		apiErr := newResponsesWSUpstreamAPIError(streamResponse, message)
-		return s.handleTerminalUpstreamError(state, apiErr)
+		forward, keepReading := s.handleTerminalUpstreamError(state, apiErr)
+		return message, forward, keepReading
 	case "response.output_text.delta":
 		if streamResponse.Delta != "" {
 			if isResponsesWSUpstreamNoticeText(streamResponse.Delta) {
-				return false, true
+				return message, false, true
 			}
 			state.info.SetFirstResponseTime()
 			state.outputText.WriteString(streamResponse.Delta)
 		}
 		if apiErr := newResponsesWSTextualUpstreamError(state.outputText.String()); apiErr != nil {
-			return s.handleTerminalUpstreamError(state, apiErr)
+			forward, keepReading := s.handleTerminalUpstreamError(state, apiErr)
+			return message, forward, keepReading
 		}
 	case dto.ResponsesOutputTypeItemDone:
 		if responsesWSOutputItemIsUpstreamNotice(streamResponse.Item) {
-			return false, true
+			return message, false, true
 		}
 		if responsesWSOutputItemMarksFirstResponse(streamResponse.Item) {
 			state.info.SetFirstResponseTime()
@@ -689,7 +692,53 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 			state.appendResponsesWSToolCallArguments(streamResponse.ItemID, streamResponse.Delta)
 		}
 	}
-	return true, true
+	return message, true, true
+}
+
+func normalizeResponsesWSTerminalMessageForClient(message []byte, state *responsesWSCallState, streamResponse *dto.ResponsesStreamResponse) []byte {
+	if state == nil || streamResponse == nil || streamResponse.Response == nil {
+		return message
+	}
+
+	finalizeResponsesWSUsage(state)
+	needsOutput := streamResponse.Response.Output == nil
+	needsUsage := !responsesWSUsageHasTokens(streamResponse.Response.Usage) && responsesWSUsageHasTokens(state.usage)
+	if !needsOutput && !needsUsage {
+		return message
+	}
+
+	var payload map[string]any
+	if err := common.Unmarshal(message, &payload); err != nil {
+		return message
+	}
+	response, ok := payload["response"].(map[string]any)
+	if !ok || response == nil {
+		return message
+	}
+
+	if needsOutput {
+		if value, exists := response["output"]; !exists || value == nil {
+			response["output"] = []any{}
+		}
+	}
+	if needsUsage {
+		response["usage"] = state.usage
+	}
+
+	normalized, err := common.Marshal(payload)
+	if err != nil {
+		return message
+	}
+	return normalized
+}
+
+func responsesWSUsageHasTokens(usage *dto.Usage) bool {
+	return usage != nil &&
+		(usage.PromptTokens != 0 ||
+			usage.CompletionTokens != 0 ||
+			usage.TotalTokens != 0 ||
+			usage.InputTokens != 0 ||
+			usage.OutputTokens != 0)
 }
 
 func responsesWSOutputItemMarksFirstResponse(item *dto.ResponsesOutput) bool {
@@ -1322,6 +1371,12 @@ func finalizeResponsesWSUsage(state *responsesWSCallState) {
 	}
 	if state.usage.PromptTokens == 0 && state.usage.CompletionTokens != 0 {
 		state.usage.PromptTokens = state.info.GetEstimatePromptTokens()
+	}
+	if state.usage.InputTokens == 0 && state.usage.PromptTokens != 0 {
+		state.usage.InputTokens = state.usage.PromptTokens
+	}
+	if state.usage.OutputTokens == 0 && state.usage.CompletionTokens != 0 {
+		state.usage.OutputTokens = state.usage.CompletionTokens
 	}
 	if state.usage.TotalTokens == 0 {
 		state.usage.TotalTokens = state.usage.PromptTokens + state.usage.CompletionTokens

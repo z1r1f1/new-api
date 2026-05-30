@@ -618,7 +618,7 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNotice(t *testing.T) {
 	session := &responsesWSSession{}
 	session.current = &responsesWSCallState{info: info}
 
-	forward, keepReading := session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown."}`))
+	_, forward, keepReading := session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown."}`))
 
 	if forward {
 		t.Fatal("weekly limit notice delta should not be forwarded to websocket client")
@@ -630,7 +630,7 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNotice(t *testing.T) {
 		t.Fatal("filtered weekly limit notice should not mark first response time")
 	}
 
-	forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
+	_, forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
 	if !forward || !keepReading {
 		t.Fatalf("normal output should be forwarded and keep reading, got forward=%v keepReading=%v", forward, keepReading)
 	}
@@ -644,7 +644,7 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNoticeItemDone(t *testing.T) {
 	session := &responsesWSSession{}
 	session.current = &responsesWSCallState{info: info}
 
-	forward, keepReading := session.observeUpstreamMessage([]byte(`{
+	_, forward, keepReading := session.observeUpstreamMessage([]byte(`{
 		"type":"response.output_item.done",
 		"item":{
 			"type":"message",
@@ -663,6 +663,87 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNoticeItemDone(t *testing.T) {
 	}
 	if info.HasSendResponse() {
 		t.Fatal("filtered weekly limit notice item.done should not mark first response time")
+	}
+}
+
+func TestNormalizeResponsesWSTerminalMessageForClientInjectsEstimatedUsageAndOutput(t *testing.T) {
+	message := []byte(`{
+		"type":"response.completed",
+		"response":{
+			"id":"resp_1",
+			"status":"completed"
+		}
+	}`)
+	var streamResponse dto.ResponsesStreamResponse
+	if err := common.Unmarshal(message, &streamResponse); err != nil {
+		t.Fatalf("unmarshal stream response: %v", err)
+	}
+
+	state := &responsesWSCallState{
+		info:  newTestResponsesWSRelayInfo(t),
+		usage: &dto.Usage{PromptTokens: 11, CompletionTokens: 3},
+	}
+	got := normalizeResponsesWSTerminalMessageForClient(message, state, &streamResponse)
+
+	var payload struct {
+		Response struct {
+			Output []dto.ResponsesOutput `json:"output"`
+			Usage  *dto.Usage            `json:"usage"`
+		} `json:"response"`
+	}
+	if err := common.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("unmarshal normalized message: %v; payload=%s", err, got)
+	}
+	if payload.Response.Output == nil {
+		t.Fatalf("response.output should be normalized to an empty array: %s", got)
+	}
+	if payload.Response.Usage == nil {
+		t.Fatalf("response.usage should be injected for websocket clients: %s", got)
+	}
+	if payload.Response.Usage.PromptTokens != 11 || payload.Response.Usage.InputTokens != 11 {
+		t.Fatalf("input usage = prompt:%d input:%d, want 11/11", payload.Response.Usage.PromptTokens, payload.Response.Usage.InputTokens)
+	}
+	if payload.Response.Usage.CompletionTokens != 3 || payload.Response.Usage.OutputTokens != 3 {
+		t.Fatalf("output usage = completion:%d output:%d, want 3/3", payload.Response.Usage.CompletionTokens, payload.Response.Usage.OutputTokens)
+	}
+	if payload.Response.Usage.TotalTokens != 14 {
+		t.Fatalf("total_tokens = %d, want 14", payload.Response.Usage.TotalTokens)
+	}
+}
+
+func TestNormalizeResponsesWSTerminalMessageForClientKeepsUpstreamUsage(t *testing.T) {
+	message := []byte(`{
+		"type":"response.completed",
+		"response":{
+			"id":"resp_1",
+			"status":"completed",
+			"usage":{"input_tokens":99,"output_tokens":1,"total_tokens":100}
+		}
+	}`)
+	var streamResponse dto.ResponsesStreamResponse
+	if err := common.Unmarshal(message, &streamResponse); err != nil {
+		t.Fatalf("unmarshal stream response: %v", err)
+	}
+
+	state := &responsesWSCallState{
+		info:  newTestResponsesWSRelayInfo(t),
+		usage: &dto.Usage{PromptTokens: 11, CompletionTokens: 3},
+	}
+	got := normalizeResponsesWSTerminalMessageForClient(message, state, &streamResponse)
+
+	var payload struct {
+		Response struct {
+			Usage *dto.Usage `json:"usage"`
+		} `json:"response"`
+	}
+	if err := common.Unmarshal(got, &payload); err != nil {
+		t.Fatalf("unmarshal normalized message: %v; payload=%s", err, got)
+	}
+	if payload.Response.Usage == nil {
+		t.Fatalf("response.usage missing: %s", got)
+	}
+	if payload.Response.Usage.InputTokens != 99 || payload.Response.Usage.OutputTokens != 1 || payload.Response.Usage.TotalTokens != 100 {
+		t.Fatalf("upstream usage was overwritten: %#v", payload.Response.Usage)
 	}
 }
 

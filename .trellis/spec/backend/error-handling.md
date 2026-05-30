@@ -175,6 +175,88 @@ sr.Stop(streamErr)
 
 ---
 
+## Responses WebSocket Terminal Events
+
+### 1. Scope / Trigger
+
+- Trigger: any change to Responses WebSocket relay handling in
+  `relay/responses_websocket.go`.
+- Applies to upstream events `response.completed`, `response.done`, and
+  `response.incomplete` before they are forwarded to the WebSocket client.
+
+### 2. Signatures
+
+- Entry point:
+  `controller.ResponsesWebSocket(c *gin.Context)`.
+- Relay helper:
+  `ResponsesWebSocketHelper(c *gin.Context, client *websocket.Conn) *types.NewAPIError`.
+- Upstream observer:
+  `(*responsesWSSession).observeUpstreamMessage(message []byte) ([]byte, bool, bool)`.
+- Terminal normalizer:
+  `normalizeResponsesWSTerminalMessageForClient(message []byte, state *responsesWSCallState, streamResponse *dto.ResponsesStreamResponse) []byte`.
+
+### 3. Contracts
+
+- Successful terminal WebSocket events must forward an iterable
+  `response.output`; if upstream omits it or sends `null`, relay clients must
+  receive `output: []`.
+- Successful terminal WebSocket events must expose usable `response.usage`
+  whenever the relay has upstream or locally estimated token usage.
+- Usage sent to WebSocket clients must include Responses-style fields
+  `input_tokens`, `output_tokens`, and `total_tokens`; legacy
+  `prompt_tokens` and `completion_tokens` may also be present for internal
+  billing compatibility.
+- Do not overwrite non-zero upstream usage with local estimates. Local
+  estimates are a fallback only.
+
+### 4. Validation & Error Matrix
+
+- Terminal event with upstream usage -> forward upstream usage unchanged.
+- Terminal event without usage + relay estimated usage -> inject relay usage
+  before forwarding to the client.
+- Terminal event with missing or null output -> normalize to `output: []`.
+- Invalid terminal JSON or missing `response` object -> forward the original
+  message rather than failing a successful response.
+
+### 5. Good/Base/Bad Cases
+
+- Good: Codex over WebSocket receives `response.completed.response.usage` and
+  can update its context/auto-compact token accounting.
+- Base: HTTP/SSE Responses behavior remains unchanged.
+- Bad: settling `PostTextConsumeQuota` with estimated usage while forwarding a
+  terminal WebSocket event with no `response.usage`; Codex may undercount and
+  miss auto-compact before the model rejects the next turn.
+- Bad: forwarding `response.output: null`; SDK consumers can crash when they
+  iterate output during finalization.
+
+### 6. Tests Required
+
+- `relay`: regression test proving terminal WebSocket normalization injects
+  estimated usage and `output: []` when upstream omits them.
+- `relay`: regression test proving existing non-zero upstream usage is not
+  overwritten by local estimates.
+- `go test ./relay/...` and `go test ./...` after changing relay terminal
+  event semantics.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+service.PostTextConsumeQuota(c, info, usage, nil)
+return originalTerminalMessage // no response.usage for websocket client
+```
+
+Correct:
+
+```go
+message = normalizeResponsesWSTerminalMessageForClient(message, state, streamResponse)
+service.PostTextConsumeQuota(c, info, state.usage, nil)
+return message
+```
+
+---
+
 ## Dashboard/API Error Responses
 
 Controller/admin endpoints usually respond with `gin.H`.
