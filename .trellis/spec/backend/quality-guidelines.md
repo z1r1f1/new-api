@@ -194,9 +194,9 @@ When adding or modifying a channel:
   `response.function_call_arguments.delta`, meaningful `response.output_item.done`,
   terminal completion, or terminal error -> must not change `frt` after the
   first upstream frame has already set it.
-- Weekly-limit warning text such as `Heads up, you have less than 25% of your
-  weekly limit left. Run /status for a breakdown.` -> do not forward. It may
-  update `frt` if it is the first upstream frame.
+- Weekly-limit warning text such as `Heads up, you have less than 25%/20%/10%/5%
+  of your weekly limit left. Run /status for a breakdown.` -> do not forward.
+  It may update `frt` if it is the first upstream frame.
 - Text delta beginning with `status_code=429` plus usage-limit/rate-limit or
   previous-response-not-found details -> convert to `types.NewAPIError` with
   status `429`, process channel error, and retry when retry policy permits.

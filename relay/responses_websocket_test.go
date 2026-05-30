@@ -3,6 +3,7 @@ package relay
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -616,29 +617,42 @@ func TestObserveUpstreamMessageMarksFunctionCallSkeletonAsFirstResponse(t *testi
 }
 
 func TestObserveUpstreamMessageFiltersWeeklyLimitNotice(t *testing.T) {
-	info := newTestResponsesWSRelayInfo(t)
-	session := &responsesWSSession{}
-	session.current = &responsesWSCallState{info: info}
+	for _, percent := range []string{"25", "20", "10", "5"} {
+		t.Run(percent+"Percent", func(t *testing.T) {
+			info := newTestResponsesWSRelayInfo(t)
+			session := &responsesWSSession{}
+			session.current = &responsesWSCallState{info: info}
 
-	_, forward, keepReading := session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown."}`))
+			notice := fmt.Sprintf("Heads up, you have less than %s%% of your weekly limit left. Run /status for a breakdown.", percent)
+			message, err := common.Marshal(map[string]string{
+				"type":  "response.output_text.delta",
+				"delta": notice,
+			})
+			if err != nil {
+				t.Fatalf("marshal notice: %v", err)
+			}
 
-	if forward {
-		t.Fatal("weekly limit notice delta should not be forwarded to websocket client")
-	}
-	if !keepReading {
-		t.Fatal("weekly limit notice should be filtered without closing upstream reader")
-	}
-	if !info.HasSendResponse() {
-		t.Fatal("filtered weekly limit notice is still the first upstream websocket event and should mark FRT")
-	}
+			_, forward, keepReading := session.observeUpstreamMessage(message)
 
-	firstResponseTime := info.FirstResponseTime
-	_, forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
-	if !forward || !keepReading {
-		t.Fatalf("normal output should be forwarded and keep reading, got forward=%v keepReading=%v", forward, keepReading)
-	}
-	if !info.FirstResponseTime.Equal(firstResponseTime) {
-		t.Fatalf("normal output after filtered notice should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
+			if forward {
+				t.Fatal("weekly limit notice delta should not be forwarded to websocket client")
+			}
+			if !keepReading {
+				t.Fatal("weekly limit notice should be filtered without closing upstream reader")
+			}
+			if !info.HasSendResponse() {
+				t.Fatal("filtered weekly limit notice is still the first upstream websocket event and should mark FRT")
+			}
+
+			firstResponseTime := info.FirstResponseTime
+			_, forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
+			if !forward || !keepReading {
+				t.Fatalf("normal output should be forwarded and keep reading, got forward=%v keepReading=%v", forward, keepReading)
+			}
+			if !info.FirstResponseTime.Equal(firstResponseTime) {
+				t.Fatalf("normal output after filtered notice should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
+			}
+		})
 	}
 }
 
@@ -654,7 +668,7 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNoticeItemDone(t *testing.T) {
 			"id":"msg_1",
 			"status":"completed",
 			"role":"assistant",
-			"content":[{"type":"output_text","text":"Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.","annotations":[]}]
+			"content":[{"type":"output_text","text":"Heads up, you have less than 5% of your weekly limit left. Run /status for a breakdown.","annotations":[]}]
 		}
 	}`))
 

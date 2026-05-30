@@ -754,7 +754,8 @@ func isResponsesWSUpstreamNoticeText(text string) bool {
 	}
 	return strings.Contains(normalized, "heads up") &&
 		strings.Contains(normalized, "weekly limit") &&
-		strings.Contains(normalized, "less than 25%") &&
+		strings.Contains(normalized, "less than ") &&
+		strings.Contains(normalized, "%") &&
 		strings.Contains(normalized, "run /status")
 }
 
