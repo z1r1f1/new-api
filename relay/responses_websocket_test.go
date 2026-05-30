@@ -613,6 +613,59 @@ func TestObserveUpstreamMessageMarksFunctionArgumentsAsFirstResponse(t *testing.
 	}
 }
 
+func TestObserveUpstreamMessageFiltersWeeklyLimitNotice(t *testing.T) {
+	info := newTestResponsesWSRelayInfo(t)
+	session := &responsesWSSession{}
+	session.current = &responsesWSCallState{info: info}
+
+	forward, keepReading := session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown."}`))
+
+	if forward {
+		t.Fatal("weekly limit notice delta should not be forwarded to websocket client")
+	}
+	if !keepReading {
+		t.Fatal("weekly limit notice should be filtered without closing upstream reader")
+	}
+	if info.HasSendResponse() {
+		t.Fatal("filtered weekly limit notice should not mark first response time")
+	}
+
+	forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
+	if !forward || !keepReading {
+		t.Fatalf("normal output should be forwarded and keep reading, got forward=%v keepReading=%v", forward, keepReading)
+	}
+	if !info.HasSendResponse() {
+		t.Fatal("normal output after filtered notice should mark first response time")
+	}
+}
+
+func TestObserveUpstreamMessageFiltersWeeklyLimitNoticeItemDone(t *testing.T) {
+	info := newTestResponsesWSRelayInfo(t)
+	session := &responsesWSSession{}
+	session.current = &responsesWSCallState{info: info}
+
+	forward, keepReading := session.observeUpstreamMessage([]byte(`{
+		"type":"response.output_item.done",
+		"item":{
+			"type":"message",
+			"id":"msg_1",
+			"status":"completed",
+			"role":"assistant",
+			"content":[{"type":"output_text","text":"Heads up, you have less than 25% of your weekly limit left. Run /status for a breakdown.","annotations":[]}]
+		}
+	}`))
+
+	if forward {
+		t.Fatal("weekly limit notice item.done should not be forwarded to websocket client")
+	}
+	if !keepReading {
+		t.Fatal("weekly limit notice item.done should be filtered without closing upstream reader")
+	}
+	if info.HasSendResponse() {
+		t.Fatal("filtered weekly limit notice item.done should not mark first response time")
+	}
+}
+
 func newTestResponsesWSRelayInfo(t *testing.T) *relaycommon.RelayInfo {
 	t.Helper()
 	gin.SetMode(gin.TestMode)

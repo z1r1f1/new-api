@@ -68,6 +68,15 @@ func TestCalculateTextQuotaSummaryUnifiedForClaudeSemantic(t *testing.T) {
 	require.Equal(t, 1488, chatSummary.Quota)
 }
 
+func TestConsumeLogUseTimeSecondsRoundsUpMilliseconds(t *testing.T) {
+	start := time.Date(2026, time.May, 30, 8, 32, 22, 657_000_000, time.UTC)
+
+	require.Equal(t, int64(0), consumeLogUseTimeSeconds(start, start))
+	require.Equal(t, int64(1), consumeLogUseTimeSeconds(start, start.Add(time.Millisecond)))
+	require.Equal(t, int64(16), consumeLogUseTimeSeconds(start, start.Add(16*time.Second)))
+	require.Equal(t, int64(17), consumeLogUseTimeSeconds(start, start.Add(16*time.Second+604*time.Millisecond)))
+}
+
 func TestCalculateTextQuotaSummaryUsesSplitClaudeCacheCreationRatios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()

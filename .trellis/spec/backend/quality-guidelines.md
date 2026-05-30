@@ -166,6 +166,9 @@ When adding or modifying a channel:
   events or early assistant text are relay errors, not successful assistant
   content. This includes usage-limit/rate-limit text and
   `status_code=429, Previous response with id ... not found`.
+- Upstream Responses WebSocket account/status notices such as weekly-limit
+  warning banners are transport noise for API clients. Filter them before
+  forwarding and do not let them mark first-response time.
 - `previous_response_id` is bound to one upstream account/conversation. A
   fallback-channel retry may drop it only when the proxy can replay the missing
   state locally, for example by prepending a previously observed
@@ -185,6 +188,9 @@ When adding or modifying a channel:
 - First `response.output_text.delta`, non-empty
   `response.function_call_arguments.delta`, meaningful `response.output_item.done`,
   terminal completion, or terminal error -> update `frt` once.
+- Weekly-limit warning text such as `Heads up, you have less than 25% of your
+  weekly limit left. Run /status for a breakdown.` -> do not forward and do not
+  update `frt`.
 - Text delta beginning with `status_code=429` plus usage-limit/rate-limit or
   previous-response-not-found details -> convert to `types.NewAPIError` with
   status `429`, process channel error, and retry when retry policy permits.
@@ -201,6 +207,8 @@ When adding or modifying a channel:
 - Good: upstream sends `response.created` at 200 ms and first
   `response.output_text.delta` at 5 s; request logs record FRT around 5 s, not
   0.2 s.
+- Good: upstream sends only a weekly-limit warning banner before real output;
+  the banner is suppressed, and the first real output controls FRT.
 - Good: upstream emits text `status_code=429, Previous response with id ... not found`; relay records a 429-style channel error. If the request is stateless, normal retry policy may try another channel. If it carries `function_call_output + previous_response_id` and the prior function call was observed in this WebSocket session, relay prepends the stored `function_call`, removes `previous_response_id`, and retries as a stateless input.
 - Base: `POST /v1/responses` continues through the normal HTTP `ResponsesHelper` path with no WebSocket conversion.
 - Base: normal assistant text that merely mentions `HTTP 429` is not treated as
@@ -218,6 +226,8 @@ When adding or modifying a channel:
 - `relay`: normalize wrapper and flat `response.create` frames, remove transport fields, build error events with status.
 - `relay`: protocol-only upstream frames must not mark FRT; output text/function
   arguments/terminal events should mark FRT.
+- `relay`: weekly-limit warning deltas/items should be suppressed without
+  closing the upstream reader or marking FRT.
 - `relay`: textual 429 usage-limit / previous-response-not-found errors become
   429 relay errors; retry is allowed for stateless requests and for stateful
   tool-output continuations only when the proxy can replay the matching stored

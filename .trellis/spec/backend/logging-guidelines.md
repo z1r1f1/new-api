@@ -104,6 +104,13 @@ Use persistent logs for user-visible audit/history data, billing/consume records
 
 `LOG_DB` may be separate from `DB`, so log schema changes belong in `migrateLOGDB` or both migration paths as appropriate.
 
+Consume-log timing fields use mixed precision:
+
+- `Log.UseTime` / `use_time_seconds` is stored as whole seconds for legacy UI and statistics.
+- `other.frt` is stored as first-response latency in milliseconds.
+
+When deriving `use_time_seconds` from `RelayInfo.StartTime`, round any positive millisecond remainder up to the next second. Do not use `end.Unix() - start.Unix()` for consume-log timing, because it floors total duration while `frt` keeps millisecond precision and can make the displayed first-response time appear greater than the total request time.
+
 ---
 
 ## What to Log

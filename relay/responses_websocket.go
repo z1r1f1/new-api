@@ -657,6 +657,9 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 		return s.handleTerminalUpstreamError(state, apiErr)
 	case "response.output_text.delta":
 		if streamResponse.Delta != "" {
+			if isResponsesWSUpstreamNoticeText(streamResponse.Delta) {
+				return false, true
+			}
 			state.info.SetFirstResponseTime()
 			state.outputText.WriteString(streamResponse.Delta)
 		}
@@ -664,6 +667,9 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 			return s.handleTerminalUpstreamError(state, apiErr)
 		}
 	case dto.ResponsesOutputTypeItemDone:
+		if responsesWSOutputItemIsUpstreamNotice(streamResponse.Item) {
+			return false, true
+		}
 		if responsesWSOutputItemMarksFirstResponse(streamResponse.Item) {
 			state.info.SetFirstResponseTime()
 		}
@@ -701,6 +707,29 @@ func responsesWSOutputItemMarksFirstResponse(item *dto.ResponsesOutput) bool {
 		}
 	}
 	return false
+}
+
+func responsesWSOutputItemIsUpstreamNotice(item *dto.ResponsesOutput) bool {
+	if item == nil || item.Type != "message" {
+		return false
+	}
+	for _, content := range item.Content {
+		if isResponsesWSUpstreamNoticeText(content.Text) {
+			return true
+		}
+	}
+	return false
+}
+
+func isResponsesWSUpstreamNoticeText(text string) bool {
+	normalized := strings.ToLower(strings.Join(strings.Fields(strings.TrimSpace(text)), " "))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "heads up") &&
+		strings.Contains(normalized, "weekly limit") &&
+		strings.Contains(normalized, "less than 25%") &&
+		strings.Contains(normalized, "run /status")
 }
 
 func (s *responsesWSSession) handleTerminalUpstreamError(state *responsesWSCallState, apiErr *types.NewAPIError) (bool, bool) {
