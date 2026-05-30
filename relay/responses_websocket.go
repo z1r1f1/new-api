@@ -712,6 +712,9 @@ func (s *responsesWSSession) canRetryTerminalUpstreamError(state *responsesWSCal
 	if state.create.Request.Model == "" {
 		return false
 	}
+	if isRetryableResponsesWSUpstreamStateError(apiErr) && responsesWSCreateHasPreviousResponseID(state.create) {
+		return false
+	}
 	if state.outputText.Len() == 0 {
 		return true
 	}
@@ -818,10 +821,29 @@ func prepareResponsesWSRetryCreate(create responsesWSCreateRequest, apiErr *type
 }
 
 func shouldDropResponsesWSPreviousResponseIDForRetry(create responsesWSCreateRequest, apiErr *types.NewAPIError) bool {
-	if strings.TrimSpace(create.Request.PreviousResponseID) == "" {
+	return false
+}
+
+func responsesWSCreateHasPreviousResponseID(create responsesWSCreateRequest) bool {
+	if strings.TrimSpace(create.Request.PreviousResponseID) != "" {
+		return true
+	}
+	if len(create.Raw) == 0 {
 		return false
 	}
-	return isRetryableResponsesWSUpstreamStateError(apiErr)
+	var raw map[string]json.RawMessage
+	if common.Unmarshal(create.Raw, &raw) != nil {
+		return false
+	}
+	previousRaw, ok := raw["previous_response_id"]
+	if !ok {
+		return false
+	}
+	var previousID string
+	if common.Unmarshal(previousRaw, &previousID) == nil {
+		return strings.TrimSpace(previousID) != ""
+	}
+	return strings.TrimSpace(string(previousRaw)) != "" && string(previousRaw) != "null"
 }
 
 func extractResponsesWSUpstreamOpenAIError(streamResp dto.ResponsesStreamResponse, message []byte) (*types.OpenAIError, bool) {

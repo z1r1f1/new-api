@@ -14,6 +14,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/types"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 )
 
@@ -263,7 +264,7 @@ func TestResponsesWSTextualErrorDoesNotTreatPlain429MentionAsFailure(t *testing.
 	}
 }
 
-func TestPrepareResponsesWSRetryCreateDropsPreviousResponseIDForStateError(t *testing.T) {
+func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForStateError(t *testing.T) {
 	create := responsesWSCreateRequest{
 		Request: dto.OpenAIResponsesRequest{
 			Model:              "gpt-5.5",
@@ -275,18 +276,11 @@ func TestPrepareResponsesWSRetryCreateDropsPreviousResponseIDForStateError(t *te
 
 	got := prepareResponsesWSRetryCreate(create, apiErr)
 
-	if got.Request.PreviousResponseID != "" {
-		t.Fatalf("PreviousResponseID = %q, want empty", got.Request.PreviousResponseID)
+	if got.Request.PreviousResponseID != "resp_123" {
+		t.Fatalf("PreviousResponseID = %q, want resp_123", got.Request.PreviousResponseID)
 	}
-	var raw map[string]any
-	if err := common.Unmarshal(got.Raw, &raw); err != nil {
-		t.Fatalf("unmarshal raw: %v", err)
-	}
-	if _, ok := raw["previous_response_id"]; ok {
-		t.Fatalf("previous_response_id should be removed from raw retry payload: %s", got.Raw)
-	}
-	if raw["model"] != "gpt-5.5" || raw["input"] != "hi" {
-		t.Fatalf("retry payload should preserve other fields: %s", got.Raw)
+	if !strings.Contains(string(got.Raw), "previous_response_id") {
+		t.Fatalf("previous_response_id should remain because it is upstream state, got: %s", got.Raw)
 	}
 }
 
@@ -307,6 +301,43 @@ func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForNonStateError(t 
 	}
 	if !strings.Contains(string(got.Raw), "previous_response_id") {
 		t.Fatalf("previous_response_id should remain in raw retry payload: %s", got.Raw)
+	}
+}
+
+func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForFunctionCallOutput(t *testing.T) {
+	create := responsesWSCreateRequest{
+		Request: dto.OpenAIResponsesRequest{
+			Model:              "gpt-5.5",
+			PreviousResponseID: "resp_123",
+			Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
+		},
+		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`),
+	}
+	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
+
+	got := prepareResponsesWSRetryCreate(create, apiErr)
+
+	if got.Request.PreviousResponseID != "resp_123" {
+		t.Fatalf("function_call_output retries must keep PreviousResponseID, got %q", got.Request.PreviousResponseID)
+	}
+	if !strings.Contains(string(got.Raw), "previous_response_id") {
+		t.Fatalf("previous_response_id should remain when input depends on a tool call: %s", got.Raw)
+	}
+}
+
+func TestResponsesWSCanRetryStateErrorRejectsPreviousResponseContinuation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	session := &responsesWSSession{c: ctx, client: &websocket.Conn{}}
+	state := &responsesWSCallState{create: responsesWSCreateRequest{Request: dto.OpenAIResponsesRequest{
+		Model:              "gpt-5.5",
+		PreviousResponseID: "resp_123",
+		Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
+	}}}
+	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
+
+	if session.canRetryTerminalUpstreamError(state, apiErr) {
+		t.Fatal("previous_response_id continuations depend on prior upstream state and must not retry on a fallback channel")
 	}
 }
 
