@@ -55,6 +55,7 @@ import {
   buildPlaygroundPreviewPayload,
   clearPlaygroundData,
   createLoadingAssistantMessage,
+  markActivePlaygroundChatMessage,
   createPlaygroundSession,
   createUserMessage,
   exportPlaygroundData,
@@ -238,6 +239,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
       const userMessage = createUserMessage(text)
       const assistantMessage = createLoadingAssistantMessage()
       const newMessages = [...messages, userMessage, assistantMessage]
+      markActivePlaygroundChatMessage(assistantMessage.key, storageUserId)
       updateMessages(newMessages)
       sendChat(newMessages, customResult.payload)
       return
@@ -247,6 +249,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     const assistantMessage = createLoadingAssistantMessage()
 
     const newMessages = [...messages, userMessage, assistantMessage]
+    markActivePlaygroundChatMessage(assistantMessage.key, storageUserId)
     updateMessages(newMessages)
 
     // Send chat request
@@ -263,6 +266,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     const loadingMessage = createLoadingAssistantMessage()
     const newMessages = [...messagesUpToHere, loadingMessage]
 
+    markActivePlaygroundChatMessage(loadingMessage.key, storageUserId)
     updateMessages(newMessages)
     sendChat(newMessages)
   }
@@ -295,14 +299,16 @@ function PlaygroundContent(props: PlaygroundContentProps) {
         return
       }
 
+      const loadingMsg = createLoadingAssistantMessage()
       const toSubmit = [
         ...updated.slice(0, index + 1),
-        createLoadingAssistantMessage(),
+        loadingMsg,
       ]
+      markActivePlaygroundChatMessage(loadingMsg.key, storageUserId)
       updateMessages(toSubmit)
       sendChat(toSubmit)
     },
-    [editingMessageKey, messages, updateMessages, sendChat]
+    [editingMessageKey, messages, updateMessages, sendChat, storageUserId]
   )
 
   const handleDeleteMessage = (message: MessageType) => {
