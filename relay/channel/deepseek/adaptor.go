@@ -159,8 +159,7 @@ func (a *Adaptor) ConvertEmbeddingRequest(c *gin.Context, info *relaycommon.Rela
 }
 
 func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error) {
-	// TODO implement me
-	return nil, errors.New("not implemented")
+	return convertDeepSeekResponsesRequest(c, info, request)
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
@@ -173,6 +172,12 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 		adaptor := claude.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)
 	default:
+		if isDeepSeekResponsesRelay(info) {
+			if info.IsStream {
+				return handleDeepSeekResponsesStream(c, info, resp)
+			}
+			return handleDeepSeekResponsesBlocking(c, info, resp)
+		}
 		adaptor := openai.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)
 	}
