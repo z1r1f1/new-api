@@ -33,7 +33,6 @@ import { cn } from '@/lib/utils'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import {
   Sheet,
   SheetContent,
@@ -116,7 +115,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     replaceConfig,
     replaceParameterEnabled,
     resetDebugData,
-    switchSession,
     createSession,
     renameSession,
     deleteSession,
@@ -409,19 +407,8 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     <div className='border-border bg-background/95 flex shrink-0 flex-col gap-2 border-b px-3 py-2 sm:flex-row sm:items-center'>
       <div className='flex min-w-0 flex-1 items-center gap-2'>
         <MessageSquare className='text-muted-foreground size-4 shrink-0' />
-        <NativeSelect
-          className='min-w-0 flex-1 sm:max-w-72'
-          value={activeSessionId}
-          onChange={(event) => switchSession(event.target.value)}
-        >
-          {sessions.map((session) => (
-            <NativeSelectOption key={session.id} value={session.id}>
-              {session.title || t('New session')}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
         <Input
-          className='hidden min-w-0 flex-1 sm:block'
+          className='min-w-0 flex-1'
           value={currentSessionTitleDraft}
           placeholder={t('Session name')}
           onChange={(event) =>
@@ -440,11 +427,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
         />
       </div>
       <div className='flex items-center gap-2'>
-        <span className='text-muted-foreground hidden text-xs lg:inline'>
-          {t('{{count}} messages in this session.', {
-            count: messages.length,
-          })}
-        </span>
         <Button
           type='button'
           variant='outline'
@@ -477,18 +459,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
           <Trash2 className='size-4' />
         </Button>
       </div>
-      <Input
-        className='sm:hidden'
-        value={currentSessionTitleDraft}
-        placeholder={t('Session name')}
-        onChange={(event) =>
-          setSessionTitleDraft({
-            sessionId: activeSessionId,
-            title: event.target.value,
-          })
-        }
-        onBlur={commitSessionRename}
-      />
     </div>
   )
 

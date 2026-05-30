@@ -290,6 +290,10 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   session/message by stable ids, not the currently visible session. Persist the
   update through `updateStoredSessionMessages` so a route change or remount does
   not strand the assistant message in `loading`/`streaming`.
+- Streaming playground chat must keep its SSE source in module-level state rather
+  than hook-instance state. Route changes unmount the playground component; if
+  the SSE object is only held by the unmounted hook, the browser can close the
+  request and the backend records `client_gone` / `context canceled`.
 - Legacy/orphan wait messages that still display `Task ID:` / `任务 ID：` may be
   used to recreate the pending task marker and run one recovery poll.
 - Terminal task handling must update the assistant message to `complete` or
@@ -314,6 +318,9 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   -> remove the stale pending task.
 - Streaming/non-streaming chat completes after navigating away -> saved session
   messages must still receive the final assistant content or error.
+- SPA route changes while a streaming playground request is active -> the client
+  connection should remain open; the server must not see `client_gone` merely
+  because the playground component unmounted.
 - Poll returns `succeeded`/`success`/`completed` -> render image markdown and
   mark the message complete.
 - Poll returns failure status -> render the provider/task failure message and
@@ -332,6 +339,9 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
 - Good: a text chat request started in the playground keeps writing to the
   original session after route changes; returning to the playground shows the
   latest streamed/final content instead of an abandoned loading message.
+- Good: the sidebar/session header displays the current playground session title
+  directly; do not reintroduce the default-playground session dropdown unless a
+  separate session-browser UX is intentionally designed.
 - Base: synchronous image-generation responses without a task id still render
   directly from the response payload.
 - Bad: deleting the pending task before the message update is committed; a route

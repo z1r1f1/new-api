@@ -16,23 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { SSE } from 'sse.js'
 import { getCommonHeaders } from '@/lib/api'
+import { getPlaygroundDebugHeaders, getPlaygroundUpstreamRequest } from '../api'
 import { API_ENDPOINTS, ERROR_MESSAGES } from '../constants'
-import {
-  getPlaygroundDebugHeaders,
-  getPlaygroundUpstreamRequest,
-} from '../api'
 import type { ChatCompletionChunk, PlaygroundRequestPayload } from '../types'
+
+let activePlaygroundSseSource: SSE | null = null
 
 /**
  * Hook for handling streaming chat completion requests
  */
 export function useStreamRequest() {
-  const sseSourceRef = useRef<SSE | null>(null)
-  const isStreamCompleteRef = useRef(false)
-
   const sendStreamRequest = useCallback(
     (
       payload: PlaygroundRequestPayload,
@@ -52,16 +48,19 @@ export function useStreamRequest() {
         payload: JSON.stringify(payload),
       })
 
-      sseSourceRef.current = source
-      isStreamCompleteRef.current = false
+      activePlaygroundSseSource?.close()
+      activePlaygroundSseSource = source
+      let isStreamComplete = false
 
       const closeSource = () => {
         source.close()
-        sseSourceRef.current = null
+        if (activePlaygroundSseSource === source) {
+          activePlaygroundSseSource = null
+        }
       }
 
       const handleError = (errorMessage: string, errorCode?: string) => {
-        if (!isStreamCompleteRef.current) {
+        if (activePlaygroundSseSource === source && !isStreamComplete) {
           onError(errorMessage, errorCode)
           closeSource()
         }
@@ -87,7 +86,7 @@ export function useStreamRequest() {
         void captureUpstreamRequest()
         onRawMessage?.(e.data)
         if (e.data === '[DONE]') {
-          isStreamCompleteRef.current = true
+          isStreamComplete = true
           closeSource()
           onComplete()
           return
@@ -160,26 +159,26 @@ export function useStreamRequest() {
         // eslint-disable-next-line no-console
         console.error('Failed to start SSE stream:', error)
         onError(ERROR_MESSAGES.STREAM_START_ERROR)
-        sseSourceRef.current = null
+        if (activePlaygroundSseSource === source) {
+          activePlaygroundSseSource = null
+        }
       }
     },
     []
   )
 
   const stopStream = useCallback(() => {
-    if (sseSourceRef.current) {
-      sseSourceRef.current.close()
-      sseSourceRef.current = null
+    if (activePlaygroundSseSource) {
+      activePlaygroundSseSource.close()
+      activePlaygroundSseSource = null
     }
   }, [])
 
-  // eslint-disable-next-line react-hooks/refs
-  const isStreaming = sseSourceRef.current !== null
+  const isStreaming = activePlaygroundSseSource !== null
 
   return {
     sendStreamRequest,
     stopStream,
-    // eslint-disable-next-line react-hooks/refs
     isStreaming,
   }
 }
