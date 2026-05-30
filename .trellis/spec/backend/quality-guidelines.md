@@ -292,9 +292,13 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   not strand the assistant message in `loading`/`streaming`.
 - Streaming playground chat must register the originating assistant message as
   an active chat message before opening the SSE request and clear that marker on
-  completion, error, or explicit stop. Session reload/sanitization may convert
-  stale `loading`/`streaming` messages to an interrupted error only when no
-  active chat marker or pending image task protects that message.
+  completion, error, or explicit stop. On normal completion or stop, keep the
+  marker until after the terminal message update has been committed; otherwise
+  the reload that precedes `updateStoredSessionMessages` can sanitize the
+  message to an interrupted error before the terminal updater runs. Session
+  reload/sanitization may convert stale `loading`/`streaming` messages to an
+  interrupted error only when no active chat marker or pending image task
+  protects that message.
 - Streaming playground chat must keep its SSE source in module-level state rather
   than hook-instance state. Route changes unmount the playground component; if
   the SSE object is only held by the unmounted hook, the browser can close the

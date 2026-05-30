@@ -385,7 +385,6 @@ export function useChatHandler({
   const handleStreamComplete = useCallback(() => {
     const task = currentChatTaskRef.current
     if (!task) return
-    clearActivePlaygroundChatMessage(task.messageKey, storageUserId)
     commitSessionMessageUpdate(task.sessionId, (prev) =>
       updateAssistantMessageByKey(prev, task.messageKey, (message) =>
         message.status === MESSAGE_STATUS.COMPLETE ||
@@ -394,6 +393,7 @@ export function useChatHandler({
           : { ...finalizeMessage(message), status: MESSAGE_STATUS.COMPLETE }
       )
     )
+    clearActivePlaygroundChatMessage(task.messageKey, storageUserId)
     currentChatTaskRef.current = null
   }, [commitSessionMessageUpdate, storageUserId])
 
@@ -1069,9 +1069,6 @@ export function useChatHandler({
     stopStream()
     const chatTask = currentChatTaskRef.current
     currentChatTaskRef.current = null
-    if (chatTask?.messageKey) {
-      clearActivePlaygroundChatMessage(chatTask.messageKey, storageUserId)
-    }
     onDebugUpdate((prev) => ({
       ...prev,
       response:
@@ -1094,6 +1091,7 @@ export function useChatHandler({
           updateStoppedMessage
         )
       )
+      clearActivePlaygroundChatMessage(chatTask.messageKey, storageUserId)
       return
     }
 

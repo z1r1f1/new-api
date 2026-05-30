@@ -224,6 +224,30 @@ describe('playground storage user scope', () => {
 
     assert.equal(result.messages?.[0]?.status, 'streaming')
     assert.equal(result.messages?.[0]?.versions[0]?.content, 'streamed text')
+
+    const completed = updateStoredSessionMessages(
+      'active-session',
+      (messages) =>
+        messages.map((item) =>
+          item.key === 'active-chat-message'
+            ? {
+                ...item,
+                status: 'complete',
+              }
+            : item
+        ),
+      1
+    )
+
+    clearActivePlaygroundChatMessage('active-chat-message', 1)
+    const finalReload = loadSessionState(1)
+
+    assert.equal(completed.messages?.[0]?.status, 'complete')
+    assert.equal(finalReload.sessions[0].messages[0].status, 'complete')
+    assert.equal(
+      finalReload.sessions[0].messages[0].versions[0].content,
+      'streamed text'
+    )
   })
 
   test('sanitizes stale streaming chat messages without an active stream marker', () => {
