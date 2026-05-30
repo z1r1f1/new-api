@@ -93,6 +93,102 @@ func TestConvertOpenAIResponsesRequestToDeepSeekChat(t *testing.T) {
 	}
 }
 
+func TestDeepSeekResponsesToolChoiceToChatCompatibility(t *testing.T) {
+	tests := []struct {
+		name     string
+		raw      []byte
+		want     any
+		wantName string
+	}{
+		{
+			name: "allows chat string",
+			raw:  []byte(`"required"`),
+			want: "required",
+		},
+		{
+			name: "degrades unsupported string",
+			raw:  []byte(`"hosted_tool"`),
+			want: "auto",
+		},
+		{
+			name: "degrades unsupported responses tool object",
+			raw:  []byte(`{"type":"web_search_preview"}`),
+			want: "auto",
+		},
+		{
+			name:     "converts responses function choice",
+			raw:      []byte(`{"type":"function","name":"read_file"}`),
+			wantName: "read_file",
+		},
+		{
+			name:     "converts namespaced responses function choice",
+			raw:      []byte(`{"type":"function","namespace":"mcp__fs__","name":"list"}`),
+			wantName: "mcp__fs__list",
+		},
+		{
+			name:     "normalizes chat function choice",
+			raw:      []byte(`{"type":"function","function":{"name":"read_file","arguments":"{}"}}`),
+			wantName: "read_file",
+		},
+		{
+			name: "degrades malformed json",
+			raw:  []byte(`{"type":"function"`),
+			want: "auto",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := deepSeekResponsesToolChoiceToChat(tt.raw)
+			if tt.wantName == "" {
+				if got != tt.want {
+					t.Fatalf("tool_choice = %#v, want %#v", got, tt.want)
+				}
+				return
+			}
+			choice, ok := got.(map[string]any)
+			if !ok {
+				t.Fatalf("tool_choice = %#v, want chat function object", got)
+			}
+			if choice["type"] != "function" {
+				t.Fatalf("tool_choice type = %#v, want function", choice["type"])
+			}
+			function, ok := choice["function"].(map[string]any)
+			if !ok {
+				t.Fatalf("tool_choice function = %#v, want object", choice["function"])
+			}
+			if function["name"] != tt.wantName {
+				t.Fatalf("tool_choice function.name = %#v, want %q", function["name"], tt.wantName)
+			}
+			if _, exists := function["arguments"]; exists {
+				t.Fatalf("tool_choice function should only carry a name for DeepSeek chat compatibility, got %#v", function)
+			}
+		})
+	}
+}
+
+func TestConvertOpenAIResponsesRequestDegradesUnsupportedToolChoice(t *testing.T) {
+	resetDeepSeekResponsesSessionsForTest()
+	c, _ := newDeepSeekResponsesTestContext()
+	stream := true
+	info := newDeepSeekResponsesRelayInfo(stream)
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{
+		Model:      "deepseek-chat",
+		Input:      []byte(`"hello"`),
+		Stream:     &stream,
+		ToolChoice: []byte(`{"type":"web_search_preview"}`),
+		Tools:      []byte(`[{"type":"function","name":"read_file","parameters":{"type":"object"}}]`),
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+	chatReq := converted.(*dto.GeneralOpenAIRequest)
+	if chatReq.ToolChoice != "auto" {
+		t.Fatalf("unsupported Responses tool_choice should degrade to auto, got %#v", chatReq.ToolChoice)
+	}
+}
+
 func TestDeepSeekResponsesBlockingConvertsChatResponseAndSavesHistory(t *testing.T) {
 	resetDeepSeekResponsesSessionsForTest()
 	c, recorder := newDeepSeekResponsesTestContext()

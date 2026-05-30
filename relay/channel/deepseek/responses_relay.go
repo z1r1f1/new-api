@@ -331,17 +331,43 @@ func toolCallRequestFromMap(tool map[string]any) dto.ToolCallRequest {
 }
 
 func deepSeekResponsesToolChoiceToChat(raw []byte) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	if common.GetJsonType(raw) == "string" {
+		var choice string
+		if err := common.Unmarshal(raw, &choice); err != nil {
+			return "auto"
+		}
+		switch choice {
+		case "none", "auto", "required":
+			return choice
+		default:
+			return "auto"
+		}
+	}
+
 	var choice map[string]any
 	if err := common.Unmarshal(raw, &choice); err != nil {
-		return raw
+		return "auto"
 	}
 	if common.Interface2String(choice["type"]) != "function" {
-		return choice
+		return "auto"
 	}
+
+	if nested, ok := choice["function"].(map[string]any); ok {
+		name := common.Interface2String(nested["name"])
+		if strings.TrimSpace(name) == "" {
+			return "auto"
+		}
+		return map[string]any{"type": "function", "function": map[string]any{"name": name}}
+	}
+
 	name := common.Interface2String(choice["name"])
-	if name == "" {
-		return choice
+	if strings.TrimSpace(name) == "" {
+		return "auto"
 	}
+	name = common.Interface2String(choice["namespace"]) + name
 	return map[string]any{"type": "function", "function": map[string]any{"name": name}}
 }
 
