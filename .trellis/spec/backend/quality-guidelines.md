@@ -157,18 +157,22 @@ When adding or modifying a channel:
 - Before forwarding upstream, normalize the payload to an upstream `response.create` event and remove transport-only fields such as `event_id`, `stream`, `stream_options`, and `background`.
 - Preserve provider adapter conversion, model mapping, disabled-field removal, parameter override, affinity debug, quota pre-consume, and final usage settlement.
 - Model request rate limiting for WebSocket must be checked per `response.create`; the handshake itself must not consume the model request quota.
-- First-response timing for Responses WebSocket must not be set by protocol-only
+- First-response timing for Responses WebSocket is `frt`, a first-byte/first
+  upstream-frame latency metric. Set it when the first upstream WebSocket
+  message arrives for the in-flight `response.create`, including protocol-only
   lifecycle frames such as `response.created`, `response.in_progress`, or empty
-  item skeletons. Set it when the first meaningful upstream output arrives:
-  output text delta, function-call arguments delta, meaningful output item done,
-  terminal completion, or terminal error.
+  item skeletons. Do not delay `frt` until semantic assistant output such as
+  `response.output_text.delta` or `response.function_call_arguments.delta`;
+  that makes WebSocket logs incomparable with HTTP/SSE first-byte timing.
 - Upstream Responses WebSocket state errors that arrive as either terminal
   events or early assistant text are relay errors, not successful assistant
   content. This includes usage-limit/rate-limit text and
   `status_code=429, Previous response with id ... not found`.
 - Upstream Responses WebSocket account/status notices such as weekly-limit
   warning banners are transport noise for API clients. Filter them before
-  forwarding and do not let them mark first-response time.
+  forwarding. They may still mark `frt` if they are the first upstream frame,
+  because `frt` is a transport first-byte metric rather than a semantic-output
+  metric.
 - `previous_response_id` is bound to one upstream account/conversation. A
   fallback-channel retry may drop it only when the proxy can replay the missing
   state locally, for example by prepending a previously observed
@@ -184,13 +188,15 @@ When adding or modifying a channel:
 - Missing `model` in `response.create` -> send WebSocket `error` event with status `400`.
 - New `response.create` while another response is in progress -> send/return conflict status `409`.
 - Unsupported channel type for Responses WebSocket -> fail the selected channel attempt and retry according to normal relay retry policy.
-- Protocol-only upstream frames before model output -> do not update `frt`.
-- First `response.output_text.delta`, non-empty
+- First upstream WebSocket frame for the in-flight response -> update `frt`
+  once, even if it is a protocol-only frame before model output.
+- Later `response.output_text.delta`, non-empty
   `response.function_call_arguments.delta`, meaningful `response.output_item.done`,
-  terminal completion, or terminal error -> update `frt` once.
+  terminal completion, or terminal error -> must not change `frt` after the
+  first upstream frame has already set it.
 - Weekly-limit warning text such as `Heads up, you have less than 25% of your
-  weekly limit left. Run /status for a breakdown.` -> do not forward and do not
-  update `frt`.
+  weekly limit left. Run /status for a breakdown.` -> do not forward. It may
+  update `frt` if it is the first upstream frame.
 - Text delta beginning with `status_code=429` plus usage-limit/rate-limit or
   previous-response-not-found details -> convert to `types.NewAPIError` with
   status `429`, process channel error, and retry when retry policy permits.
@@ -205,10 +211,11 @@ When adding or modifying a channel:
 
 - Good: `GET /v1/responses` WebSocket, first frame `{"type":"response.create","response":{"model":"gpt-5.5","input":"hi"}}`, then upstream receives a normalized `response.create` frame.
 - Good: upstream sends `response.created` at 200 ms and first
-  `response.output_text.delta` at 5 s; request logs record FRT around 5 s, not
-  0.2 s.
+  `response.output_text.delta` at 5 s; request logs record FRT around 0.2 s,
+  matching first-byte HTTP/SSE timing, not semantic output latency.
 - Good: upstream sends only a weekly-limit warning banner before real output;
-  the banner is suppressed, and the first real output controls FRT.
+  the banner is suppressed for the client, and the banner arrival may control
+  FRT because it was the first upstream frame.
 - Good: upstream emits text `status_code=429, Previous response with id ... not found`; relay records a 429-style channel error. If the request is stateless, normal retry policy may try another channel. If it carries `function_call_output + previous_response_id` and the prior function call was observed in this WebSocket session, relay prepends the stored `function_call`, removes `previous_response_id`, and retries as a stateless input.
 - Base: `POST /v1/responses` continues through the normal HTTP `ResponsesHelper` path with no WebSocket conversion.
 - Base: normal assistant text that merely mentions `HTTP 429` is not treated as
@@ -224,10 +231,11 @@ When adding or modifying a channel:
 #### 6. Tests Required
 
 - `relay`: normalize wrapper and flat `response.create` frames, remove transport fields, build error events with status.
-- `relay`: protocol-only upstream frames must not mark FRT; output text/function
-  arguments/terminal events should mark FRT.
+- `relay`: first upstream WebSocket frame should mark FRT; later output
+  text/function arguments/terminal events must not change it.
 - `relay`: weekly-limit warning deltas/items should be suppressed without
-  closing the upstream reader or marking FRT.
+  closing the upstream reader; if they are the first upstream frame, they may
+  mark FRT.
 - `relay`: textual 429 usage-limit / previous-response-not-found errors become
   429 relay errors; retry is allowed for stateless requests and for stateful
   tool-output continuations only when the proxy can replay the matching stored

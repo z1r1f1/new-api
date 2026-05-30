@@ -573,7 +573,7 @@ func TestObserveUpstreamFailedReleasesCurrent(t *testing.T) {
 	}
 }
 
-func TestObserveUpstreamMessageDoesNotMarkProtocolEventAsFirstResponse(t *testing.T) {
+func TestObserveUpstreamMessageMarksFirstUpstreamEventAsFirstResponse(t *testing.T) {
 	info := newTestResponsesWSRelayInfo(t)
 	session := &responsesWSSession{}
 	session.current = &responsesWSCallState{info: info}
@@ -581,35 +581,37 @@ func TestObserveUpstreamMessageDoesNotMarkProtocolEventAsFirstResponse(t *testin
 
 	session.observeUpstreamMessage([]byte(`{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`))
 
-	if info.HasSendResponse() {
-		t.Fatalf("protocol lifecycle event should not mark first response time; got %s", info.FirstResponseTime)
+	if !info.HasSendResponse() {
+		t.Fatal("first upstream websocket event should mark first response time")
 	}
-	if !info.FirstResponseTime.Equal(initialFirstResponseTime) {
-		t.Fatalf("first response time changed on protocol event: got %s want %s", info.FirstResponseTime, initialFirstResponseTime)
+	if !info.FirstResponseTime.After(initialFirstResponseTime) {
+		t.Fatalf("first response time was not advanced on protocol event: got %s want after %s", info.FirstResponseTime, initialFirstResponseTime)
 	}
 
+	firstResponseTime := info.FirstResponseTime
 	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"hello"}`))
 
-	if !info.HasSendResponse() {
-		t.Fatal("first output text delta should mark first response time")
+	if !info.FirstResponseTime.Equal(firstResponseTime) {
+		t.Fatalf("later output should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
 	}
 }
 
-func TestObserveUpstreamMessageMarksFunctionArgumentsAsFirstResponse(t *testing.T) {
+func TestObserveUpstreamMessageMarksFunctionCallSkeletonAsFirstResponse(t *testing.T) {
 	info := newTestResponsesWSRelayInfo(t)
 	session := &responsesWSSession{}
 	session.current = &responsesWSCallState{info: info}
 
 	session.observeUpstreamMessage([]byte(`{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"exec_command"}}`))
 
-	if info.HasSendResponse() {
-		t.Fatal("function_call skeleton should not mark first response time before arguments arrive")
+	if !info.HasSendResponse() {
+		t.Fatal("function_call skeleton is the first upstream websocket event and should mark first response time")
 	}
 
+	firstResponseTime := info.FirstResponseTime
 	session.observeUpstreamMessage([]byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"cmd\":\"pwd\"}"}`))
 
-	if !info.HasSendResponse() {
-		t.Fatal("function_call arguments delta should mark first response time")
+	if !info.FirstResponseTime.Equal(firstResponseTime) {
+		t.Fatalf("function_call arguments should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
 	}
 }
 
@@ -626,16 +628,17 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNotice(t *testing.T) {
 	if !keepReading {
 		t.Fatal("weekly limit notice should be filtered without closing upstream reader")
 	}
-	if info.HasSendResponse() {
-		t.Fatal("filtered weekly limit notice should not mark first response time")
+	if !info.HasSendResponse() {
+		t.Fatal("filtered weekly limit notice is still the first upstream websocket event and should mark FRT")
 	}
 
+	firstResponseTime := info.FirstResponseTime
 	_, forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
 	if !forward || !keepReading {
 		t.Fatalf("normal output should be forwarded and keep reading, got forward=%v keepReading=%v", forward, keepReading)
 	}
-	if !info.HasSendResponse() {
-		t.Fatal("normal output after filtered notice should mark first response time")
+	if !info.FirstResponseTime.Equal(firstResponseTime) {
+		t.Fatalf("normal output after filtered notice should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
 	}
 }
 
@@ -661,8 +664,8 @@ func TestObserveUpstreamMessageFiltersWeeklyLimitNoticeItemDone(t *testing.T) {
 	if !keepReading {
 		t.Fatal("weekly limit notice item.done should be filtered without closing upstream reader")
 	}
-	if info.HasSendResponse() {
-		t.Fatal("filtered weekly limit notice item.done should not mark first response time")
+	if !info.HasSendResponse() {
+		t.Fatal("filtered weekly limit notice item.done is still the first upstream websocket event and should mark FRT")
 	}
 }
 

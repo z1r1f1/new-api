@@ -638,6 +638,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, boo
 	if state == nil {
 		return message, true, true
 	}
+	state.info.SetFirstResponseTime()
 
 	var streamResponse dto.ResponsesStreamResponse
 	if err := common.Unmarshal(message, &streamResponse); err != nil {
@@ -647,13 +648,11 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, boo
 
 	switch streamResponse.Type {
 	case "response.completed", "response.done", "response.incomplete":
-		state.info.SetFirstResponseTime()
 		s.rememberResponsesWSToolCalls(state, streamResponse.Response)
 		s.applyTerminalResponseUsage(state, streamResponse.Response)
 		message = normalizeResponsesWSTerminalMessageForClient(message, state, &streamResponse)
 		s.finishCall(state, true)
 	case "response.failed", "response.cancelled", "response.canceled", "response.error", "error":
-		state.info.SetFirstResponseTime()
 		apiErr := newResponsesWSUpstreamAPIError(streamResponse, message)
 		forward, keepReading := s.handleTerminalUpstreamError(state, apiErr)
 		return message, forward, keepReading
@@ -662,7 +661,6 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, boo
 			if isResponsesWSUpstreamNoticeText(streamResponse.Delta) {
 				return message, false, true
 			}
-			state.info.SetFirstResponseTime()
 			state.outputText.WriteString(streamResponse.Delta)
 		}
 		if apiErr := newResponsesWSTextualUpstreamError(state.outputText.String()); apiErr != nil {
@@ -672,9 +670,6 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, boo
 	case dto.ResponsesOutputTypeItemDone:
 		if responsesWSOutputItemIsUpstreamNotice(streamResponse.Item) {
 			return message, false, true
-		}
-		if responsesWSOutputItemMarksFirstResponse(streamResponse.Item) {
-			state.info.SetFirstResponseTime()
 		}
 		state.observeResponsesWSToolCallItem(streamResponse.Item)
 		if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
@@ -688,7 +683,6 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) ([]byte, boo
 		state.observeResponsesWSToolCallItem(streamResponse.Item)
 	case "response.function_call_arguments.delta":
 		if streamResponse.Delta != "" {
-			state.info.SetFirstResponseTime()
 			state.appendResponsesWSToolCallArguments(streamResponse.ItemID, streamResponse.Delta)
 		}
 	}
@@ -739,23 +733,6 @@ func responsesWSUsageHasTokens(usage *dto.Usage) bool {
 			usage.TotalTokens != 0 ||
 			usage.InputTokens != 0 ||
 			usage.OutputTokens != 0)
-}
-
-func responsesWSOutputItemMarksFirstResponse(item *dto.ResponsesOutput) bool {
-	if item == nil {
-		return false
-	}
-	switch item.Type {
-	case "function_call", dto.BuildInCallWebSearchCall, dto.ResponsesOutputTypeImageGenerationCall:
-		return true
-	case "message":
-		for _, content := range item.Content {
-			if strings.TrimSpace(content.Text) != "" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func responsesWSOutputItemIsUpstreamNotice(item *dto.ResponsesOutput) bool {
