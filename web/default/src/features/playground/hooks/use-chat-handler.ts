@@ -30,6 +30,7 @@ import { DEBUG_TABS, MESSAGE_STATUS, ERROR_MESSAGES } from '../constants'
 import {
   buildChatCompletionPayload,
   buildImageGenerationPayload,
+  extractImageGenerationWaitTaskId,
   extractImageTaskId,
   getImageGenerationFailureMessage,
   getImageGenerationWaitMessage,
@@ -109,6 +110,23 @@ function isPendingImageAssistantMessage(message: Message | undefined): boolean {
   return (
     message?.from === 'assistant' &&
     (message.status === 'loading' || message.status === 'streaming')
+  )
+}
+
+function isRecoverableImageWaitMessage(message: Message | undefined): boolean {
+  if (!message || message.from !== 'assistant' || message.status === 'error') {
+    return false
+  }
+
+  return Boolean(
+    extractImageGenerationWaitTaskId(message.versions[0]?.content || '')
+  )
+}
+
+function isActiveImageTaskMessage(message: Message | undefined): boolean {
+  return (
+    isPendingImageAssistantMessage(message) ||
+    isRecoverableImageWaitMessage(message)
   )
 }
 
@@ -537,6 +555,41 @@ export function useChatHandler({
     })
   }, [])
 
+  const sleepWithImageGenerationProgress = useCallback(
+    async (
+      ms: number,
+      signal: AbortSignal,
+      messageKey: string,
+      taskId: string,
+      taskData:
+        | ImageGenerationTaskResponse
+        | ImageGenerationSubmitResponse
+        | null,
+      attempt: number,
+      startedAt: number
+    ) => {
+      const deadline = Date.now() + ms
+      let tick = 0
+
+      while (Date.now() < deadline) {
+        await sleep(Math.min(1000, Math.max(0, deadline - Date.now())), signal)
+        if (signal.aborted || Date.now() >= deadline) {
+          continue
+        }
+
+        tick += 1
+        updateImageGenerationMessage(
+          messageKey,
+          taskId,
+          taskData,
+          attempt + tick,
+          startedAt
+        )
+      }
+    },
+    [sleep, updateImageGenerationMessage]
+  )
+
   const pollImageGenerationTask = useCallback(
     async (
       taskId: string,
@@ -560,7 +613,15 @@ export function useChatHandler({
             attempt,
             startedAt
           )
-          await sleep(5000, signal)
+          await sleepWithImageGenerationProgress(
+            5000,
+            signal,
+            messageKey,
+            taskId,
+            taskData,
+            attempt,
+            startedAt
+          )
           continue
         }
 
@@ -584,7 +645,7 @@ export function useChatHandler({
       const suffix = lastStatus ? ` (${lastStatus}, ${taskId})` : ` (${taskId})`
       throw new Error(`${t(ERROR_MESSAGES.IMAGE_GENERATION_TIMEOUT)}${suffix}`)
     },
-    [sleep, t, updateImageGenerationMessage]
+    [sleepWithImageGenerationProgress, t, updateImageGenerationMessage]
   )
 
   const isAbortError = useCallback((error: unknown) => {
@@ -597,15 +658,33 @@ export function useChatHandler({
   }, [])
 
   useEffect(() => {
-    const pendingTask = loadPendingImageTasks(storageUserId).find(
+    let pendingTask = loadPendingImageTasks(storageUserId).find(
       (task) => task.sessionId === activeSessionId
     )
+    if (!pendingTask) {
+      const recoverableMessage = currentMessagesRef.current.find((message) =>
+        isRecoverableImageWaitMessage(message)
+      )
+      const taskId = extractImageGenerationWaitTaskId(
+        recoverableMessage?.versions[0]?.content || ''
+      )
+      if (recoverableMessage && taskId) {
+        pendingTask = {
+          taskId,
+          messageKey: recoverableMessage.key,
+          sessionId: activeSessionId,
+          startedAt: Date.now(),
+          updatedAt: new Date().toISOString(),
+        }
+        upsertPendingImageTask(pendingTask, storageUserId)
+      }
+    }
     if (!pendingTask) return
 
     const pendingMessage = currentMessagesRef.current.find(
       (message) => message.key === pendingTask.messageKey
     )
-    if (!isPendingImageAssistantMessage(pendingMessage)) {
+    if (!isActiveImageTaskMessage(pendingMessage)) {
       removePendingImageTask(pendingTask.taskId, storageUserId)
       return
     }
@@ -641,8 +720,10 @@ export function useChatHandler({
         if (task.debugId) {
           await fetchAndUpdateDebugUpstreamRequest(task.debugId)
         }
+        if (abortController.signal.aborted) {
+          return
+        }
         completeDebugResponse(taskResult)
-        removePendingImageTask(task.taskId, storageUserId)
         currentImageTaskRef.current = null
         completeImageGenerationMessage(
           task.messageKey,
@@ -655,7 +736,9 @@ export function useChatHandler({
         if (task.debugId) {
           await fetchAndUpdateDebugUpstreamRequest(task.debugId)
         }
-        removePendingImageTask(task.taskId, storageUserId)
+        if (abortController.signal.aborted) {
+          return
+        }
         currentImageTaskRef.current = null
         const errorMessage = readImageErrorMessage(
           error,
@@ -694,6 +777,19 @@ export function useChatHandler({
     t,
     updateImageGenerationMessage,
   ])
+
+  useEffect(() => {
+    loadPendingImageTasks(storageUserId)
+      .filter((task) => task.sessionId === activeSessionId)
+      .forEach((task) => {
+        const pendingMessage = currentMessages.find(
+          (message) => message.key === task.messageKey
+        )
+        if (!isActiveImageTaskMessage(pendingMessage)) {
+          removePendingImageTask(task.taskId, storageUserId)
+        }
+      })
+  }, [activeSessionId, currentMessages, storageUserId])
 
   const sendImageGenerationChat = useCallback(
     async (messages: Message[], overridePayload?: PlaygroundRequestPayload) => {
@@ -751,8 +847,10 @@ export function useChatHandler({
             messageKey
           )
           await fetchAndUpdateDebugUpstreamRequest(debugId)
+          if (abortController.signal.aborted) {
+            return
+          }
           completeDebugResponse(taskResult)
-          removePendingImageTask(taskId, storageUserId)
           currentImageTaskRef.current = null
           completeImageGenerationMessage(
             messageKey,
@@ -773,12 +871,11 @@ export function useChatHandler({
           return
         }
         await fetchAndUpdateDebugUpstreamRequest(debugId)
+        if (abortController.signal.aborted) {
+          return
+        }
 
         if (currentImageTaskRef.current?.taskId) {
-          removePendingImageTask(
-            currentImageTaskRef.current.taskId,
-            storageUserId
-          )
           currentImageTaskRef.current = null
         }
         const errorMessage = readImageErrorMessage(

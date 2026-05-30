@@ -261,6 +261,14 @@ export function getImageGenerationWaitMessage(
     .join('\n')
 }
 
+export function extractImageGenerationWaitTaskId(content: string): string {
+  const match = content.match(
+    /(?:Task ID:|任务\s*ID：|任务\s*ID:)\s*`?([^\s`]+)`?/i
+  )
+  const taskId = String(match?.[1] || '').trim()
+  return taskId.startsWith('task_') ? taskId : ''
+}
+
 export function buildImageTaskContentUrl(
   taskId: string,
   index: number

@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { buildImageGenerationPayload } from './image-generation'
+import {
+  buildImageGenerationPayload,
+  extractImageGenerationWaitTaskId,
+  getImageGenerationWaitMessage,
+  imageTaskResultToMarkdown,
+} from './image-generation'
 import { formatMessageForAPI } from './message-utils'
 import { buildChatCompletionPayload } from './payload-builder'
 import type { Message, PlaygroundConfig } from '../types'
@@ -60,6 +65,59 @@ describe('buildImageGenerationPayload', () => {
 
     assert.equal(payload.prompt, '改成漫画风格')
     assert.equal(payload.image, 'data:image/png;base64,abc123')
+  })
+})
+
+describe('image generation task rendering', () => {
+  test('uses the playground task image endpoint for completed base64 task results', () => {
+    const markdown = imageTaskResultToMarkdown('task_done', {
+      task_id: 'task_done',
+      status: 'succeeded',
+      data: {
+        data: [{ b64_json: 'abc123' }],
+      },
+    })
+
+    assert.equal(
+      markdown,
+      '![generated image 1](/pg/images/generations/task_done/image/0)'
+    )
+  })
+
+  test('computes wait elapsed from the original task start time', () => {
+    const originalNow = Date.now
+    Date.now = () => 1_777_000_065_000
+    try {
+      const message = getImageGenerationWaitMessage(
+        'task_waiting',
+        null,
+        0,
+        1_777_000_000_000,
+        (key, options) =>
+          key === 'Elapsed: {{elapsed}}'
+            ? `Elapsed: ${String(options?.elapsed || '')}`
+            : key
+      )
+
+      assert.match(message, /Elapsed: 1m 5s/)
+      assert.match(message, /task_waiting/)
+    } finally {
+      Date.now = originalNow
+    }
+  })
+
+  test('extracts task id from localized wait messages for legacy recovery', () => {
+    assert.equal(
+      extractImageGenerationWaitTaskId(
+        '正在生成图片.\n\n已等待：55s\n\n任务 ID： `task_q6Fx1L8auCV58BZC5imnR6yBu4ZXNRgD`'
+      ),
+      'task_q6Fx1L8auCV58BZC5imnR6yBu4ZXNRgD'
+    )
+    assert.equal(
+      extractImageGenerationWaitTaskId('Task ID: `task_abc123`'),
+      'task_abc123'
+    )
+    assert.equal(extractImageGenerationWaitTaskId('Task ID: `resp_abc`'), '')
   })
 })
 

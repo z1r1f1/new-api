@@ -261,6 +261,95 @@ resp, err := doRequestWithOptionalHTTPToWebsocket(c, info, adaptor, requestBody)
 resp, err := adaptor.DoRequest(c, info, requestBody)
 ```
 
+### Playground async image task recovery
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `web/default/src/features/playground/hooks/use-chat-handler.ts`,
+  playground image localStorage keys, or `/pg/images/generations/:task_id`
+  polling/display behavior.
+- The playground image endpoint returns a task id immediately and stores the
+  final image result in the backend task table. The frontend owns polling and
+  page-navigation recovery.
+
+#### 2. Signatures
+
+- Pending task storage item: `PendingImageGenerationTask`
+  (`taskId`, `messageKey`, `sessionId`, `debugId`, `startedAt`, `updatedAt`).
+- Submit endpoint: `POST /pg/images/generations` -> `202` with `task_id`,
+  `status`, and `poll_url`.
+- Poll endpoint: `GET /pg/images/generations/:task_id` -> task status plus
+  optional OpenAI-image-compatible `data`.
+
+#### 3. Contracts
+
+- A pending task must remain in localStorage while its assistant message is
+  still `loading` or `streaming`; this is the durable client-side pointer that
+  lets the playground resume after route changes or refreshes.
+- Legacy/orphan wait messages that still display `Task ID:` / `任务 ID：` may be
+  used to recreate the pending task marker and run one recovery poll.
+- Terminal task handling must update the assistant message to `complete` or
+  `error` before the pending task is cleaned up. If the page unmounts during a
+  terminal poll, keep the pending task so the next mount can poll once more and
+  render the completed image.
+- Waiting text should be refreshed from the original `startedAt` timestamp, not
+  reset on remount, so elapsed time remains monotonic.
+- Completed task responses with `b64_json` should render a markdown image using
+  `/pg/images/generations/:task_id/image/:index` instead of embedding large
+  base64 strings in saved chat messages.
+
+#### 4. Validation & Error Matrix
+
+- Pending task exists and matching assistant message is pending -> resume
+  polling on playground mount.
+- No pending task exists but an assistant wait message contains a `task_...`
+  task id -> recreate the pending marker and resume polling.
+- Pending task exists but matching assistant message is complete/error/missing
+  -> remove the stale pending task.
+- Poll returns `succeeded`/`success`/`completed` -> render image markdown and
+  mark the message complete.
+- Poll returns failure status -> render the provider/task failure message and
+  mark the message error.
+- Component unmounts or aborts while polling -> do not remove the pending task
+  from storage.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: user leaves the playground while an image task is running, returns after
+  backend success, and the image appears after the resume poll.
+- Good: a pre-fix browser state with stale “Generating image” text and an
+  embedded task id recovers on the next playground mount.
+- Good: wait text updates elapsed seconds while polling and preserves the
+  original task start time across remounts.
+- Base: synchronous image-generation responses without a task id still render
+  directly from the response payload.
+- Bad: deleting the pending task before the message update is committed; a route
+  change can strand the saved chat message at “Generating image”.
+
+#### 6. Tests Required
+
+- `web/default`: unit test for completed task `b64_json` -> task image markdown
+  URL.
+- `web/default`: unit test for wait text elapsed calculation from `startedAt`.
+- `web/default`: unit test for extracting localized task ids from wait text.
+- `web/default`: run typecheck and a production build for hook changes.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```typescript
+removePendingImageTask(taskId, storageUserId)
+completeImageGenerationMessage(messageKey, markdown)
+```
+
+Correct:
+
+```typescript
+completeImageGenerationMessage(messageKey, markdown)
+// Cleanup is driven by the rendered message becoming non-pending.
+```
+
 
 ### Relay first-byte timeout and channel retry
 
