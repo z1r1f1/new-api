@@ -56,15 +56,19 @@ type responsesWSCallState struct {
 	commitRate middleware.ModelRequestRateLimitCommit
 	create     responsesWSCreateRequest
 	retryParam *service.RetryParam
+	toolCalls  map[string]dto.ResponsesOutput
+	itemCallID map[string]string
+	toolArgs   map[string]string
 }
 
 type responsesWSSession struct {
-	c              *gin.Context
-	client         *websocket.Conn
-	target         *websocket.Conn
-	lockedModel    string
-	lockedChannel  *appmodel.Channel
-	nextEventIndex int
+	c                     *gin.Context
+	client                *websocket.Conn
+	target                *websocket.Conn
+	lockedModel           string
+	lockedChannel         *appmodel.Channel
+	nextEventIndex        int
+	toolCallsByResponseID map[string][]dto.ResponsesOutput
 
 	clientWriteMu sync.Mutex
 	targetWriteMu sync.Mutex
@@ -644,6 +648,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 
 	switch streamResponse.Type {
 	case "response.completed", "response.done", "response.incomplete":
+		s.rememberResponsesWSToolCalls(state, streamResponse.Response)
 		s.applyTerminalResponseUsage(state, streamResponse.Response)
 		s.finishCall(state, true)
 	case "response.failed", "response.cancelled", "response.canceled", "response.error", "error":
@@ -655,6 +660,7 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 			return s.handleTerminalUpstreamError(state, apiErr)
 		}
 	case dto.ResponsesOutputTypeItemDone:
+		state.observeResponsesWSToolCallItem(streamResponse.Item)
 		if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
 			if state.info != nil && state.info.ResponsesUsageInfo != nil && state.info.ResponsesUsageInfo.BuiltInTools != nil {
 				if webSearchTool, exists := state.info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolWebSearchPreview]; exists && webSearchTool != nil {
@@ -662,6 +668,10 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 				}
 			}
 		}
+	case dto.ResponsesOutputTypeItemAdded:
+		state.observeResponsesWSToolCallItem(streamResponse.Item)
+	case "response.function_call_arguments.delta":
+		state.appendResponsesWSToolCallArguments(streamResponse.ItemID, streamResponse.Delta)
 	}
 	return true, true
 }
@@ -682,7 +692,7 @@ func (s *responsesWSSession) handleTerminalUpstreamError(state *responsesWSCallS
 
 	processedErr, shouldRetry := s.processChannelError(s.lockedChannel, apiErr, retryParam)
 	if shouldRetry && s.canRetryTerminalUpstreamError(state, apiErr) {
-		retryCreate := prepareResponsesWSRetryCreate(state.create, apiErr)
+		retryCreate := s.prepareResponsesWSRetryCreate(state.create, apiErr)
 		s.finishCall(state, false)
 		s.closeTarget()
 		retryParam.IncreaseRetry()
@@ -712,7 +722,7 @@ func (s *responsesWSSession) canRetryTerminalUpstreamError(state *responsesWSCal
 	if state.create.Request.Model == "" {
 		return false
 	}
-	if isRetryableResponsesWSUpstreamStateError(apiErr) && responsesWSCreateHasPreviousResponseID(state.create) {
+	if isRetryableResponsesWSUpstreamStateError(apiErr) && responsesWSCreateHasPreviousResponseID(state.create) && !s.canReplayResponsesWSPreviousState(state.create) {
 		return false
 	}
 	if state.outputText.Len() == 0 {
@@ -784,13 +794,7 @@ func looksLikeResponsesWSTextUsageLimit(text string) bool {
 		strings.Contains(lower, "you have hit your usage limit") ||
 		strings.Contains(lower, "usage limit") ||
 		strings.Contains(lower, "rate limit") ||
-		strings.Contains(lower, "too many requests") ||
-		strings.Contains(lower, "status_code=429") ||
-		strings.Contains(lower, "status_code:429") ||
-		strings.Contains(lower, "status_code: 429") ||
-		strings.Contains(lower, "status code=429") ||
-		strings.Contains(lower, "status code:429") ||
-		strings.Contains(lower, "status code: 429")
+		strings.Contains(lower, "too many requests")
 }
 
 func looksLikeResponsesWSPreviousResponseNotFound(text string) bool {
@@ -803,25 +807,45 @@ func looksLikeResponsesWSPreviousResponseNotFound(text string) bool {
 		(strings.Contains(lower, "429") || strings.Contains(lower, "status_code"))
 }
 
+func (s *responsesWSSession) prepareResponsesWSRetryCreate(create responsesWSCreateRequest, apiErr *types.NewAPIError) responsesWSCreateRequest {
+	if replayCreate, ok := s.tryBuildResponsesWSStateReplayCreate(create, apiErr); ok {
+		return replayCreate
+	}
+	return create
+}
+
 func prepareResponsesWSRetryCreate(create responsesWSCreateRequest, apiErr *types.NewAPIError) responsesWSCreateRequest {
+	return (&responsesWSSession{}).prepareResponsesWSRetryCreate(create, apiErr)
+}
+
+func (s *responsesWSSession) tryBuildResponsesWSStateReplayCreate(create responsesWSCreateRequest, apiErr *types.NewAPIError) (responsesWSCreateRequest, bool) {
 	if !shouldDropResponsesWSPreviousResponseIDForRetry(create, apiErr) {
-		return create
+		return create, false
+	}
+	replayInput, ok := s.buildResponsesWSReplayInput(create)
+	if !ok {
+		return create, false
 	}
 	create.Request.PreviousResponseID = ""
+	create.Request.Input = replayInput
 	if len(create.Raw) > 0 {
 		var raw map[string]json.RawMessage
 		if common.Unmarshal(create.Raw, &raw) == nil {
 			delete(raw, "previous_response_id")
+			raw["input"] = replayInput
 			if nextRaw, err := common.Marshal(raw); err == nil {
 				create.Raw = nextRaw
 			}
 		}
 	}
-	return create
+	return create, true
 }
 
 func shouldDropResponsesWSPreviousResponseIDForRetry(create responsesWSCreateRequest, apiErr *types.NewAPIError) bool {
-	return false
+	if !isRetryableResponsesWSUpstreamStateError(apiErr) {
+		return false
+	}
+	return responsesWSCreateHasPreviousResponseID(create)
 }
 
 func responsesWSCreateHasPreviousResponseID(create responsesWSCreateRequest) bool {
@@ -844,6 +868,231 @@ func responsesWSCreateHasPreviousResponseID(create responsesWSCreateRequest) boo
 		return strings.TrimSpace(previousID) != ""
 	}
 	return strings.TrimSpace(string(previousRaw)) != "" && string(previousRaw) != "null"
+}
+
+func (s *responsesWSSession) canReplayResponsesWSPreviousState(create responsesWSCreateRequest) bool {
+	_, ok := s.buildResponsesWSReplayInput(create)
+	return ok
+}
+
+func (s *responsesWSSession) buildResponsesWSReplayInput(create responsesWSCreateRequest) (json.RawMessage, bool) {
+	previousID := responsesWSCreatePreviousResponseID(create)
+	if previousID == "" || s == nil || len(s.toolCallsByResponseID) == 0 {
+		return nil, false
+	}
+	callIDs := responsesWSFunctionOutputCallIDs(create.Request.Input)
+	if len(callIDs) == 0 {
+		return nil, false
+	}
+	stored := s.toolCallsByResponseID[previousID]
+	if len(stored) == 0 {
+		return nil, false
+	}
+	storedByCallID := make(map[string]dto.ResponsesOutput, len(stored))
+	for _, call := range stored {
+		callID := strings.TrimSpace(call.CallId)
+		if callID == "" {
+			callID = strings.TrimSpace(call.ID)
+		}
+		if callID != "" {
+			storedByCallID[callID] = call
+		}
+	}
+
+	prepend := make([]any, 0, len(callIDs))
+	seen := make(map[string]struct{}, len(callIDs))
+	for _, callID := range callIDs {
+		if _, exists := seen[callID]; exists {
+			continue
+		}
+		seen[callID] = struct{}{}
+		call, ok := storedByCallID[callID]
+		if !ok || strings.TrimSpace(call.Name) == "" {
+			return nil, false
+		}
+		prepend = append(prepend, responsesWSToolCallReplayItem(call))
+	}
+	if len(prepend) == 0 {
+		return nil, false
+	}
+
+	var inputValue any
+	if common.Unmarshal(create.Request.Input, &inputValue) != nil {
+		return nil, false
+	}
+	items := make([]any, 0, len(prepend)+1)
+	items = append(items, prepend...)
+	if inputItems, ok := inputValue.([]any); ok {
+		items = append(items, inputItems...)
+	} else {
+		items = append(items, inputValue)
+	}
+	replayInput, err := common.Marshal(items)
+	if err != nil {
+		return nil, false
+	}
+	return replayInput, true
+}
+
+func responsesWSToolCallReplayItem(call dto.ResponsesOutput) map[string]any {
+	callID := strings.TrimSpace(call.CallId)
+	if callID == "" {
+		callID = strings.TrimSpace(call.ID)
+	}
+	args := call.ArgumentsString()
+	if strings.TrimSpace(args) == "" {
+		args = "{}"
+	}
+	return map[string]any{
+		"type":      "function_call",
+		"call_id":   callID,
+		"name":      strings.TrimSpace(call.Name),
+		"arguments": args,
+	}
+}
+
+func responsesWSCreatePreviousResponseID(create responsesWSCreateRequest) string {
+	if id := strings.TrimSpace(create.Request.PreviousResponseID); id != "" {
+		return id
+	}
+	if len(create.Raw) == 0 {
+		return ""
+	}
+	var raw map[string]json.RawMessage
+	if common.Unmarshal(create.Raw, &raw) != nil {
+		return ""
+	}
+	previousRaw, ok := raw["previous_response_id"]
+	if !ok {
+		return ""
+	}
+	var previousID string
+	if common.Unmarshal(previousRaw, &previousID) == nil {
+		return strings.TrimSpace(previousID)
+	}
+	if strings.TrimSpace(string(previousRaw)) == "null" {
+		return ""
+	}
+	return strings.Trim(strings.TrimSpace(string(previousRaw)), `"`)
+}
+
+func responsesWSFunctionOutputCallIDs(input json.RawMessage) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	var value any
+	if common.Unmarshal(input, &value) != nil {
+		return nil
+	}
+	var callIDs []string
+	collectResponsesWSFunctionOutputCallIDs(value, &callIDs)
+	return callIDs
+}
+
+func collectResponsesWSFunctionOutputCallIDs(value any, callIDs *[]string) {
+	switch typed := value.(type) {
+	case []any:
+		for _, item := range typed {
+			collectResponsesWSFunctionOutputCallIDs(item, callIDs)
+		}
+	case map[string]any:
+		if typeValue, ok := typed["type"].(string); ok && typeValue == "function_call_output" {
+			if callID, ok := typed["call_id"].(string); ok && strings.TrimSpace(callID) != "" {
+				*callIDs = append(*callIDs, strings.TrimSpace(callID))
+			}
+			return
+		}
+		for _, item := range typed {
+			collectResponsesWSFunctionOutputCallIDs(item, callIDs)
+		}
+	}
+}
+
+func (state *responsesWSCallState) observeResponsesWSToolCallItem(item *dto.ResponsesOutput) {
+	if state == nil || item == nil || item.Type != "function_call" {
+		return
+	}
+	callID := strings.TrimSpace(item.CallId)
+	if callID == "" {
+		callID = strings.TrimSpace(item.ID)
+	}
+	if callID == "" {
+		return
+	}
+	if state.toolCalls == nil {
+		state.toolCalls = make(map[string]dto.ResponsesOutput)
+	}
+	if state.itemCallID == nil {
+		state.itemCallID = make(map[string]string)
+	}
+	copyItem := *item
+	copyItem.CallId = callID
+	args := strings.TrimSpace(state.toolArgs[callID])
+	if args == "" && strings.TrimSpace(item.ID) != "" {
+		args = strings.TrimSpace(state.toolArgs[strings.TrimSpace(item.ID)])
+	}
+	if args != "" {
+		state.toolArgs[callID] = args
+		copyItem.Arguments = json.RawMessage(strconv.Quote(args))
+	}
+	state.toolCalls[callID] = copyItem
+	if strings.TrimSpace(item.ID) != "" {
+		state.itemCallID[strings.TrimSpace(item.ID)] = callID
+	}
+}
+
+func (state *responsesWSCallState) appendResponsesWSToolCallArguments(itemID string, delta string) {
+	if state == nil || strings.TrimSpace(delta) == "" {
+		return
+	}
+	callID := ""
+	if state.itemCallID != nil {
+		callID = state.itemCallID[strings.TrimSpace(itemID)]
+	}
+	if callID == "" {
+		callID = strings.TrimSpace(itemID)
+	}
+	if callID == "" {
+		return
+	}
+	if state.toolArgs == nil {
+		state.toolArgs = make(map[string]string)
+	}
+	state.toolArgs[callID] += delta
+	if state.toolCalls != nil {
+		call := state.toolCalls[callID]
+		if strings.TrimSpace(call.CallId) != "" || strings.TrimSpace(call.ID) != "" {
+			call.Arguments = json.RawMessage(strconv.Quote(state.toolArgs[callID]))
+			state.toolCalls[callID] = call
+		}
+	}
+}
+
+func (s *responsesWSSession) rememberResponsesWSToolCalls(state *responsesWSCallState, response *dto.OpenAIResponsesResponse) {
+	if s == nil || state == nil || response == nil || strings.TrimSpace(response.ID) == "" {
+		return
+	}
+	for i := range response.Output {
+		if response.Output[i].Type == "function_call" {
+			state.observeResponsesWSToolCallItem(&response.Output[i])
+		}
+	}
+	if len(state.toolCalls) == 0 {
+		return
+	}
+	calls := make([]dto.ResponsesOutput, 0, len(state.toolCalls))
+	for _, call := range state.toolCalls {
+		if strings.TrimSpace(call.CallId) != "" && strings.TrimSpace(call.Name) != "" {
+			calls = append(calls, call)
+		}
+	}
+	if len(calls) == 0 {
+		return
+	}
+	if s.toolCallsByResponseID == nil {
+		s.toolCallsByResponseID = make(map[string][]dto.ResponsesOutput)
+	}
+	s.toolCallsByResponseID[strings.TrimSpace(response.ID)] = calls
 }
 
 func extractResponsesWSUpstreamOpenAIError(streamResp dto.ResponsesStreamResponse, message []byte) (*types.OpenAIError, bool) {

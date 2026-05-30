@@ -262,6 +262,9 @@ func TestResponsesWSTextualErrorDoesNotTreatPlain429MentionAsFailure(t *testing.
 	if apiErr := newResponsesWSTextualUpstreamError("HTTP 429 is a numeric status code in many APIs."); apiErr != nil {
 		t.Fatalf("plain explanatory 429 text should not be treated as upstream failure: %v", apiErr)
 	}
+	if apiErr := newResponsesWSTextualUpstreamError("status_code=429, 已处理这个问题，并已经重建并重启当前容器。"); apiErr != nil {
+		t.Fatalf("assistant explanation containing status_code=429 should not be treated as upstream failure: %v", apiErr)
+	}
 }
 
 func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForStateError(t *testing.T) {
@@ -325,6 +328,67 @@ func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForFunctionCallOutp
 	}
 }
 
+func TestPrepareResponsesWSRetryCreateReplaysStoredFunctionCallOutputState(t *testing.T) {
+	session := &responsesWSSession{toolCallsByResponseID: map[string][]dto.ResponsesOutput{
+		"resp_123": {{Type: "function_call", ID: "fc_1", CallId: "call_1", Name: "exec_command", Arguments: json.RawMessage(`"{\"cmd\":\"pwd\"}"`)}},
+	}}
+	create := responsesWSCreateRequest{
+		Request: dto.OpenAIResponsesRequest{
+			Model:              "gpt-5.5",
+			PreviousResponseID: "resp_123",
+			Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"/tmp"}]`),
+		},
+		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":[{"type":"function_call_output","call_id":"call_1","output":"/tmp"}]}`),
+	}
+	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
+
+	got := session.prepareResponsesWSRetryCreate(create, apiErr)
+
+	if got.Request.PreviousResponseID != "" {
+		t.Fatalf("PreviousResponseID = %q, want empty after replay expansion", got.Request.PreviousResponseID)
+	}
+	var raw map[string]any
+	if err := common.Unmarshal(got.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if _, ok := raw["previous_response_id"]; ok {
+		t.Fatalf("previous_response_id should be removed from replay retry payload: %s", got.Raw)
+	}
+	items, ok := raw["input"].([]any)
+	if !ok || len(items) != 2 {
+		t.Fatalf("input should contain replayed function_call plus output, got %#v", raw["input"])
+	}
+	first, _ := items[0].(map[string]any)
+	if first["type"] != "function_call" || first["call_id"] != "call_1" || first["name"] != "exec_command" {
+		t.Fatalf("unexpected replayed function call: %#v", first)
+	}
+	second, _ := items[1].(map[string]any)
+	if second["type"] != "function_call_output" || second["call_id"] != "call_1" {
+		t.Fatalf("unexpected function call output: %#v", second)
+	}
+}
+
+func TestResponsesWSToolCallArgumentsDeltasSurviveItemIDToCallIDMapping(t *testing.T) {
+	state := &responsesWSCallState{}
+
+	state.appendResponsesWSToolCallArguments("fc_1", `{"cmd":`)
+	state.observeResponsesWSToolCallItem(&dto.ResponsesOutput{
+		Type:   "function_call",
+		ID:     "fc_1",
+		CallId: "call_1",
+		Name:   "exec_command",
+	})
+	state.appendResponsesWSToolCallArguments("fc_1", `"pwd"}`)
+
+	call, ok := state.toolCalls["call_1"]
+	if !ok {
+		t.Fatal("tool call was not recorded under canonical call_id")
+	}
+	if got := call.ArgumentsString(); got != `{"cmd":"pwd"}` {
+		t.Fatalf("arguments = %q, want full merged JSON string", got)
+	}
+}
+
 func TestResponsesWSCanRetryStateErrorRejectsPreviousResponseContinuation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -338,6 +402,28 @@ func TestResponsesWSCanRetryStateErrorRejectsPreviousResponseContinuation(t *tes
 
 	if session.canRetryTerminalUpstreamError(state, apiErr) {
 		t.Fatal("previous_response_id continuations depend on prior upstream state and must not retry on a fallback channel")
+	}
+}
+
+func TestResponsesWSCanRetryStateErrorAllowsReplayablePreviousResponseContinuation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	session := &responsesWSSession{
+		c:      ctx,
+		client: &websocket.Conn{},
+		toolCallsByResponseID: map[string][]dto.ResponsesOutput{
+			"resp_123": {{Type: "function_call", ID: "fc_1", CallId: "call_1", Name: "exec_command", Arguments: json.RawMessage(`"{}"`)}},
+		},
+	}
+	state := &responsesWSCallState{create: responsesWSCreateRequest{Request: dto.OpenAIResponsesRequest{
+		Model:              "gpt-5.5",
+		PreviousResponseID: "resp_123",
+		Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
+	}}}
+	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
+
+	if !session.canRetryTerminalUpstreamError(state, apiErr) {
+		t.Fatal("stored function_call state should allow retry by replaying the missing tool call")
 	}
 }
 

@@ -161,11 +161,13 @@ When adding or modifying a channel:
   events or early assistant text are relay errors, not successful assistant
   content. This includes usage-limit/rate-limit text and
   `status_code=429, Previous response with id ... not found`.
-- Do not retry a Responses WebSocket call on another channel when the request
-  contains `previous_response_id`. That ID is bound to one upstream
-  account/conversation and may also be required to match pending tool calls;
-  dropping it can produce `No tool call found`, while sending it to a fallback
-  channel commonly produces `previous response ... not found`.
+- `previous_response_id` is bound to one upstream account/conversation. A
+  fallback-channel retry may drop it only when the proxy can replay the missing
+  state locally, for example by prepending a previously observed
+  `function_call` item before the client's `function_call_output`. If the
+  required state was not observed, stop and return the upstream state error;
+  blindly dropping it produces `No tool call found`, while blindly sending it to
+  another channel commonly produces `previous response ... not found`.
 
 #### 4. Validation & Error Matrix
 
@@ -177,13 +179,17 @@ When adding or modifying a channel:
 - Text delta beginning with `status_code=429` plus usage-limit/rate-limit or
   previous-response-not-found details -> convert to `types.NewAPIError` with
   status `429`, process channel error, and retry when retry policy permits.
-- Retryable upstream state error with `previous_response_id` present -> do not
-  cross-channel retry; return the upstream state error to the client.
+- Retryable upstream state error with `previous_response_id` present and a
+  locally stored matching function-call item -> build a stateless replay input,
+  remove `previous_response_id`, then retry according to normal policy.
+- Retryable upstream state error with `previous_response_id` present but no
+  replayable stored state -> do not cross-channel retry; return the upstream
+  state error to the client.
 
 #### 5. Good/Base/Bad Cases
 
 - Good: `GET /v1/responses` WebSocket, first frame `{"type":"response.create","response":{"model":"gpt-5.5","input":"hi"}}`, then upstream receives a normalized `response.create` frame.
-- Good: upstream emits text `status_code=429, Previous response with id ... not found`; relay records a 429-style channel error. If there is no `previous_response_id`, normal retry policy may try another channel; if `previous_response_id` exists, relay stops instead of breaking upstream state.
+- Good: upstream emits text `status_code=429, Previous response with id ... not found`; relay records a 429-style channel error. If the request is stateless, normal retry policy may try another channel. If it carries `function_call_output + previous_response_id` and the prior function call was observed in this WebSocket session, relay prepends the stored `function_call`, removes `previous_response_id`, and retries as a stateless input.
 - Base: `POST /v1/responses` continues through the normal HTTP `ResponsesHelper` path with no WebSocket conversion.
 - Base: normal assistant text that merely mentions `HTTP 429` is not treated as
   an upstream failure unless it contains explicit upstream-error markers such as
@@ -199,8 +205,9 @@ When adding or modifying a channel:
 
 - `relay`: normalize wrapper and flat `response.create` frames, remove transport fields, build error events with status.
 - `relay`: textual 429 usage-limit / previous-response-not-found errors become
-  429 relay errors; retry is allowed only for stateless requests without
-  `previous_response_id`.
+  429 relay errors; retry is allowed for stateless requests and for stateful
+  tool-output continuations only when the proxy can replay the matching stored
+  `function_call` before removing `previous_response_id`.
 - `relay`: upstream write/control failures clear current state and release/refund the in-flight call.
 - `service`: Responses usage mapping copies input/output token details and fallback completion details.
 - `middleware`: WebSocket handshake skips the ordinary middleware quota and per-event commit records success only after a successful response.
