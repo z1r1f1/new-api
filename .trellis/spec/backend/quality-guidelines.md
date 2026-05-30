@@ -290,6 +290,11 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   session/message by stable ids, not the currently visible session. Persist the
   update through `updateStoredSessionMessages` so a route change or remount does
   not strand the assistant message in `loading`/`streaming`.
+- Streaming playground chat must register the originating assistant message as
+  an active chat message before opening the SSE request and clear that marker on
+  completion, error, or explicit stop. Session reload/sanitization may convert
+  stale `loading`/`streaming` messages to an interrupted error only when no
+  active chat marker or pending image task protects that message.
 - Streaming playground chat must keep its SSE source in module-level state rather
   than hook-instance state. Route changes unmount the playground component; if
   the SSE object is only held by the unmounted hook, the browser can close the

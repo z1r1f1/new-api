@@ -40,6 +40,8 @@ import {
   isSuccessfulImageTaskStatus,
   isTerminalImageTaskStatus,
   loadPendingImageTasks,
+  clearActivePlaygroundChatMessage,
+  markActivePlaygroundChatMessage,
   removePendingImageTask,
   updateAssistantMessageWithError,
   updateLastAssistantMessage,
@@ -383,6 +385,7 @@ export function useChatHandler({
   const handleStreamComplete = useCallback(() => {
     const task = currentChatTaskRef.current
     if (!task) return
+    clearActivePlaygroundChatMessage(task.messageKey, storageUserId)
     commitSessionMessageUpdate(task.sessionId, (prev) =>
       updateAssistantMessageByKey(prev, task.messageKey, (message) =>
         message.status === MESSAGE_STATUS.COMPLETE ||
@@ -392,7 +395,7 @@ export function useChatHandler({
       )
     )
     currentChatTaskRef.current = null
-  }, [commitSessionMessageUpdate])
+  }, [commitSessionMessageUpdate, storageUserId])
 
   // Handle stream error
   const handleStreamError = useCallback(
@@ -400,6 +403,7 @@ export function useChatHandler({
       const task = currentChatTaskRef.current
       toast.error(error)
       if (task) {
+        clearActivePlaygroundChatMessage(task.messageKey, storageUserId)
         commitSessionMessageUpdate(task.sessionId, (prev) =>
           updateAssistantMessageByKey(prev, task.messageKey, (message) =>
             applyErrorToAssistantMessage(message, error, errorCode)
@@ -412,7 +416,7 @@ export function useChatHandler({
         updateAssistantMessageWithError(prev, error, errorCode)
       )
     },
-    [commitActiveMessageUpdate, commitSessionMessageUpdate]
+    [commitActiveMessageUpdate, commitSessionMessageUpdate, storageUserId]
   )
 
   const handleImageGenerationError = useCallback(
@@ -439,7 +443,14 @@ export function useChatHandler({
       const debugId = createPlaygroundDebugId()
       const sessionId = activeSessionId
       const messageKey = getLastAssistantMessageKey(messages)
+      if (currentChatTaskRef.current?.messageKey) {
+        clearActivePlaygroundChatMessage(
+          currentChatTaskRef.current.messageKey,
+          storageUserId
+        )
+      }
       currentChatTaskRef.current = { sessionId, messageKey }
+      markActivePlaygroundChatMessage(messageKey, storageUserId)
       startDebugRequest(payload, true)
       sendStreamRequest(
         payload,
@@ -468,6 +479,7 @@ export function useChatHandler({
       handleStreamError,
       appendDebugSseMessage,
       updateDebugUpstreamRequest,
+      storageUserId,
     ]
   )
 
@@ -1057,6 +1069,9 @@ export function useChatHandler({
     stopStream()
     const chatTask = currentChatTaskRef.current
     currentChatTaskRef.current = null
+    if (chatTask?.messageKey) {
+      clearActivePlaygroundChatMessage(chatTask.messageKey, storageUserId)
+    }
     onDebugUpdate((prev) => ({
       ...prev,
       response:

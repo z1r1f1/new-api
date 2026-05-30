@@ -6,11 +6,13 @@ import type {
   PlaygroundSession,
 } from '../types'
 import {
+  clearActivePlaygroundChatMessage,
   clearPlaygroundData,
   loadConfig,
   loadMessages,
   loadPendingImageTasks,
   loadSessionState,
+  markActivePlaygroundChatMessage,
   saveActiveSessionId,
   saveConfig,
   saveMessages,
@@ -75,6 +77,19 @@ function message(key: string, content: string): Message {
   }
 }
 
+function assistantMessage(
+  key: string,
+  content: string,
+  status: Message['status']
+): Message {
+  return {
+    key,
+    from: 'assistant',
+    versions: [{ id: `${key}-v1`, content }],
+    status,
+  }
+}
+
 function pendingTask(
   taskId: string,
   sessionId: string
@@ -91,6 +106,8 @@ function pendingTask(
 
 beforeEach(() => {
   localStorage.clear()
+  clearActivePlaygroundChatMessage('active-chat-message', 1)
+  clearActivePlaygroundChatMessage('stale-chat-message', 1)
 })
 
 describe('playground storage user scope', () => {
@@ -171,6 +188,62 @@ describe('playground storage user scope', () => {
     assert.equal(result.activeSessionId, 'active-session')
     assert.equal(backgroundSession?.messages[0]?.versions[0]?.content, 'new')
     assert.equal(loadMessages(1)?.[0]?.versions[0]?.content, 'active')
+  })
+
+  test('preserves active streaming chat messages during durable storage reloads', () => {
+    saveSessions(
+      [
+        session('active-session', 'Active', [
+          assistantMessage('active-chat-message', '', 'loading'),
+        ]),
+      ],
+      1
+    )
+    saveActiveSessionId('active-session', 1)
+
+    markActivePlaygroundChatMessage('active-chat-message', 1)
+
+    const reloaded = loadSessionState(1)
+    assert.equal(reloaded.sessions[0].messages[0].status, 'loading')
+    assert.equal(reloaded.sessions[0].messages[0].versions[0].content, '')
+
+    const result = updateStoredSessionMessages(
+      'active-session',
+      (messages) =>
+        messages.map((item) =>
+          item.key === 'active-chat-message'
+            ? {
+                ...item,
+                versions: [{ ...item.versions[0], content: 'streamed text' }],
+                status: 'streaming',
+              }
+            : item
+        ),
+      1
+    )
+
+    assert.equal(result.messages?.[0]?.status, 'streaming')
+    assert.equal(result.messages?.[0]?.versions[0]?.content, 'streamed text')
+  })
+
+  test('sanitizes stale streaming chat messages without an active stream marker', () => {
+    saveSessions(
+      [
+        session('active-session', 'Active', [
+          assistantMessage('stale-chat-message', '', 'loading'),
+        ]),
+      ],
+      1
+    )
+    saveActiveSessionId('active-session', 1)
+
+    const reloaded = loadSessionState(1)
+
+    assert.equal(reloaded.sessions[0].messages[0].status, 'error')
+    assert.match(
+      reloaded.sessions[0].messages[0].versions[0].content,
+      /Generation was interrupted/
+    )
   })
 
   test('clears only the selected user scope', () => {

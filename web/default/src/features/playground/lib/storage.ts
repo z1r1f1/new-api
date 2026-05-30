@@ -48,6 +48,8 @@ const maxStoredSessions = 30
 export const PLAYGROUND_SESSION_MESSAGES_UPDATED_EVENT =
   'playground:session-messages-updated'
 
+const activePlaygroundChatMessageKeys = new Map<string, Set<string>>()
+
 function parseJSON(value: string | null): unknown {
   if (!value) return null
   return JSON.parse(value)
@@ -79,6 +81,45 @@ export function getPlaygroundStorageScopeKey(
   scope?: PlaygroundStorageScope
 ): string {
   return normalizeStorageScope(scope) ?? 'legacy'
+}
+
+function getActiveChatMessageKeySet(
+  scope?: PlaygroundStorageScope
+): Set<string> {
+  const scopeKey = getPlaygroundStorageScopeKey(scope)
+  let messageKeys = activePlaygroundChatMessageKeys.get(scopeKey)
+  if (!messageKeys) {
+    messageKeys = new Set<string>()
+    activePlaygroundChatMessageKeys.set(scopeKey, messageKeys)
+  }
+  return messageKeys
+}
+
+export function markActivePlaygroundChatMessage(
+  messageKey: string,
+  scope?: PlaygroundStorageScope
+): void {
+  const trimmedMessageKey = messageKey.trim()
+  if (!trimmedMessageKey) return
+
+  getActiveChatMessageKeySet(scope).add(trimmedMessageKey)
+}
+
+export function clearActivePlaygroundChatMessage(
+  messageKey: string,
+  scope?: PlaygroundStorageScope
+): void {
+  const trimmedMessageKey = messageKey.trim()
+  if (!trimmedMessageKey) return
+
+  const scopeKey = getPlaygroundStorageScopeKey(scope)
+  const messageKeys = activePlaygroundChatMessageKeys.get(scopeKey)
+  if (!messageKeys) return
+
+  messageKeys.delete(trimmedMessageKey)
+  if (messageKeys.size === 0) {
+    activePlaygroundChatMessageKeys.delete(scopeKey)
+  }
 }
 
 function emitSessionMessagesUpdated(
@@ -175,8 +216,14 @@ export function buildSessionTitle(messages: Message[]): string {
   return content.length > 28 ? `${content.slice(0, 28)}...` : content
 }
 
-function loadPendingImageMessageKeys(scope?: PlaygroundStorageScope): string[] {
-  return loadPendingImageTasks(scope).map((task) => task.messageKey)
+function loadPendingMessageKeys(scope?: PlaygroundStorageScope): string[] {
+  const activeChatMessageKeys = Array.from(
+    activePlaygroundChatMessageKeys.get(getPlaygroundStorageScopeKey(scope)) ||
+      []
+  )
+  return loadPendingImageTasks(scope)
+    .map((task) => task.messageKey)
+    .concat(activeChatMessageKeys)
 }
 
 function normalizeSession(
@@ -185,7 +232,7 @@ function normalizeSession(
 ): PlaygroundSession | null {
   if (!isRecord(value)) return null
 
-  const pendingMessageKeys = loadPendingImageMessageKeys(scope)
+  const pendingMessageKeys = loadPendingMessageKeys(scope)
   const messages = Array.isArray(value.messages)
     ? sanitizeMessagesOnLoad(value.messages as Message[], pendingMessageKeys)
     : []
@@ -666,7 +713,7 @@ export function loadMessages(scope?: PlaygroundStorageScope): Message[] | null {
       }
       const sanitized = sanitizeMessagesOnLoad(
         messages as Message[],
-        loadPendingImageMessageKeys(scope)
+        loadPendingMessageKeys(scope)
       )
       // Persist sanitized result to avoid re-sanitizing legacy shapes on subsequent loads
       saveMessages(sanitized, scope)
