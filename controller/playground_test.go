@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/gin-gonic/gin"
 )
 
@@ -47,5 +49,33 @@ func TestServePlaygroundImageItemPrefersB64JSONOverURL(t *testing.T) {
 	}
 	if recorder.Body.String() != string(raw) {
 		t.Fatalf("unexpected body bytes: %#v", recorder.Body.Bytes())
+	}
+}
+
+func TestPlaygroundDebugMissIsNotHTTPError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Set("id", 42)
+	c.Params = gin.Params{{Key: "debug_id", Value: "missing-debug-id"}}
+
+	PlaygroundDebug(c)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for uncaptured debug data, got %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	var body struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	if err := common.Unmarshal(recorder.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	if body.Success {
+		t.Fatalf("expected success=false for uncaptured debug data, body=%s", recorder.Body.String())
+	}
+	if !strings.Contains(body.Message, "not found") {
+		t.Fatalf("expected not found message, got %q", body.Message)
 	}
 }

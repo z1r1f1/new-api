@@ -283,6 +283,83 @@ HTTP status usage is mixed by API family:
 
 When adding a new endpoint, match the response shape of adjacent endpoints in the same controller file.
 
+### Scenario: Playground debug capture polling
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `controller.PlaygroundDebug`,
+  `service/playground_debug.go`, `/pg/debug/:debug_id`, or the default
+  frontend code that polls playground upstream-request debug data.
+- This is a cross-layer diagnostic side channel: the primary relay request may
+  succeed even when debug data has not been captured yet.
+
+#### 2. Signatures
+
+- Route: `GET /pg/debug/:debug_id`
+- Header used by the primary request: `X-Playground-Debug-Id`
+- Handler: `controller.PlaygroundDebug(c *gin.Context)`
+- Store lookup: `service.GetPlaygroundUpstreamRequestDebug(userID int, debugID string)`
+
+#### 3. Contracts
+
+- Invalid or missing `debug_id` remains an HTTP `400` with
+  `{"success": false, "message": "invalid debug id"}`.
+- A valid `debug_id` with no captured upstream request is a normal polling
+  miss, not an HTTP/network failure. Return HTTP `200` with
+  `{"success": false, "message": "debug data not found"}`.
+- Captured debug data returns HTTP `200` with
+  `{"success": true, "data": {"upstream_request": ..., "body_bytes": ..., "body_truncated": ..., "captured_at": ...}}`.
+- Frontend callers that poll this endpoint must suppress global business-error
+  handling for `success:false` misses.
+
+#### 4. Validation & Error Matrix
+
+- Malformed id such as `bad/id` -> HTTP `400`, no store lookup.
+- Valid id but capture has not happened, expired, or provider path does not
+  support capture -> HTTP `200`, `success:false`.
+- Valid id with stored capture for the authenticated user -> HTTP `200`,
+  `success:true`, debug payload.
+- Valid id stored for a different user -> HTTP `200`, `success:false`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: a streaming playground chat can poll `/pg/debug/:debug_id` while SSE is
+  still opening without producing browser 404 console errors.
+- Base: relay chat/image responses continue to use their OpenAI-compatible
+  status and body shapes.
+- Bad: returning HTTP `404` for an uncaptured debug record; browsers report the
+  expected polling miss as a network error and the frontend may retry loudly.
+- Bad: showing toast errors for `success:false` debug polling misses.
+
+#### 6. Tests Required
+
+- `controller`: regression test that a valid uncaptured `debug_id` returns HTTP
+  `200` with `success:false`.
+- `service`: keep normalization, per-user storage, expiry, and data-url
+  redaction tests passing.
+- `web/default`: type-check any frontend polling changes and lint the touched
+  file when the full repository lint has unrelated existing failures.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+c.JSON(http.StatusNotFound, gin.H{
+    "success": false,
+    "message": "debug data not found",
+})
+```
+
+Correct:
+
+```go
+c.JSON(http.StatusOK, gin.H{
+    "success": false,
+    "message": "debug data not found",
+})
+```
+
 ---
 
 ## Middleware Abort Patterns

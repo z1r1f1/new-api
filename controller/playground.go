@@ -53,7 +53,7 @@ func PlaygroundDebug(c *gin.Context) {
 	}
 	debug, ok := service.GetPlaygroundUpstreamRequestDebug(c.GetInt("id"), debugID)
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
+		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "debug data not found",
 		})

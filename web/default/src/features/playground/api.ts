@@ -62,6 +62,7 @@ export async function getPlaygroundUpstreamRequest(
   const res = await api
     .get(`/pg/debug/${encodeURIComponent(debugId)}`, {
       disableDuplicate: true,
+      skipBusinessError: true,
       skipErrorHandler: true,
     } as Record<string, unknown>)
     .catch(() => null)
