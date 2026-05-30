@@ -244,6 +244,72 @@ func TestResponsesWSUsageLimitTextError(t *testing.T) {
 	}
 }
 
+func TestResponsesWSTextualPreviousResponseNotFoundErrorUses429(t *testing.T) {
+	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
+	if apiErr == nil {
+		t.Fatal("apiErr is nil")
+	}
+	if apiErr.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusTooManyRequests)
+	}
+	if !strings.Contains(apiErr.Error(), "Previous response") {
+		t.Fatalf("error should include upstream detail, got %q", apiErr.Error())
+	}
+}
+
+func TestResponsesWSTextualErrorDoesNotTreatPlain429MentionAsFailure(t *testing.T) {
+	if apiErr := newResponsesWSTextualUpstreamError("HTTP 429 is a numeric status code in many APIs."); apiErr != nil {
+		t.Fatalf("plain explanatory 429 text should not be treated as upstream failure: %v", apiErr)
+	}
+}
+
+func TestPrepareResponsesWSRetryCreateDropsPreviousResponseIDForStateError(t *testing.T) {
+	create := responsesWSCreateRequest{
+		Request: dto.OpenAIResponsesRequest{
+			Model:              "gpt-5.5",
+			PreviousResponseID: "resp_123",
+		},
+		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":"hi"}`),
+	}
+	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
+
+	got := prepareResponsesWSRetryCreate(create, apiErr)
+
+	if got.Request.PreviousResponseID != "" {
+		t.Fatalf("PreviousResponseID = %q, want empty", got.Request.PreviousResponseID)
+	}
+	var raw map[string]any
+	if err := common.Unmarshal(got.Raw, &raw); err != nil {
+		t.Fatalf("unmarshal raw: %v", err)
+	}
+	if _, ok := raw["previous_response_id"]; ok {
+		t.Fatalf("previous_response_id should be removed from raw retry payload: %s", got.Raw)
+	}
+	if raw["model"] != "gpt-5.5" || raw["input"] != "hi" {
+		t.Fatalf("retry payload should preserve other fields: %s", got.Raw)
+	}
+}
+
+func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForNonStateError(t *testing.T) {
+	create := responsesWSCreateRequest{
+		Request: dto.OpenAIResponsesRequest{
+			Model:              "gpt-5.5",
+			PreviousResponseID: "resp_123",
+		},
+		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":"hi"}`),
+	}
+	apiErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
+
+	got := prepareResponsesWSRetryCreate(create, apiErr)
+
+	if got.Request.PreviousResponseID != "resp_123" {
+		t.Fatalf("PreviousResponseID = %q, want resp_123", got.Request.PreviousResponseID)
+	}
+	if !strings.Contains(string(got.Raw), "previous_response_id") {
+		t.Fatalf("previous_response_id should remain in raw retry payload: %s", got.Raw)
+	}
+}
+
 func TestResponsesWSInvalidRequestErrorUsesBadRequestStatus(t *testing.T) {
 	payload, err := buildResponsesWSErrorPayload("", newResponsesWSInvalidRequestError(errors.New("bad event")))
 	if err != nil {

@@ -157,6 +157,15 @@ When adding or modifying a channel:
 - Before forwarding upstream, normalize the payload to an upstream `response.create` event and remove transport-only fields such as `event_id`, `stream`, `stream_options`, and `background`.
 - Preserve provider adapter conversion, model mapping, disabled-field removal, parameter override, affinity debug, quota pre-consume, and final usage settlement.
 - Model request rate limiting for WebSocket must be checked per `response.create`; the handshake itself must not consume the model request quota.
+- Upstream Responses WebSocket state errors that arrive as either terminal
+  events or early assistant text are relay errors, not successful assistant
+  content. This includes usage-limit/rate-limit text and
+  `status_code=429, Previous response with id ... not found`.
+- When retrying a Responses WebSocket call after a retryable upstream state
+  error, remove `previous_response_id` from both the parsed request and the raw
+  retry payload. That ID is bound to one upstream account/conversation; sending
+  it to a fallback channel commonly returns another `previous response ... not
+  found` instead of switching successfully.
 
 #### 4. Validation & Error Matrix
 
@@ -165,16 +174,30 @@ When adding or modifying a channel:
 - Missing `model` in `response.create` -> send WebSocket `error` event with status `400`.
 - New `response.create` while another response is in progress -> send/return conflict status `409`.
 - Unsupported channel type for Responses WebSocket -> fail the selected channel attempt and retry according to normal relay retry policy.
+- Text delta beginning with `status_code=429` plus usage-limit/rate-limit or
+  previous-response-not-found details -> convert to `types.NewAPIError` with
+  status `429`, process channel error, and retry when retry policy permits.
+- Retryable upstream state error with `previous_response_id` present -> retry
+  payload must omit `previous_response_id`; non-state upstream failures keep it.
 
 #### 5. Good/Base/Bad Cases
 
 - Good: `GET /v1/responses` WebSocket, first frame `{"type":"response.create","response":{"model":"gpt-5.5","input":"hi"}}`, then upstream receives a normalized `response.create` frame.
+- Good: upstream emits text `status_code=429, Previous response with id ... not found`; relay records a 429-style channel error and retries without `previous_response_id`.
 - Base: `POST /v1/responses` continues through the normal HTTP `ResponsesHelper` path with no WebSocket conversion.
+- Base: normal assistant text that merely mentions `HTTP 429` is not treated as
+  an upstream failure unless it contains explicit upstream-error markers such as
+  `status_code=429`, usage-limit/rate-limit text, or previous-response-not-found.
 - Bad: `POST /v1/responses` with a normal HTTP JSON body is rewritten to `wss://...` and sent as a raw text frame; this causes upstream protocol/parsing failures and must not be reintroduced.
+- Bad: retrying a fallback channel with the original `previous_response_id`;
+  the fallback channel cannot resolve another upstream account's response ID.
 
 #### 6. Tests Required
 
 - `relay`: normalize wrapper and flat `response.create` frames, remove transport fields, build error events with status.
+- `relay`: textual 429 usage-limit / previous-response-not-found errors become
+  retryable 429 errors, and retry payloads drop `previous_response_id` only for
+  retryable upstream state errors.
 - `relay`: upstream write/control failures clear current state and release/refund the in-flight call.
 - `service`: Responses usage mapping copies input/output token details and fallback completion details.
 - `middleware`: WebSocket handshake skips the ordinary middleware quota and per-event commit records success only after a successful response.

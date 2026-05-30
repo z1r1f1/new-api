@@ -650,12 +650,9 @@ func (s *responsesWSSession) observeUpstreamMessage(message []byte) (bool, bool)
 		apiErr := newResponsesWSUpstreamAPIError(streamResponse, message)
 		return s.handleTerminalUpstreamError(state, apiErr)
 	case "response.output_text.delta":
-		previousLen := state.outputText.Len()
 		state.outputText.WriteString(streamResponse.Delta)
-		if previousLen == 0 {
-			if apiErr := newResponsesWSUsageLimitTextError(state.outputText.String()); apiErr != nil {
-				return s.handleTerminalUpstreamError(state, apiErr)
-			}
+		if apiErr := newResponsesWSTextualUpstreamError(state.outputText.String()); apiErr != nil {
+			return s.handleTerminalUpstreamError(state, apiErr)
 		}
 	case dto.ResponsesOutputTypeItemDone:
 		if streamResponse.Item != nil && streamResponse.Item.Type == dto.BuildInCallWebSearchCall {
@@ -685,10 +682,11 @@ func (s *responsesWSSession) handleTerminalUpstreamError(state *responsesWSCallS
 
 	processedErr, shouldRetry := s.processChannelError(s.lockedChannel, apiErr, retryParam)
 	if shouldRetry && s.canRetryTerminalUpstreamError(state, apiErr) {
+		retryCreate := prepareResponsesWSRetryCreate(state.create, apiErr)
 		s.finishCall(state, false)
 		s.closeTarget()
 		retryParam.IncreaseRetry()
-		if retryErr := s.connectAndSendWithRetry(state.create, state.commitRate, retryParam); retryErr == nil {
+		if retryErr := s.connectAndSendWithRetry(retryCreate, state.commitRate, retryParam); retryErr == nil {
 			return false, false
 		} else {
 			processedErr = retryErr
@@ -717,7 +715,7 @@ func (s *responsesWSSession) canRetryTerminalUpstreamError(state *responsesWSCal
 	if state.outputText.Len() == 0 {
 		return true
 	}
-	return isResponsesWSUsageLimitError(apiErr)
+	return isRetryableResponsesWSUpstreamStateError(apiErr)
 }
 
 func newResponsesWSUpstreamAPIError(streamResp dto.ResponsesStreamResponse, message []byte) *types.NewAPIError {
@@ -740,15 +738,90 @@ func newResponsesWSUpstreamAPIError(streamResp dto.ResponsesStreamResponse, mess
 	return types.WithOpenAIError(*oaiErr, statusCode)
 }
 
-func newResponsesWSUsageLimitTextError(text string) *types.NewAPIError {
-	if !looksLikeResponsesWSUsageLimit(text) {
+func newResponsesWSTextualUpstreamError(text string) *types.NewAPIError {
+	text = strings.TrimSpace(text)
+	if !looksLikeRetryableResponsesWSTextError(text) {
 		return nil
 	}
 	return types.NewOpenAIError(
-		errors.New(common.MaskSensitiveInfo(strings.TrimSpace(text))),
+		errors.New(common.MaskSensitiveInfo(text)),
 		types.ErrorCodeBadResponseStatusCode,
 		http.StatusTooManyRequests,
 	)
+}
+
+func newResponsesWSUsageLimitTextError(text string) *types.NewAPIError {
+	return newResponsesWSTextualUpstreamError(text)
+}
+
+func isRetryableResponsesWSUpstreamStateError(apiErr *types.NewAPIError) bool {
+	if isResponsesWSUsageLimitError(apiErr) {
+		return true
+	}
+	return isResponsesWSPreviousResponseNotFoundError(apiErr)
+}
+
+func isResponsesWSPreviousResponseNotFoundError(apiErr *types.NewAPIError) bool {
+	if apiErr == nil {
+		return false
+	}
+	return looksLikeResponsesWSPreviousResponseNotFound(apiErr.Error())
+}
+
+func looksLikeRetryableResponsesWSTextError(text string) bool {
+	return looksLikeResponsesWSTextUsageLimit(text) || looksLikeResponsesWSPreviousResponseNotFound(text)
+}
+
+func looksLikeResponsesWSTextUsageLimit(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "you've hit your usage limit") ||
+		strings.Contains(lower, "you have hit your usage limit") ||
+		strings.Contains(lower, "usage limit") ||
+		strings.Contains(lower, "rate limit") ||
+		strings.Contains(lower, "too many requests") ||
+		strings.Contains(lower, "status_code=429") ||
+		strings.Contains(lower, "status_code:429") ||
+		strings.Contains(lower, "status_code: 429") ||
+		strings.Contains(lower, "status code=429") ||
+		strings.Contains(lower, "status code:429") ||
+		strings.Contains(lower, "status code: 429")
+}
+
+func looksLikeResponsesWSPreviousResponseNotFound(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	return strings.Contains(lower, "previous response") &&
+		strings.Contains(lower, "not found") &&
+		(strings.Contains(lower, "429") || strings.Contains(lower, "status_code"))
+}
+
+func prepareResponsesWSRetryCreate(create responsesWSCreateRequest, apiErr *types.NewAPIError) responsesWSCreateRequest {
+	if !shouldDropResponsesWSPreviousResponseIDForRetry(create, apiErr) {
+		return create
+	}
+	create.Request.PreviousResponseID = ""
+	if len(create.Raw) > 0 {
+		var raw map[string]json.RawMessage
+		if common.Unmarshal(create.Raw, &raw) == nil {
+			delete(raw, "previous_response_id")
+			if nextRaw, err := common.Marshal(raw); err == nil {
+				create.Raw = nextRaw
+			}
+		}
+	}
+	return create
+}
+
+func shouldDropResponsesWSPreviousResponseIDForRetry(create responsesWSCreateRequest, apiErr *types.NewAPIError) bool {
+	if strings.TrimSpace(create.Request.PreviousResponseID) == "" {
+		return false
+	}
+	return isRetryableResponsesWSUpstreamStateError(apiErr)
 }
 
 func extractResponsesWSUpstreamOpenAIError(streamResp dto.ResponsesStreamResponse, message []byte) (*types.OpenAIError, bool) {
