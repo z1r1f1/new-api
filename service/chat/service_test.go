@@ -331,6 +331,43 @@ func TestServiceUnreadCountOnDefaultGroupResponse(t *testing.T) {
 	assert.Equal(t, 0, bobConversations[0].UnreadCount)
 }
 
+func TestServiceGroupReadReceiptsAndUnreadIncrement(t *testing.T) {
+	setupChatServiceTestDB(t)
+	seedChatServiceUser(t, 1, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 2, "bob", "Bob", common.RoleCommonUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 3, "carol", "Carol", common.RoleCommonUser, common.UserStatusEnabled)
+
+	svc := NewService(&fakePublisher{})
+	conversations, err := svc.ListConversations(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, conversations, 1)
+	defaultGroupID := conversations[0].Id
+
+	first, err := svc.SendMessage(context.Background(), 1, defaultGroupID, "first", "client-first")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{1}, userSummaryIDs(first.ReadBy))
+
+	require.NoError(t, svc.MarkRead(context.Background(), 2, defaultGroupID, first.Id))
+	messages, err := svc.ListMessages(context.Background(), 1, defaultGroupID, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.ElementsMatch(t, []int{1, 2}, userSummaryIDs(messages[0].ReadBy))
+
+	second, err := svc.SendMessage(context.Background(), 1, defaultGroupID, "second", "client-second")
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []int{1}, userSummaryIDs(second.ReadBy))
+
+	bobConversations, err := svc.ListConversations(context.Background(), 2)
+	require.NoError(t, err)
+	require.Len(t, bobConversations, 1)
+	assert.Equal(t, 1, bobConversations[0].UnreadCount)
+
+	carolConversations, err := svc.ListConversations(context.Background(), 3)
+	require.NoError(t, err)
+	require.Len(t, carolConversations, 1)
+	assert.Equal(t, 2, carolConversations[0].UnreadCount)
+}
+
 func TestServiceGroupMemberManagementRequiresOwner(t *testing.T) {
 	setupChatServiceTestDB(t)
 
@@ -361,4 +398,12 @@ func TestServiceRejectsMemberManagementOnDirectConversation(t *testing.T) {
 
 	require.ErrorIs(t, svc.AddMember(context.Background(), 1, conv.Id, 3), ErrInvalidRequest)
 	require.ErrorIs(t, svc.RemoveMember(context.Background(), 1, conv.Id, 2), ErrInvalidRequest)
+}
+
+func userSummaryIDs(users []*UserSummary) []int {
+	ids := make([]int, 0, len(users))
+	for _, user := range users {
+		ids = append(ids, user.Id)
+	}
+	return ids
 }

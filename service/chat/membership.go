@@ -7,22 +7,15 @@ func (service *Service) refreshReadStatesAfterMessage(conversationID int, sender
 	if err != nil {
 		return err
 	}
+	recipientIDs := make([]int, 0, len(members))
 	for _, member := range members {
-		lastReadMessageID := 0
 		if member.UserId == senderID {
-			lastReadMessageID = messageID
-		} else {
-			state, err := model.GetChatReadState(conversationID, member.UserId)
-			if err != nil {
-				return err
-			}
-			if state != nil {
-				lastReadMessageID = state.LastReadMessageId
-			}
+			continue
 		}
-		if err := model.UpsertChatReadState(conversationID, member.UserId, lastReadMessageID); err != nil {
-			return err
-		}
+		recipientIDs = append(recipientIDs, member.UserId)
 	}
-	return nil
+	if err := model.SetChatReadState(conversationID, senderID, messageID, 0); err != nil {
+		return err
+	}
+	return model.IncrementChatUnreadStates(conversationID, recipientIDs)
 }

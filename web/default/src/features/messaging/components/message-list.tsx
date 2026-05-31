@@ -17,7 +17,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useRef } from 'react'
-import { CheckCheck, Clock3, Copy, Loader2, MessageCircle } from 'lucide-react'
+import {
+  Check,
+  CheckCheck,
+  Clock3,
+  Copy,
+  Loader2,
+  MessageCircle,
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -188,6 +195,7 @@ function MessageBubble(props: MessageBubbleProps) {
     props.conversation,
     props.currentUserId
   )
+  const readLabelText = readLabel === 'read' ? t('Read') : t('Unread')
 
   const handleCopy = (): void => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) return
@@ -240,23 +248,37 @@ function MessageBubble(props: MessageBubbleProps) {
             {props.message.body}
           </div>
         </div>
-        <div className='flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100'>
+        <div
+          className={cn(
+            'flex items-center gap-2 px-1 text-[11px]',
+            props.mine ? 'justify-end' : 'justify-start'
+          )}
+        >
+          <span
+            className={cn(
+              'flex items-center gap-1',
+              readLabel === 'read'
+                ? 'text-emerald-600 dark:text-emerald-400'
+                : 'text-muted-foreground'
+            )}
+          >
+            {readLabel === 'read' ? (
+              <CheckCheck className='h-3.5 w-3.5' />
+            ) : (
+              <Check className='h-3.5 w-3.5' />
+            )}
+            {readLabelText}
+          </span>
           <Button
             type='button'
             variant='ghost'
             size='sm'
-            className='h-7 gap-1 px-2 text-xs'
+            className='h-7 gap-1 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100'
             onClick={handleCopy}
           >
             <Copy className='h-3.5 w-3.5' />
             {t('Copy')}
           </Button>
-          {props.mine && (
-            <span className='text-muted-foreground flex items-center gap-1 px-1 text-[11px]'>
-              <CheckCheck className='h-3.5 w-3.5' />
-              {readLabel === 'read' ? t('Read') : t('Unread')}
-            </span>
-          )}
         </div>
       </div>
     </div>

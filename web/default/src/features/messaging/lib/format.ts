@@ -156,7 +156,11 @@ export function getMessageReadLabel(
   conversation: ChatConversation | null,
   currentUserId: number | null
 ): 'read' | 'unread' {
-  if (!currentUserId || message.sender_id !== currentUserId) return 'read'
+  if (!currentUserId) return 'unread'
+  if (message.sender_id !== currentUserId) {
+    if (!conversation) return 'unread'
+    return conversation.last_read_message_id >= message.id ? 'read' : 'unread'
+  }
   if (!conversation) return 'unread'
   const otherMembers = conversation.members.filter(
     (member) => member.id !== currentUserId

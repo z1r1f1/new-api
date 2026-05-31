@@ -78,12 +78,26 @@ func (service *Service) decorateConversation(conversation *model.ChatConversatio
 
 func (service *Service) decorateMessages(messages []*model.ChatMessage) ([]*MessageResponse, error) {
 	responses := make([]*MessageResponse, 0, len(messages))
+	if len(messages) == 0 {
+		return responses, nil
+	}
+	contexts := make(map[int]*messageDecorationContext)
+	messagesByConversation := make(map[int][]*model.ChatMessage)
 	for _, message := range messages {
-		response, err := service.decorateMessage(message)
+		if message == nil {
+			return nil, ErrInvalidRequest
+		}
+		messagesByConversation[message.ConversationId] = append(messagesByConversation[message.ConversationId], message)
+	}
+	for conversationID, conversationMessages := range messagesByConversation {
+		decoration, err := newMessageDecorationContext(conversationID, conversationMessages)
 		if err != nil {
 			return nil, err
 		}
-		responses = append(responses, response)
+		contexts[conversationID] = decoration
+	}
+	for _, message := range messages {
+		responses = append(responses, decorateMessageWithContext(message, contexts[message.ConversationId]))
 	}
 	return responses, nil
 }
@@ -92,34 +106,59 @@ func (service *Service) decorateMessage(message *model.ChatMessage) (*MessageRes
 	if message == nil {
 		return nil, ErrInvalidRequest
 	}
-	memberIDs, err := model.ConversationMemberIDsForChat(message.ConversationId)
+	decoration, err := newMessageDecorationContext(message.ConversationId, []*model.ChatMessage{message})
 	if err != nil {
 		return nil, err
 	}
-	if !containsPositiveID(memberIDs, message.SenderId) {
-		memberIDs = append(memberIDs, message.SenderId)
+	return decorateMessageWithContext(message, decoration), nil
+}
+
+type messageDecorationContext struct {
+	memberIDs         []int
+	userByID          map[int]*UserSummary
+	readStateByUserID map[int]*model.ChatReadState
+}
+
+func newMessageDecorationContext(conversationID int, messages []*model.ChatMessage) (*messageDecorationContext, error) {
+	memberIDs, err := model.ConversationMemberIDsForChat(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	for _, message := range messages {
+		if message != nil && !containsPositiveID(memberIDs, message.SenderId) {
+			memberIDs = append(memberIDs, message.SenderId)
+		}
 	}
 	users, err := model.ListChatUsersByIDs(memberIDs)
 	if err != nil {
 		return nil, err
 	}
 	userByID := toUserSummaryMap(users)
-	readBy := make([]*UserSummary, 0, len(memberIDs))
-	for _, memberID := range memberIDs {
-		state, err := model.GetChatReadState(message.ConversationId, memberID)
-		if err != nil {
-			return nil, err
-		}
+	readStateByUserID, err := model.ListChatReadStatesForConversation(conversationID)
+	if err != nil {
+		return nil, err
+	}
+	return &messageDecorationContext{
+		memberIDs:         memberIDs,
+		userByID:          userByID,
+		readStateByUserID: readStateByUserID,
+	}, nil
+}
+
+func decorateMessageWithContext(message *model.ChatMessage, decoration *messageDecorationContext) *MessageResponse {
+	readBy := make([]*UserSummary, 0, len(decoration.memberIDs))
+	for _, memberID := range decoration.memberIDs {
+		state := decoration.readStateByUserID[memberID]
 		if state == nil || state.LastReadMessageId < message.Id {
 			continue
 		}
-		user := userByID[memberID]
+		user := decoration.userByID[memberID]
 		if user != nil {
 			readBy = append(readBy, user)
 		}
 	}
 
-	sender := userByID[message.SenderId]
+	sender := decoration.userByID[message.SenderId]
 	senderUsername := ""
 	senderDisplayName := ""
 	if sender != nil {
@@ -139,7 +178,7 @@ func (service *Service) decorateMessage(message *model.ChatMessage) (*MessageRes
 		CreatedAt:         message.CreatedAt,
 		UpdatedAt:         message.UpdatedAt,
 		ReadBy:            readBy,
-	}, nil
+	}
 }
 
 func (service *Service) requireDirectConversationAllowed(currentUserID int, peerUserID int) error {
