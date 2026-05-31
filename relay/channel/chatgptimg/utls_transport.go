@@ -24,7 +24,7 @@ var forceH1 = true
 
 func NewUTLSTransport(proxyURL string, idleTimeout time.Duration) (http.RoundTripper, error) {
 	if idleTimeout <= 0 {
-		idleTimeout = 30 * time.Second
+		idleTimeout = 90 * time.Second
 	}
 	rt := &utlsRoundTripper{
 		dialer:      &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second},
@@ -45,12 +45,16 @@ func NewUTLSTransport(proxyURL string, idleTimeout time.Duration) (http.RoundTri
 		}
 	}
 	rt.h1 = &http.Transport{
-		DialTLSContext:        rt.dialTLS,
-		MaxIdleConnsPerHost:   4,
-		IdleConnTimeout:       idleTimeout,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-		ForceAttemptHTTP2:     false,
+		DialTLSContext:           rt.dialTLS,
+		MaxIdleConns:             100,
+		MaxIdleConnsPerHost:      16,
+		MaxConnsPerHost:          32,
+		IdleConnTimeout:          idleTimeout,
+		TLSHandshakeTimeout:      15 * time.Second,
+		ExpectContinueTimeout:    1 * time.Second,
+		ResponseHeaderTimeout:    30 * time.Second,
+		ForceAttemptHTTP2:        false,
+		DisableKeepAlives:        false,
 	}
 	rt.h2 = &http2.Transport{
 		DialTLSContext: func(ctx context.Context, network, addr string, cfg *tls.Config) (net.Conn, error) {

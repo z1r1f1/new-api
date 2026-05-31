@@ -19,6 +19,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -57,6 +58,12 @@ type ClientOptions struct {
 type Client struct {
 	opts ClientOptions
 	hc   *http.Client
+
+	reqMu          sync.RWMutex
+	cachedReqToken string
+	cachedPersona  string
+	cachedProof    string
+	reqExpiresAt   time.Time
 }
 
 func NewClient(opt ClientOptions) (*Client, error) {
@@ -554,6 +561,8 @@ func firstInt(ps ...*int) *int {
 	return nil
 }
 
+const chatRequirementsCacheTTL = 5 * time.Minute
+
 type ChatRequirementsResp struct {
 	Token       string `json:"token"`
 	Persona     string `json:"persona"`
@@ -585,6 +594,39 @@ func (c *Client) Bootstrap(ctx context.Context) error {
 		return &UpstreamError{Status: res.StatusCode, Message: "bootstrap failed"}
 	}
 	return nil
+}
+
+func (c *Client) cachedRequirements() (*ChatRequirementsResp, bool) {
+	c.reqMu.RLock()
+	defer c.reqMu.RUnlock()
+	if c.cachedReqToken == "" || time.Now().After(c.reqExpiresAt) {
+		return nil, false
+	}
+	return &ChatRequirementsResp{
+		Token:   c.cachedReqToken,
+		Persona: c.cachedPersona,
+		Proofofwork: struct {
+			Required   bool   `json:"required"`
+			Seed       string `json:"seed"`
+			Difficulty string `json:"difficulty"`
+		}{Required: c.cachedProof != ""},
+		ProofToken: c.cachedProof,
+		Turnstile: struct {
+			Required bool `json:"required"`
+		}{Required: false},
+	}, true
+}
+
+func (c *Client) cacheRequirements(resp *ChatRequirementsResp) {
+	if resp == nil || resp.Token == "" {
+		return
+	}
+	c.reqMu.Lock()
+	defer c.reqMu.Unlock()
+	c.cachedReqToken = resp.Token
+	c.cachedPersona = resp.Persona
+	c.cachedProof = resp.ProofToken
+	c.reqExpiresAt = time.Now().Add(chatRequirementsCacheTTL)
 }
 
 func (c *Client) ChatRequirements(ctx context.Context) (*ChatRequirementsResp, error) {
@@ -684,6 +726,16 @@ func (c *Client) ChatRequirementsFinalize(ctx context.Context, prepareToken, pro
 
 func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.ChatGPTWebTiming) (*ChatRequirementsResp, error) {
 	timing := firstChatGPTWebTiming(timings...)
+
+	// Fast path: reuse cached requirements when available.
+	if cached, ok := c.cachedRequirements(); ok {
+		if timing != nil {
+			timing.Set("requirements_cache_hit", true)
+			timing.ObserveSince("requirements_total_ms", time.Now().Add(-1)) // ~0ms
+		}
+		return cached, nil
+	}
+
 	totalStart := time.Now()
 	prepareStart := time.Now()
 	prep, err := c.ChatRequirementsPrepare(ctx)
@@ -697,9 +749,16 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 			resp, fallbackErr := c.ChatRequirements(ctx)
 			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
 			timing.ObserveSince("requirements_total_ms", totalStart)
+			if fallbackErr == nil && resp != nil {
+				c.cacheRequirements(resp)
+			}
 			return resp, fallbackErr
 		}
-		return c.ChatRequirements(ctx)
+		resp, err := c.ChatRequirements(ctx)
+		if err == nil && resp != nil {
+			c.cacheRequirements(resp)
+		}
+		return resp, err
 	}
 	if prep.Turnstile.Required {
 		if timing != nil {
@@ -708,9 +767,16 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 			resp, fallbackErr := c.ChatRequirements(ctx)
 			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
 			timing.ObserveSince("requirements_total_ms", totalStart)
+			if fallbackErr == nil && resp != nil {
+				c.cacheRequirements(resp)
+			}
 			return resp, fallbackErr
 		}
-		return c.ChatRequirements(ctx)
+		resp, err := c.ChatRequirements(ctx)
+		if err == nil && resp != nil {
+			c.cacheRequirements(resp)
+		}
+		return resp, err
 	}
 	resp := &ChatRequirementsResp{Persona: prep.Persona}
 	resp.Turnstile.Required = prep.Turnstile.Required
@@ -738,6 +804,9 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 			fallbackResp, fallbackErr := c.ChatRequirements(ctx)
 			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
 			timing.ObserveSince("requirements_total_ms", totalStart)
+			if fallbackErr == nil && fallbackResp != nil {
+				c.cacheRequirements(fallbackResp)
+			}
 			return fallbackResp, fallbackErr
 		}
 		return c.ChatRequirements(ctx)
@@ -829,61 +898,111 @@ func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (s
 	if opt.MessageID == "" {
 		opt.MessageID = uuid.NewString()
 	}
-	payload := map[string]any{
-		"action":                "next",
-		"fork_from_shared_post": false,
-		"parent_message_id":     opt.ParentMsgID,
-		"model":                 opt.UpstreamModel,
-		"client_prepare_state":  "none",
-		"timezone_offset_min":   -480,
-		"timezone":              "Asia/Shanghai",
-		"conversation_mode":     map[string]string{"kind": "primary_assistant"},
-		"system_hints":          []string{"picture_v2"},
-		"attachment_mime_types": []string{"image/png"},
-		"partial_query": map[string]any{
-			"id":     uuid.NewString(),
-			"author": map[string]string{"role": "user"},
-			"content": map[string]any{
-				"content_type": "text",
-				"parts":        []string{opt.Prompt},
+	var conduitToken string
+	err := retryTransient(ctx, 1, func() error {
+		payload := map[string]any{
+			"action":                "next",
+			"fork_from_shared_post": false,
+			"parent_message_id":     opt.ParentMsgID,
+			"model":                 opt.UpstreamModel,
+			"client_prepare_state":  "none",
+			"timezone_offset_min":   -480,
+			"timezone":              "Asia/Shanghai",
+			"conversation_mode":     map[string]string{"kind": "primary_assistant"},
+			"system_hints":          []string{"picture_v2"},
+			"attachment_mime_types": []string{"image/png"},
+			"partial_query": map[string]any{
+				"id":     uuid.NewString(),
+				"author": map[string]string{"role": "user"},
+				"content": map[string]any{
+					"content_type": "text",
+					"parts":        []string{opt.Prompt},
+				},
 			},
-		},
-		"supports_buffering":  true,
-		"supported_encodings": []string{"v1"},
-		"client_contextual_info": map[string]any{
-			"app_name": "chatgpt.com",
-		},
-		"thinking_effort": "standard",
-	}
-	if opt.ConvID != "" {
-		payload["conversation_id"] = opt.ConvID
-	}
-	body, _ := common.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/f/conversation/prepare", bytes.NewReader(body))
+			"supports_buffering":    true,
+			"supported_encodings":   []string{"v1"},
+			"client_contextual_info": map[string]any{
+				"app_name": "chatgpt.com",
+			},
+			"thinking_effort": "standard",
+		}
+		if opt.ConvID != "" {
+			payload["conversation_id"] = opt.ConvID
+		}
+		body, _ := common.Marshal(payload)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/f/conversation/prepare", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		c.commonHeaders(req)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Openai-Sentinel-Chat-Requirements-Token", opt.ChatToken)
+		if opt.ProofToken != "" {
+			req.Header.Set("Openai-Sentinel-Proof-Token", opt.ProofToken)
+		}
+		res, err := c.hc.Do(req)
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		buf, _ := io.ReadAll(res.Body)
+		if res.StatusCode >= 400 {
+			return &UpstreamError{Status: res.StatusCode, Message: "f/conversation/prepare failed", Body: string(buf)}
+		}
+		var out struct {
+			ConduitToken string `json:"conduit_token"`
+		}
+		_ = common.Unmarshal(buf, &out)
+		conduitToken = out.ConduitToken
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	c.commonHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Openai-Sentinel-Chat-Requirements-Token", opt.ChatToken)
-	if opt.ProofToken != "" {
-		req.Header.Set("Openai-Sentinel-Proof-Token", opt.ProofToken)
+	return conduitToken, nil
+}
+func retryTransient(ctx context.Context, maxRetries int, fn func() error) error {
+	var lastErr error
+	backoff := 200 * time.Millisecond
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+		}
+		lastErr = fn()
+		if lastErr == nil {
+			return nil
+		}
+		if !isTransientError(lastErr) {
+			return lastErr
+		}
 	}
-	res, err := c.hc.Do(req)
-	if err != nil {
-		return "", err
+	return lastErr
+}
+
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
 	}
-	defer res.Body.Close()
-	buf, _ := io.ReadAll(res.Body)
-	if res.StatusCode >= 400 {
-		return "", &UpstreamError{Status: res.StatusCode, Message: "f/conversation/prepare failed", Body: string(buf)}
+	if ue, ok := err.(*UpstreamError); ok && ue != nil {
+		return ue.Status >= 500 || ue.Status == 429
 	}
-	var out struct {
-		ConduitToken string `json:"conduit_token"`
-	}
-	_ = common.Unmarshal(buf, &out)
-	return out.ConduitToken, nil
+	s := err.Error()
+	return strings.Contains(s, "connection refused") ||
+		strings.Contains(s, "connection reset") ||
+		strings.Contains(s, "EOF") ||
+		strings.Contains(s, "timeout") ||
+		strings.Contains(s, "no such host") ||
+		strings.Contains(s, "TLS handshake timeout") ||
+		strings.Contains(s, "context deadline exceeded")
 }
 
 func (c *Client) PrepareChatConversation(ctx context.Context, opt ChatConvOpts) (string, error) {
@@ -893,63 +1012,71 @@ func (c *Client) PrepareChatConversation(ctx context.Context, opt ChatConvOpts) 
 	if opt.MessageID == "" {
 		opt.MessageID = uuid.NewString()
 	}
-	partialQuery := map[string]any{
-		"id":     uuid.NewString(),
-		"author": map[string]string{"role": "user"},
-		"content": map[string]any{
-			"content_type": "text",
-			"parts":        []string{opt.Prompt},
-		},
-	}
-	payload := map[string]any{
-		"action":                "next",
-		"fork_from_shared_post": false,
-		"parent_message_id":     opt.ParentMsgID,
-		"model":                 opt.UpstreamModel,
-		"client_prepare_state":  "success",
-		"timezone_offset_min":   -480,
-		"timezone":              "Asia/Shanghai",
-		"conversation_mode":     map[string]string{"kind": "primary_assistant"},
-		"partial_query":         partialQuery,
-		"supports_buffering":    true,
-		"supported_encodings":   []string{"v1"},
-		"client_contextual_info": map[string]any{
-			"app_name": "chatgpt.com",
-		},
-	}
-	applyChatGPTWebDeepResearchPayload(payload, partialQuery, opt.DeepResearch)
-	if thinkingEffort := strings.TrimSpace(opt.ThinkingEffort); thinkingEffort != "" {
-		payload["thinking_effort"] = thinkingEffort
-	}
-	if opt.ConvID != "" {
-		payload["conversation_id"] = opt.ConvID
-	}
-	body, _ := common.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/f/conversation/prepare", bytes.NewReader(body))
+	var conduitToken string
+	err := retryTransient(ctx, 1, func() error {
+		partialQuery := map[string]any{
+			"id":     uuid.NewString(),
+			"author": map[string]string{"role": "user"},
+			"content": map[string]any{
+				"content_type": "text",
+				"parts":        []string{opt.Prompt},
+			},
+		}
+		payload := map[string]any{
+			"action":                "next",
+			"fork_from_shared_post": false,
+			"parent_message_id":     opt.ParentMsgID,
+			"model":                 opt.UpstreamModel,
+			"client_prepare_state":  "success",
+			"timezone_offset_min":   -480,
+			"timezone":              "Asia/Shanghai",
+			"conversation_mode":     map[string]string{"kind": "primary_assistant"},
+			"partial_query":         partialQuery,
+			"supports_buffering":    true,
+			"supported_encodings":   []string{"v1"},
+			"client_contextual_info": map[string]any{
+				"app_name": "chatgpt.com",
+			},
+		}
+		applyChatGPTWebDeepResearchPayload(payload, partialQuery, opt.DeepResearch)
+		if thinkingEffort := strings.TrimSpace(opt.ThinkingEffort); thinkingEffort != "" {
+			payload["thinking_effort"] = thinkingEffort
+		}
+		if opt.ConvID != "" {
+			payload["conversation_id"] = opt.ConvID
+		}
+		body, _ := common.Marshal(payload)
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.opts.BaseURL+"/backend-api/f/conversation/prepare", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		c.commonHeaders(req)
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "*/*")
+		req.Header.Set("Openai-Sentinel-Chat-Requirements-Token", opt.ChatToken)
+		if opt.ProofToken != "" {
+			req.Header.Set("Openai-Sentinel-Proof-Token", opt.ProofToken)
+		}
+		res, err := c.hc.Do(req)
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		buf, _ := io.ReadAll(res.Body)
+		if res.StatusCode >= 400 {
+			return &UpstreamError{Status: res.StatusCode, Message: "f/conversation/prepare chat failed", Body: string(buf)}
+		}
+		var out struct {
+			ConduitToken string `json:"conduit_token"`
+		}
+		_ = common.Unmarshal(buf, &out)
+		conduitToken = out.ConduitToken
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
-	c.commonHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Openai-Sentinel-Chat-Requirements-Token", opt.ChatToken)
-	if opt.ProofToken != "" {
-		req.Header.Set("Openai-Sentinel-Proof-Token", opt.ProofToken)
-	}
-	res, err := c.hc.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	buf, _ := io.ReadAll(res.Body)
-	if res.StatusCode >= 400 {
-		return "", &UpstreamError{Status: res.StatusCode, Message: "f/conversation/prepare chat failed", Body: string(buf)}
-	}
-	var out struct {
-		ConduitToken string `json:"conduit_token"`
-	}
-	_ = common.Unmarshal(buf, &out)
-	return out.ConduitToken, nil
+	return conduitToken, nil
 }
 
 func (c *Client) StreamFConversation(ctx context.Context, opt ImageConvOpts) (<-chan SSEEvent, error) {
