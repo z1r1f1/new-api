@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, MessageCircle, RotateCcw, Search } from 'lucide-react'
 import { nanoid } from 'nanoid'
@@ -51,6 +51,7 @@ import {
   getConversationInitial,
   getConversationTitle,
   getDirectConversationKey,
+  getInitialConversation,
   getTotalUnreadCount,
   MAX_MESSAGE_LENGTH,
   mergeMessages,
@@ -83,6 +84,7 @@ export function Messaging() {
   )
   const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
     useState<Record<number, boolean>>({})
+  const initializedConversationRef = useRef(false)
 
   const usersQuery = useQuery({
     queryKey: messagingQueryKeys.users,
@@ -126,6 +128,29 @@ export function Messaging() {
         : null,
     [activeConversationId, conversations]
   )
+  useEffect(() => {
+    if (initializedConversationRef.current) return
+    if (!conversationsQuery.isSuccess) return
+    if (activeConversationId || selectedUserId || openingUserId) {
+      initializedConversationRef.current = true
+      return
+    }
+    const initialConversation = getInitialConversation(conversations)
+    if (!initialConversation) return
+    initializedConversationRef.current = true
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setActiveConversationId(initialConversation.id)
+    setSelectedUserId(initialConversation.peer?.id ?? null)
+    setSidebarTab('conversations')
+    setMessageBody('')
+    setMessageSearch('')
+  }, [
+    activeConversationId,
+    conversations,
+    conversationsQuery.isSuccess,
+    openingUserId,
+    selectedUserId,
+  ])
   const mentionUsers = useMemo(() => {
     if (!activeConversation || activeConversation.type !== 'group') return []
     return activeConversation.members.filter(

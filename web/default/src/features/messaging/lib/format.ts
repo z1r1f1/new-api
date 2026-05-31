@@ -137,6 +137,23 @@ export function filterConversations(
   })
 }
 
+export function getInitialConversation(
+  conversations: ChatConversation[]
+): ChatConversation | null {
+  const recentConversation = conversations.reduce<ChatConversation | null>(
+    (latest, conversation) => {
+      if (conversation.last_message_at <= 0) return latest
+      if (!latest || conversation.last_message_at > latest.last_message_at) {
+        return conversation
+      }
+      return latest
+    },
+    null
+  )
+  if (recentConversation) return recentConversation
+  return conversations.find((conversation) => conversation.is_default) ?? null
+}
+
 export function getChatUserDisplayName(user: ChatUser): string {
   const displayName = user.display_name.trim()
   if (displayName) return displayName
