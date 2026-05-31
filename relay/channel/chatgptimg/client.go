@@ -2707,9 +2707,6 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 					stableCount = 1
 					lastSedSig = sig
 				}
-				if sig != "" && stableCount >= opt.StableRounds && time.Since(firstAnyRefTs) >= opt.PreviewWait {
-					return PollStatusPreviewOnly, nil, mappingSedimentIDs
-				}
 			} else if time.Since(firstAnyRefTs) >= opt.PreviewWait {
 				return PollStatusPreviewOnly, nil, mappingSedimentIDs
 			}

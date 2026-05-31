@@ -737,7 +737,7 @@ func TestPollConversationForImagesWaitsForStableSedimentRefs(t *testing.T) {
 		calls++
 		body := `{"mapping":{"tool-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"sediment://sed_ready"}]},"recipient":"image_gen.text2im"}}}}`
 		if calls >= 2 {
-			body = `{"mapping":{"tool-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"sediment://sed_ready"},{"asset_pointer":"sediment://sed_extra"}]},"recipient":"image_gen.text2im"}}}}`
+			body = `{"mapping":{"tool-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://file_final"}]},"recipient":"image_gen.text2im"}}}}`
 		}
 		_, _ = w.Write([]byte(body))
 	}))
@@ -755,15 +755,15 @@ func TestPollConversationForImagesWaitsForStableSedimentRefs(t *testing.T) {
 		PreviewWait:        time.Millisecond,
 		StableSedimentRefs: true,
 	})
-	if status != PollStatusPreviewOnly {
-		t.Fatalf("expected preview status, got %s", status)
+	if status != PollStatusIMG2 {
+		t.Fatalf("expected final image status, got %s", status)
 	}
-	if len(fids) != 0 {
-		t.Fatalf("expected no file ids, got %#v", fids)
+	if len(fids) != 1 || fids[0] != "file_final" {
+		t.Fatalf("expected final file id, got %#v", fids)
 	}
 	sort.Strings(sids)
-	if len(sids) != 2 || sids[0] != "sed_extra" || sids[1] != "sed_ready" {
-		t.Fatalf("expected stable sediment refs, got %#v", sids)
+	if len(sids) != 0 {
+		t.Fatalf("expected no preview sediments in final image result, got %#v", sids)
 	}
 	if calls < 2 {
 		t.Fatalf("expected multiple polls to stabilize refs, got %d", calls)
