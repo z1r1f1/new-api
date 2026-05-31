@@ -1964,7 +1964,12 @@ generation for ChatGPT Web channels.
   include base URL, proxy, access-token fingerprint, device id, session id,
   user-agent/client version/language, and timeout settings.
 - Reuse a proof token returned by `ChatRequirementsV2` for the following
-  conversation request. Do not solve the same PoW twice in the normal V2 path.
+  conversation request in the same request setup. Do not solve the same PoW
+  twice in the normal V2 path.
+- Do not cache or reuse ChatGPT Web `chat-requirements` tokens across separate
+  relay requests, even when reusing the same HTTP client/cookie jar. Treat the
+  requirements token from both V2 finalize and legacy fallback as request-local
+  input for the immediately following `/backend-api/f/conversation` call.
 - Preserve fallback behavior: if prepare/finalize fails, fall back to the
   legacy requirements endpoint and allow the caller to solve PoW when the
   fallback response requires it.
@@ -1979,6 +1984,10 @@ generation for ChatGPT Web channels.
   `client_cache_hit=true` when timing exists.
 - Different access token/device/session/proxy/base URL -> must not reuse the
   cached client from another account or browser identity.
+- Every `ChatRequirementsV2` call must fetch fresh requirements through
+  prepare/finalize or the legacy fallback path; `requirements_cache_hit=true`
+  before an `f/conversation` 403 indicates stale request-local state leaked
+  across turns.
 - V2 prepare/finalize error -> fallback to legacy requirements and record
   fallback timing/status when timing exists.
 
@@ -1989,10 +1998,15 @@ generation for ChatGPT Web channels.
   the prompt or signed URLs.
 - Good: repeated requests for the same ChatGPT Web credential reuse the
   transport/cookie jar while different credentials remain isolated.
+- Good: a second chat turn on a reused client obtains a new requirements token
+  before posting `/backend-api/f/conversation`.
 - Base: non-ChatGPT Web channels have no `chatgpt_web_timing` in consume-log
   `Other`.
 - Bad: using a process-global client keyed only by base URL; that can mix
   cookies across accounts.
+- Bad: storing a legacy fallback `chat-requirements` token on the client and
+  sending it on the next independent chat/image request; ChatGPT Web may reject
+  the subsequent `/backend-api/f/conversation` with 403.
 - Bad: adding prompt text or upstream signed image URLs to timing fields; that
   violates log-safety rules.
 
@@ -2002,6 +2016,9 @@ generation for ChatGPT Web channels.
   timing container was attached to the Gin context.
 - `relay/channel/chatgptimg`: client-cache test proves matching options reuse
   the same client and changed auth token creates an isolated client.
+- `relay/channel/chatgptimg`: requirements regression test proves a fallback
+  `chat-requirements` token is not reused by the next `ChatRequirementsV2`
+  call on the same client.
 - `relay/channel/chatgptimg`: keep existing ChatGPT Web conversion and image
   materialization tests passing after adding timing parameters.
 

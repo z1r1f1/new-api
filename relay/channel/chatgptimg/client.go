@@ -19,7 +19,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -58,12 +57,6 @@ type ClientOptions struct {
 type Client struct {
 	opts ClientOptions
 	hc   *http.Client
-
-	reqMu          sync.RWMutex
-	cachedReqToken string
-	cachedPersona  string
-	cachedProof    string
-	reqExpiresAt   time.Time
 }
 
 func NewClient(opt ClientOptions) (*Client, error) {
@@ -561,8 +554,6 @@ func firstInt(ps ...*int) *int {
 	return nil
 }
 
-const chatRequirementsCacheTTL = 5 * time.Minute
-
 type ChatRequirementsResp struct {
 	Token       string `json:"token"`
 	Persona     string `json:"persona"`
@@ -594,39 +585,6 @@ func (c *Client) Bootstrap(ctx context.Context) error {
 		return &UpstreamError{Status: res.StatusCode, Message: "bootstrap failed"}
 	}
 	return nil
-}
-
-func (c *Client) cachedRequirements() (*ChatRequirementsResp, bool) {
-	c.reqMu.RLock()
-	defer c.reqMu.RUnlock()
-	if c.cachedReqToken == "" || time.Now().After(c.reqExpiresAt) {
-		return nil, false
-	}
-	return &ChatRequirementsResp{
-		Token:   c.cachedReqToken,
-		Persona: c.cachedPersona,
-		Proofofwork: struct {
-			Required   bool   `json:"required"`
-			Seed       string `json:"seed"`
-			Difficulty string `json:"difficulty"`
-		}{Required: c.cachedProof != ""},
-		ProofToken: c.cachedProof,
-		Turnstile: struct {
-			Required bool `json:"required"`
-		}{Required: false},
-	}, true
-}
-
-func (c *Client) cacheRequirements(resp *ChatRequirementsResp) {
-	if resp == nil || resp.Token == "" {
-		return
-	}
-	c.reqMu.Lock()
-	defer c.reqMu.Unlock()
-	c.cachedReqToken = resp.Token
-	c.cachedPersona = resp.Persona
-	c.cachedProof = resp.ProofToken
-	c.reqExpiresAt = time.Now().Add(chatRequirementsCacheTTL)
 }
 
 func (c *Client) ChatRequirements(ctx context.Context) (*ChatRequirementsResp, error) {
@@ -726,14 +684,8 @@ func (c *Client) ChatRequirementsFinalize(ctx context.Context, prepareToken, pro
 
 func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.ChatGPTWebTiming) (*ChatRequirementsResp, error) {
 	timing := firstChatGPTWebTiming(timings...)
-
-	// Fast path: reuse cached requirements when available.
-	if cached, ok := c.cachedRequirements(); ok {
-		if timing != nil {
-			timing.Set("requirements_cache_hit", true)
-			timing.ObserveSince("requirements_total_ms", time.Now().Add(-1)) // ~0ms
-		}
-		return cached, nil
+	if timing != nil {
+		timing.Set("requirements_cache_hit", false)
 	}
 
 	totalStart := time.Now()
@@ -749,16 +701,9 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 			resp, fallbackErr := c.ChatRequirements(ctx)
 			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
 			timing.ObserveSince("requirements_total_ms", totalStart)
-			if fallbackErr == nil && resp != nil {
-				c.cacheRequirements(resp)
-			}
 			return resp, fallbackErr
 		}
-		resp, err := c.ChatRequirements(ctx)
-		if err == nil && resp != nil {
-			c.cacheRequirements(resp)
-		}
-		return resp, err
+		return c.ChatRequirements(ctx)
 	}
 	if prep.Turnstile.Required {
 		if timing != nil {
@@ -767,16 +712,9 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 			resp, fallbackErr := c.ChatRequirements(ctx)
 			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
 			timing.ObserveSince("requirements_total_ms", totalStart)
-			if fallbackErr == nil && resp != nil {
-				c.cacheRequirements(resp)
-			}
 			return resp, fallbackErr
 		}
-		resp, err := c.ChatRequirements(ctx)
-		if err == nil && resp != nil {
-			c.cacheRequirements(resp)
-		}
-		return resp, err
+		return c.ChatRequirements(ctx)
 	}
 	resp := &ChatRequirementsResp{Persona: prep.Persona}
 	resp.Turnstile.Required = prep.Turnstile.Required
@@ -804,9 +742,6 @@ func (c *Client) ChatRequirementsV2(ctx context.Context, timings ...*service.Cha
 			fallbackResp, fallbackErr := c.ChatRequirements(ctx)
 			timing.ObserveSince("requirements_fallback_ms", fallbackStart)
 			timing.ObserveSince("requirements_total_ms", totalStart)
-			if fallbackErr == nil && fallbackResp != nil {
-				c.cacheRequirements(fallbackResp)
-			}
 			return fallbackResp, fallbackErr
 		}
 		return c.ChatRequirements(ctx)

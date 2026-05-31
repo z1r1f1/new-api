@@ -83,6 +83,66 @@ func TestGetCachedClientReusesMatchingOptions(t *testing.T) {
 	}
 }
 
+func TestChatRequirementsV2DoesNotReuseFallbackRequirementsToken(t *testing.T) {
+	var prepareCount int
+	var fallbackCount int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/":
+			_, _ = w.Write([]byte("ok"))
+		case "/backend-api/sentinel/chat-requirements/prepare":
+			prepareCount++
+			http.Error(w, "prepare unavailable", http.StatusServiceUnavailable)
+		case "/backend-api/sentinel/chat-requirements":
+			fallbackCount++
+			w.Header().Set("Content-Type", "application/json")
+			if fallbackCount == 1 {
+				_, _ = w.Write([]byte(`{"token":"fallback-token-1","persona":"persona-1"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"token":"fallback-token-2","persona":"persona-2"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:   server.URL,
+			AuthToken: "access-token",
+			DeviceID:  "device-id",
+			SessionID: "session-id",
+			UserAgent: defaultUserAgent,
+			Language:  "zh-CN",
+			Timeout:   time.Second,
+		},
+		hc: server.Client(),
+	}
+
+	first, err := client.ChatRequirementsV2(context.Background())
+	if err != nil {
+		t.Fatalf("first ChatRequirementsV2 returned error: %v", err)
+	}
+	if first.Token != "fallback-token-1" {
+		t.Fatalf("first ChatRequirementsV2 returned unexpected token %q", first.Token)
+	}
+
+	second, err := client.ChatRequirementsV2(context.Background())
+	if err != nil {
+		t.Fatalf("second ChatRequirementsV2 returned error: %v", err)
+	}
+	if second.Token != "fallback-token-2" {
+		t.Fatalf("second ChatRequirementsV2 must fetch a fresh token, got %q", second.Token)
+	}
+	if prepareCount != 2 {
+		t.Fatalf("expected two prepare attempts, got %d", prepareCount)
+	}
+	if fallbackCount != 2 {
+		t.Fatalf("expected two fallback requirements calls, got %d", fallbackCount)
+	}
+}
+
 func TestRelayStatusErrorDoesNotSkipRelayRetry(t *testing.T) {
 	err := relayStatusError(errors.New("chatgpt web channel: upstream rate limited while polling image result"), http.StatusTooManyRequests)
 	if err == nil {

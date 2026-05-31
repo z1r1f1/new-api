@@ -618,6 +618,12 @@ func TestStartChatStreamFallsBackToFullContextWhenCachedConversationForbidden(t 
 	var conversationPayloads []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/backend-api/sentinel/chat-requirements/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"persona":"chatgpt","prepare_token":"prepare-token","turnstile":{"required":false},"proofofwork":{"required":false}}`))
+		case "/backend-api/sentinel/chat-requirements/finalize":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"requirements-token","persona":"chatgpt"}`))
 		case "/backend-api/conversation/stale-conv":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"current_node":"parent-stale","mapping":{}}`))
@@ -666,9 +672,7 @@ func TestStartChatStreamFallsBackToFullContextWhenCachedConversationForbidden(t 
 			Language:   "zh-CN",
 			SSETimeout: time.Second,
 		},
-		hc:             server.Client(),
-		cachedReqToken: "requirements-token",
-		reqExpiresAt:   time.Now().Add(time.Minute),
+		hc: server.Client(),
 	}
 	req := chatRequest{
 		Model:           "gpt-5.5-instant",
