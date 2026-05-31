@@ -26,6 +26,13 @@ func NewService(publisher Publisher) *Service {
 	return &Service{publisher: publisher}
 }
 
+func (service *Service) ListUsers(ctx context.Context, currentUserID int) ([]*model.ChatUser, error) {
+	if currentUserID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	return model.ListChatUsers(currentUserID)
+}
+
 func (service *Service) ListConversations(ctx context.Context, userID int) ([]*model.ChatConversation, error) {
 	if userID <= 0 {
 		return nil, ErrInvalidRequest

@@ -54,6 +54,7 @@ func setupChatServiceTestDB(t *testing.T) {
 	model.DB = db
 	model.LOG_DB = db
 	require.NoError(t, db.AutoMigrate(
+		&model.User{},
 		&model.ChatConversation{},
 		&model.ChatConversationMember{},
 		&model.ChatMessage{},
@@ -122,6 +123,43 @@ func TestServiceListConversationsCreatesMissingChatTables(t *testing.T) {
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatConversationMember{}))
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatMessage{}))
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatReadState{}))
+}
+
+func TestServiceListUsersReturnsEnabledPeers(t *testing.T) {
+	setupChatServiceTestDB(t)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id:          1,
+		Username:    "alice",
+		Password:    "password-alice",
+		DisplayName: "Alice",
+		Status:      common.UserStatusEnabled,
+		AffCode:     "alice-aff",
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id:          2,
+		Username:    "bob",
+		Password:    "password-bob",
+		DisplayName: "Bob",
+		Status:      common.UserStatusEnabled,
+		AffCode:     "bob-aff",
+	}).Error)
+	require.NoError(t, model.DB.Create(&model.User{
+		Id:          3,
+		Username:    "charlie",
+		Password:    "password-charlie",
+		DisplayName: "Charlie",
+		Status:      common.UserStatusDisabled,
+		AffCode:     "charlie-aff",
+	}).Error)
+
+	svc := NewService(&fakePublisher{})
+
+	users, err := svc.ListUsers(context.Background(), 1)
+	require.NoError(t, err)
+	require.Len(t, users, 1)
+	assert.Equal(t, 2, users[0].Id)
+	assert.Equal(t, "bob", users[0].Username)
+	assert.Equal(t, "Bob", users[0].DisplayName)
 }
 
 func TestServiceRejectsNonMemberSend(t *testing.T) {

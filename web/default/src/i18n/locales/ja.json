@@ -4776,6 +4776,15 @@
     "You": "自分",
     "{{count}} characters left": "残り {{count}} 文字",
     "{{count}} messages": "{{count}} 件のメッセージ",
-    "Active chats": "アクティブチャット"
+    "Active chats": "アクティブチャット",
+    "Chat with {{name}}": "{{name}} とチャット",
+    "Choose a user from the left to start chatting.": "左側からユーザーを選択してチャットを開始してください。",
+    "Failed to open conversation": "会話を開けませんでした",
+    "Failed to send message": "メッセージの送信に失敗しました",
+    "Loading users...": "ユーザーを読み込み中...",
+    "No users found": "ユーザーが見つかりません",
+    "Search users": "ユーザーを検索",
+    "Select a user": "ユーザーを選択",
+    "Select a user first": "先にユーザーを選択してください"
   }
 }

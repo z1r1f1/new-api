@@ -35,6 +35,24 @@ type addChatMemberRequest struct {
 	UserId int `json:"user_id"`
 }
 
+func ListChatUsers(c *gin.Context) {
+	service, ok := getChatService(c)
+	if !ok {
+		return
+	}
+	userId, ok := currentChatUserID(c)
+	if !ok {
+		chatJSON(c, http.StatusUnauthorized, false, "not logged in", nil)
+		return
+	}
+	users, err := service.ListUsers(c.Request.Context(), userId)
+	if err != nil {
+		writeChatError(c, err)
+		return
+	}
+	chatJSON(c, http.StatusOK, true, "", users)
+}
+
 func ListChatConversations(c *gin.Context) {
 	service, ok := getChatService(c)
 	if !ok {

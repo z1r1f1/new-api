@@ -22,6 +22,7 @@ import type {
   ApiResponse,
   ChatConversation,
   ChatMessage,
+  ChatUser,
   CreateDirectConversationPayload,
   CreateGroupConversationPayload,
   MarkReadPayload,
@@ -29,9 +30,15 @@ import type {
 } from './types'
 
 export const messagingQueryKeys = {
+  users: ['messaging', 'users'] as const,
   conversations: ['messaging', 'conversations'] as const,
   messages: (conversationId: number) =>
     ['messaging', 'messages', conversationId] as const,
+}
+
+export async function listChatUsers(): Promise<ApiResponse<ChatUser[]>> {
+  const res = await api.get('/api/chat/users')
+  return res.data
 }
 
 export async function listChatConversations(): Promise<

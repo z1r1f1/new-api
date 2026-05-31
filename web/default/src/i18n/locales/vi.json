@@ -4776,6 +4776,15 @@
     "You": "Bạn",
     "{{count}} characters left": "Còn {{count}} ký tự",
     "{{count}} messages": "{{count}} tin nhắn",
-    "Active chats": "Chat đang hoạt động"
+    "Active chats": "Chat đang hoạt động",
+    "Chat with {{name}}": "Trò chuyện với {{name}}",
+    "Choose a user from the left to start chatting.": "Chọn một người dùng ở bên trái để bắt đầu trò chuyện.",
+    "Failed to open conversation": "Không thể mở cuộc trò chuyện",
+    "Failed to send message": "Gửi tin nhắn thất bại",
+    "Loading users...": "Đang tải người dùng...",
+    "No users found": "Không tìm thấy người dùng",
+    "Search users": "Tìm kiếm người dùng",
+    "Select a user": "Chọn người dùng",
+    "Select a user first": "Vui lòng chọn người dùng trước"
   }
 }

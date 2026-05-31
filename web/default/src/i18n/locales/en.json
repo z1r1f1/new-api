@@ -4776,6 +4776,15 @@
     "You": "You",
     "{{count}} characters left": "{{count}} characters left",
     "{{count}} messages": "{{count}} messages",
-    "Active chats": "Active chats"
+    "Active chats": "Active chats",
+    "Chat with {{name}}": "Chat with {{name}}",
+    "Choose a user from the left to start chatting.": "Choose a user from the left to start chatting.",
+    "Failed to open conversation": "Failed to open conversation",
+    "Failed to send message": "Failed to send message",
+    "Loading users...": "Loading users...",
+    "No users found": "No users found",
+    "Search users": "Search users",
+    "Select a user": "Select a user",
+    "Select a user first": "Select a user first"
   }
 }

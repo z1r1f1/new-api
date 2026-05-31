@@ -4776,6 +4776,15 @@
     "You": "Вы",
     "{{count}} characters left": "Осталось символов: {{count}}",
     "{{count}} messages": "{{count}} сообщений",
-    "Active chats": "Активные чаты"
+    "Active chats": "Активные чаты",
+    "Chat with {{name}}": "Чат с {{name}}",
+    "Choose a user from the left to start chatting.": "Выберите пользователя слева, чтобы начать чат.",
+    "Failed to open conversation": "Не удалось открыть разговор",
+    "Failed to send message": "Не удалось отправить сообщение",
+    "Loading users...": "Загрузка пользователей...",
+    "No users found": "Пользователи не найдены",
+    "Search users": "Поиск пользователей",
+    "Select a user": "Выберите пользователя",
+    "Select a user first": "Сначала выберите пользователя"
   }
 }

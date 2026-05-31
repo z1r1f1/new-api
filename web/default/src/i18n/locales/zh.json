@@ -4776,6 +4776,15 @@
     "You": "你",
     "{{count}} characters left": "还可输入 {{count}} 个字符",
     "{{count}} messages": "{{count}} 条消息",
-    "Active chats": "活跃会话"
+    "Active chats": "活跃会话",
+    "Chat with {{name}}": "与 {{name}} 聊天",
+    "Choose a user from the left to start chatting.": "从左侧选择用户开始聊天。",
+    "Failed to open conversation": "打开会话失败",
+    "Failed to send message": "发送消息失败",
+    "Loading users...": "正在加载用户...",
+    "No users found": "未找到用户",
+    "Search users": "搜索用户",
+    "Select a user": "选择一个用户",
+    "Select a user first": "请先选择用户"
   }
 }

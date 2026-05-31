@@ -41,6 +41,12 @@ export interface ChatMessage {
   updated_at: number
 }
 
+export interface ChatUser {
+  id: number
+  username: string
+  display_name: string
+}
+
 export interface ChatEvent {
   type: string
   conversation_id?: number

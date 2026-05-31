@@ -64,6 +64,7 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 
 	model.DB = db
 	model.LOG_DB = db
+	require.NoError(t, db.AutoMigrate(&model.User{}))
 	if migrateChatTables {
 		require.NoError(t, db.AutoMigrate(
 			&model.ChatConversation{},
@@ -88,6 +89,49 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 	})
 
 	return db
+}
+
+func TestChatUsersRouteListsEnabledPeers(t *testing.T) {
+	setupChatSmokeTestDB(t)
+	seedChatSmokeUser(t, 1, "alice", "Alice", common.UserStatusEnabled)
+	seedChatSmokeUser(t, 2, "bob", "Bob", common.UserStatusEnabled)
+	seedChatSmokeUser(t, 3, "charlie", "Charlie", common.UserStatusDisabled)
+
+	gin.SetMode(gin.TestMode)
+	root := gin.New()
+	root.Use(sessions.Sessions("session", cookie.NewStore([]byte("chat-users-test"))))
+	root.Use(func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("username", "alice")
+		session.Set("role", common.RoleCommonUser)
+		session.Set("id", 1)
+		session.Set("status", common.UserStatusEnabled)
+		session.Set("group", "default")
+		require.NoError(t, session.Save())
+		c.Next()
+	})
+
+	apiRouter := root.Group("/api")
+	router.SetChatRouter(root, apiRouter)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/users", nil)
+	req.Header.Set("New-Api-User", "1")
+	recorder := httptest.NewRecorder()
+
+	root.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var apiResp chatAPIResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &apiResp))
+	require.True(t, apiResp.Success, apiResp.Message)
+
+	var users []model.ChatUser
+	require.NoError(t, common.Unmarshal(apiResp.Data, &users))
+	require.Len(t, users, 1)
+	require.Equal(t, 2, users[0].Id)
+	require.Equal(t, "bob", users[0].Username)
+	require.Equal(t, "Bob", users[0].DisplayName)
 }
 
 func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
@@ -126,6 +170,19 @@ func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
 	require.True(t, db.Migrator().HasTable(&model.ChatConversationMember{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatMessage{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatReadState{}))
+}
+
+func seedChatSmokeUser(t *testing.T, id int, username string, displayName string, status int) {
+	t.Helper()
+
+	require.NoError(t, model.DB.Create(&model.User{
+		Id:          id,
+		Username:    username,
+		Password:    "password-" + username,
+		DisplayName: displayName,
+		Status:      status,
+		AffCode:     username + "-aff",
+	}).Error)
 }
 
 func initializeChatSmokeTestRuntime(t *testing.T) *chatservice.RealtimeServer {

@@ -23,7 +23,6 @@ import {
   Copy,
   Loader2,
   MessageCircle,
-  PanelRight,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -63,15 +62,11 @@ export function MessageList(props: MessageListProps) {
       <div className='flex flex-1 items-center justify-center p-6 text-center'>
         <div className='bg-muted/20 max-w-md rounded-3xl border p-8'>
           <div className='bg-primary/10 text-primary mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl'>
-            <PanelRight className='h-6 w-6' />
+            <MessageCircle className='h-6 w-6' />
           </div>
-          <h2 className='text-lg font-semibold'>
-            {t('Open a conversation workspace')}
-          </h2>
+          <h2 className='text-lg font-semibold'>{t('Select a user')}</h2>
           <p className='text-muted-foreground mt-2 text-sm'>
-            {t(
-              'Select an existing chat or start a new direct or group conversation from the inbox panel.'
-            )}
+            {t('Choose a user from the left to start chatting.')}
           </p>
         </div>
       </div>

@@ -17,6 +17,7 @@ func SetChatRouter(root *gin.Engine, apiRouter *gin.RouterGroup) {
 	chatRoute := apiRouter.Group("/chat")
 	chatRoute.Use(middleware.UserAuth())
 	{
+		chatRoute.GET("/users", controller.ListChatUsers)
 		chatRoute.GET("/conversations", controller.ListChatConversations)
 		chatRoute.POST("/conversations/direct", controller.CreateDirectChatConversation)
 		chatRoute.POST("/conversations/group", controller.CreateGroupChatConversation)

@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import type { ChatConversation, ChatMessage } from '../types'
+import type { ChatConversation, ChatMessage, ChatUser } from '../types'
 
 export const MESSAGE_PAGE_SIZE = 40
 export const MAX_MESSAGE_LENGTH = 2000
@@ -126,6 +126,44 @@ export function filterMessages(
   return messages.filter((message) =>
     message.body.toLowerCase().includes(keyword)
   )
+}
+
+export function filterChatUsers(
+  users: ChatUser[],
+  searchText: string
+): ChatUser[] {
+  const keyword = searchText.trim().toLowerCase()
+  if (!keyword) return users
+  return users.filter((user) => {
+    const displayName = getChatUserDisplayName(user).toLowerCase()
+    return (
+      displayName.includes(keyword) ||
+      user.username.toLowerCase().includes(keyword) ||
+      String(user.id).includes(keyword)
+    )
+  })
+}
+
+export function getChatUserDisplayName(user: ChatUser): string {
+  const displayName = user.display_name.trim()
+  if (displayName) return displayName
+  if (user.username.trim()) return user.username
+  return `User #${user.id}`
+}
+
+export function getChatUserInitial(user: ChatUser): string {
+  const name = getChatUserDisplayName(user).trim()
+  if (!name) return '#'
+  return name.slice(0, 1).toUpperCase()
+}
+
+export function getDirectConversationKey(
+  currentUserId: number | null,
+  peerUserId: number
+): string {
+  if (!currentUserId || peerUserId <= 0) return ''
+  const ids = [currentUserId, peerUserId].sort((a, b) => a - b)
+  return `${ids[0]}:${ids[1]}`
 }
 
 export function getRealtimeBadgeVariant(
