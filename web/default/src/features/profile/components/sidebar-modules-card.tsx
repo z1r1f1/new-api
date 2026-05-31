@@ -65,6 +65,11 @@ export function SidebarModulesCard() {
           description: t('AI model testing environment'),
         },
         {
+          key: 'messages',
+          title: t('Messages'),
+          description: t('Built-in direct and group messaging'),
+        },
+        {
           key: 'chat',
           title: t('Chat'),
           description: t('Chat session management'),
@@ -144,7 +149,10 @@ export function SidebarModulesCard() {
   }, [])
 
   useEffect(() => {
-    loadConfig()
+    const timer = window.setTimeout(() => {
+      void loadConfig()
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [loadConfig])
 
   const toggleSection = (sectionKey: string, val: boolean) => {

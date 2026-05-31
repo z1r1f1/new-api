@@ -146,14 +146,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
   const activeSession = sessions.find(
     (session) => session.id === activeSessionId
   )
-  const [sessionTitleDraft, setSessionTitleDraft] = useState({
-    sessionId: activeSessionId,
-    title: activeSession?.title || '',
-  })
-  const currentSessionTitleDraft =
-    sessionTitleDraft.sessionId === activeSessionId
-      ? sessionTitleDraft.title
-      : activeSession?.title || ''
 
   // Load models
   const { data: modelsData, isLoading: isLoadingModels } = useQuery({
@@ -304,10 +296,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
       }
 
       const loadingMsg = createLoadingAssistantMessage()
-      const toSubmit = [
-        ...updated.slice(0, index + 1),
-        loadingMsg,
-      ]
+      const toSubmit = [...updated.slice(0, index + 1), loadingMsg]
       markActivePlaygroundChatMessage(loadingMsg.key, storageUserId)
       updateMessages(toSubmit)
       sendChat(toSubmit)
@@ -408,23 +397,20 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     t,
   ])
 
-  const commitSessionRename = useCallback(() => {
-    if (!activeSession) return
-    renameSession(activeSession.id, currentSessionTitleDraft)
-  }, [activeSession, currentSessionTitleDraft, renameSession])
-
   const sessionSidebar = (
     <aside
       className={cn(
-        'bg-background flex shrink-0 flex-col border-r overflow-hidden transition-all duration-200',
+        'bg-background flex shrink-0 flex-col overflow-hidden border-r transition-all duration-200',
         sessionSidebarOpen ? 'w-56' : 'w-0 border-r-0'
       )}
     >
       <div className='border-border flex h-12 shrink-0 items-center justify-between border-b px-3'>
-        <span className={cn(
-          'text-sm font-medium truncate',
-          !sessionSidebarOpen && 'hidden'
-        )}>
+        <span
+          className={cn(
+            'truncate text-sm font-medium',
+            !sessionSidebarOpen && 'hidden'
+          )}
+        >
           {t('Sessions')}
         </span>
         <Button
@@ -450,7 +436,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
             <div
               key={session.id}
               className={cn(
-                'group flex items-center gap-1 border-b border-border/50 px-2 py-1.5 transition-colors',
+                'group border-border/50 flex items-center gap-1 border-b px-2 py-1.5 transition-colors',
                 isActive && 'bg-accent'
               )}
             >
@@ -489,7 +475,9 @@ function PlaygroundContent(props: PlaygroundContentProps) {
                   onClick={() => switchSession(session.id)}
                 >
                   <MessageSquare className='text-muted-foreground size-3.5 shrink-0' />
-                  <span className='truncate'>{session.title || t('New session')}</span>
+                  <span className='truncate'>
+                    {session.title || t('New session')}
+                  </span>
                 </button>
               )}
               {!isEditing && (
@@ -501,9 +489,6 @@ function PlaygroundContent(props: PlaygroundContentProps) {
                     onClick={(e) => {
                       e.stopPropagation()
                       setEditingSessionId(session.id)
-                      // Seed the draft in case the user clicks rename
-                      const title = session.title || ''
-                      setSessionTitleDraft({ sessionId: session.id, title })
                     }}
                     aria-label={t('Rename session')}
                   >
@@ -512,7 +497,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
                   <Button
                     size='icon'
                     variant='ghost'
-                    className='size-6 text-destructive hover:text-destructive'
+                    className='text-destructive hover:text-destructive size-6'
                     onClick={(e) => {
                       e.stopPropagation()
                       deleteSession(session.id)
