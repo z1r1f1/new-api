@@ -134,6 +134,37 @@ func Distribute() func(c *gin.Context) {
 						}
 					}
 				}
+				if channel == nil {
+					if preferredChannelID, found := service.GetPreferredChatGPTWebSessionChannelByAffinity(c, modelRequest.Model, usingGroup); found {
+						preferred, err := model.CacheGetChannel(preferredChannelID)
+						if err != nil || preferred == nil || preferred.Type != constant.ChannelTypeChatGPTImage {
+							service.ClearCurrentChatGPTWebSessionChannelAffinity(c)
+						} else if preferred.Status != common.ChannelStatusEnabled {
+							service.ClearCurrentChatGPTWebSessionChannelAffinity(c)
+						} else if preferIdleChatGPTWebImage && service.IsChatGPTWebImageBusy(preferred.Id) {
+							logger.LogDebug(c, "skip busy ChatGPT Web session affinity channel #%d", preferred.Id)
+						} else if usingGroup == "auto" {
+							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
+							autoGroups := service.GetUserAutoGroup(userGroup)
+							for _, g := range autoGroups {
+								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+									selectGroup = g
+									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
+									channel = preferred
+									break
+								}
+							}
+							if channel == nil {
+								service.ClearCurrentChatGPTWebSessionChannelAffinity(c)
+							}
+						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+							channel = preferred
+							selectGroup = usingGroup
+						} else {
+							service.ClearCurrentChatGPTWebSessionChannelAffinity(c)
+						}
+					}
+				}
 
 				if channel == nil {
 					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
@@ -179,6 +210,7 @@ func Distribute() func(c *gin.Context) {
 		c.Next()
 		if channel != nil && shouldRecordChannelAffinity(c) {
 			service.RecordChannelAffinity(c, channel.Id)
+			service.RecordChatGPTWebSessionChannelAffinity(c, channel)
 		}
 	}
 }

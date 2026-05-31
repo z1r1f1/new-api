@@ -171,6 +171,99 @@ if sessionKey == "" {
 }
 ```
 
+#### ChatGPT Web session channel affinity
+
+1. Scope / Trigger
+
+- Trigger: changes to ChatGPT Web session routing, channel selection, or any
+  cache keyed by OpenAI-compatible `prompt_cache_key` / session aliases.
+
+2. Signatures
+
+- Selection hook:
+  `service.GetPreferredChatGPTWebSessionChannelByAffinity(c, modelName, usingGroup) (int, bool)`.
+- Record hook:
+  `service.RecordChatGPTWebSessionChannelAffinity(c, channel)`.
+- Clear hook:
+  `service.ClearCurrentChatGPTWebSessionChannelAffinity(c)`.
+
+3. Contracts
+
+- Existing configured channel affinity (`GetPreferredChannelByAffinity`) has
+  priority. The ChatGPT Web session-channel cache is a fallback only when the
+  configured affinity layer did not select a channel.
+- The ChatGPT Web session-channel cache uses its own namespace and Gin context
+  keys. It must not write `ginKeyChannelAffinityMeta`, apply channel-affinity
+  override templates, or change `ShouldSkipRetryAfterChannelAffinityFailure`.
+- Record only enabled ChatGPT Web channels (`constant.ChannelTypeChatGPTImage`)
+  after the request is considered successful by the same
+  `shouldRecordChannelAffinity` gate used by configured affinity.
+- The key source is the same explicit session extractor used by conversation
+  reuse: `service.ExtractOpenAICompatPromptCacheKeyFromRawBody(rawBody, headers)`.
+  Do not derive a channel-affinity key from message text.
+- Cached session-channel IDs must be validated before use: channel exists,
+  channel type is ChatGPT Web, channel is enabled, and it is enabled for the
+  requested group/model. Invalid stale entries are cleared and normal channel
+  selection continues.
+
+4. Validation & Error Matrix
+
+- Missing explicit session key -> no ChatGPT Web session-channel affinity.
+- Configured channel affinity hit -> use configured affinity; do not override
+  it with ChatGPT Web session affinity.
+- Cached channel missing/disabled/wrong type/not enabled for group+model ->
+  clear the ChatGPT Web session-channel cache entry and fall back to ordinary
+  channel selection.
+- Image request cached channel is currently busy -> skip this temporary hit
+  and fall back to ordinary idle-channel selection; do not clear the cache.
+
+5. Good/Base/Bad Cases
+
+- Good: first successful ChatGPT Web request with `prompt_cache_key=abc` records
+  channel `#10`; the next request with the same key is routed to `#10`, so the
+  per-channel conversation route can find the cached conversation ID.
+- Base: configured Codex/Claude channel affinity still behaves exactly as
+  before because its cache namespace and priority are unchanged.
+- Bad: adding a new default `channel_affinity_setting` rule for ChatGPT Web;
+  this can conflict with operator-configured affinity. Use the dedicated
+  ChatGPT Web session-channel cache instead.
+- Bad: selecting a cached ChatGPT Web channel before checking configured
+  channel affinity; this silently changes existing affinity semantics.
+
+6. Tests Required
+
+- `service`: regression tests that explicit `prompt_cache_key` records and
+  later returns the ChatGPT Web channel ID.
+- `service`: regression tests that missing explicit session key does not record
+  or hit session-channel affinity.
+- `service` or `middleware`: regression tests that configured channel affinity
+  and ChatGPT Web session-channel affinity use separate namespaces and do not
+  override each other.
+- `middleware`: regression test that the distributor uses the ChatGPT Web
+  session-channel fallback after configured affinity misses.
+
+7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Changes configured channel affinity defaults and may override operator rules.
+operation_setting.GetChannelAffinitySetting().Rules = append(
+    []operation_setting.ChannelAffinityRule{chatGPTWebRule},
+    operation_setting.GetChannelAffinitySetting().Rules...,
+)
+```
+
+Correct:
+
+```go
+if channel == nil {
+    if id, found := service.GetPreferredChatGPTWebSessionChannelByAffinity(c, model, usingGroup); found {
+        // validate id and use it only as a fallback after configured affinity misses
+    }
+}
+```
+
 ### Responses WebSocket relay
 
 #### 1. Scope / Trigger
