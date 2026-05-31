@@ -663,7 +663,7 @@ func TestResolveChatGPTWebSessionRouteUsesMultipartPromptCacheKey(t *testing.T) 
 	}
 }
 
-func TestResolveChatGPTWebSessionRouteDoesNotReuseMessageSeedWithoutExplicitSessionKey(t *testing.T) {
+func TestResolveChatGPTWebSessionRouteFallsBackToTokenAffinityWithoutExplicitSessionKey(t *testing.T) {
 	resetChatGPTWebSessionRouteCacheForTest()
 	oldRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
@@ -688,9 +688,10 @@ func TestResolveChatGPTWebSessionRouteDoesNotReuseMessageSeedWithoutExplicitSess
 		},
 	}
 	firstRoute := resolveChatGPTWebSessionRoute(info, firstReq, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
-	if firstRoute.Enabled || firstRoute.SessionSource != "" || firstRoute.Reused {
-		t.Fatalf("expected request without explicit session key to skip route reuse, got %#v", firstRoute)
+	if !firstRoute.Enabled || firstRoute.Reused || firstRoute.SessionSource != "token_id" {
+		t.Fatalf("expected request without explicit session key to use token fallback without cache hit, got %#v", firstRoute)
 	}
+	recordChatGPTWebSessionRoute(firstRoute, "conv-token-affinity", nil)
 
 	secondReq := chatRequest{
 		Model: "gpt-5.5-thinking",
@@ -701,8 +702,80 @@ func TestResolveChatGPTWebSessionRouteDoesNotReuseMessageSeedWithoutExplicitSess
 		},
 	}
 	secondRoute := resolveChatGPTWebSessionRoute(info, secondReq, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
-	if secondRoute.Enabled || secondRoute.Reused || secondRoute.CachedConversationID != "" {
-		t.Fatalf("expected follow-up without explicit session key to skip route reuse, got %#v", secondRoute)
+	if !secondRoute.Enabled || !secondRoute.Reused || secondRoute.CachedConversationID != "conv-token-affinity" || secondRoute.SessionSource != "token_id" {
+		t.Fatalf("expected follow-up without explicit session key to reuse token-scoped conversation, got %#v", secondRoute)
+	}
+
+	fullPrompt := buildChatPromptForRelay(secondReq, nil)
+	prompt := applyChatGPTWebSessionRoute(&secondReq, &secondRoute, fullPrompt, nil)
+	if prompt != "continue" {
+		t.Fatalf("expected token fallback reuse to send only latest user turn, got %q", prompt)
+	}
+	if secondReq.ConversationID != "conv-token-affinity" {
+		t.Fatalf("expected cached conversation id to be applied, got %q", secondReq.ConversationID)
+	}
+	if secondReq.FallbackPrompt != fullPrompt {
+		t.Fatalf("expected full context fallback prompt, got %q want %q", secondReq.FallbackPrompt, fullPrompt)
+	}
+	if !secondRoute.Incremental {
+		t.Fatalf("expected token fallback reuse to mark route incremental")
+	}
+}
+
+func TestResolveChatGPTWebSessionRouteFallsBackToUserAffinityWhenTokenMissing(t *testing.T) {
+	resetChatGPTWebSessionRouteCacheForTest()
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		resetChatGPTWebSessionRouteCacheForTest()
+	})
+
+	info := &relaycommon.RelayInfo{
+		UserId: 100,
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            10,
+			ChannelMultiKeyIndex: 0,
+			ApiKey:               "account-a",
+		},
+	}
+	firstRoute := resolveChatGPTWebSessionRoute(info, chatRequest{Model: "gpt-5.5-thinking"}, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
+	if !firstRoute.Enabled || firstRoute.Reused || firstRoute.SessionSource != "user_id" {
+		t.Fatalf("expected request without token id to use user fallback without cache hit, got %#v", firstRoute)
+	}
+	recordChatGPTWebSessionRoute(firstRoute, "conv-user-affinity", nil)
+
+	secondRoute := resolveChatGPTWebSessionRoute(info, chatRequest{Model: "gpt-5.5-thinking"}, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
+	if !secondRoute.Enabled || !secondRoute.Reused || secondRoute.CachedConversationID != "conv-user-affinity" || secondRoute.SessionSource != "user_id" {
+		t.Fatalf("expected follow-up without token id to reuse user-scoped conversation, got %#v", secondRoute)
+	}
+}
+
+func TestResolveChatGPTWebSessionRouteDoesNotDeriveFromMessageContentWithoutSessionIdentity(t *testing.T) {
+	resetChatGPTWebSessionRouteCacheForTest()
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		resetChatGPTWebSessionRouteCacheForTest()
+	})
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            10,
+			ChannelMultiKeyIndex: 0,
+			ApiKey:               "account-a",
+		},
+	}
+	req := chatRequest{
+		Model: "gpt-5.5-thinking",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hi"},
+		},
+	}
+	route := resolveChatGPTWebSessionRoute(info, req, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
+	if route.Enabled || route.SessionSource != "" || route.Reused {
+		t.Fatalf("expected request without explicit or relay identity session key to skip route reuse, got %#v", route)
 	}
 }
 

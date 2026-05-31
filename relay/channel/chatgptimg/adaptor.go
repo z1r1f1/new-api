@@ -865,6 +865,19 @@ func chatGPTWebSessionRouteKey(info *relaycommon.RelayInfo, sessionKey string) s
 	return hashCachePart(raw)
 }
 
+func chatGPTWebSessionRouteIdentityFallback(info *relaycommon.RelayInfo) (string, string) {
+	if info == nil || info.ChannelMeta == nil {
+		return "", ""
+	}
+	if info.TokenId > 0 {
+		return "token:" + strconv.Itoa(info.TokenId), "token_id"
+	}
+	if info.UserId > 0 {
+		return "user:" + strconv.Itoa(info.UserId), "user_id"
+	}
+	return "", ""
+}
+
 func chatGPTWebShortHash(value string) string {
 	sum := hashCachePart(value)
 	if len(sum) > 12 {
@@ -884,6 +897,9 @@ func resolveChatGPTWebSessionRoute(info *relaycommon.RelayInfo, req chatRequest,
 	headers := info.RequestHeaders
 	sessionKey := service.ExtractOpenAICompatPromptCacheKeyFromRawBody(rawBody, headers)
 	sessionSource := "explicit"
+	if sessionKey == "" {
+		sessionKey, sessionSource = chatGPTWebSessionRouteIdentityFallback(info)
+	}
 	if sessionKey == "" {
 		if timing != nil {
 			timing.Set("session_route_enabled", false)

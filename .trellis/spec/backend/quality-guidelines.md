@@ -140,9 +140,12 @@ When adding or modifying a channel:
 
 ### ChatGPT Web session reuse
 
-ChatGPT Web session reuse must be driven by an explicit prompt cache key or
-session identifier from the request JSON body, form/multipart fields, or
-headers, not by a heuristic that hashes the first user message.
+ChatGPT Web upstream conversation reuse should prefer an explicit prompt cache
+key or session identifier from the request JSON body, form/multipart fields, or
+headers. When the client omits an explicit session key, conversation reuse may
+fall back to stable relay identity (`token_id`, then `user_id`) after the
+ChatGPT Web channel has already been selected. It must never use a heuristic
+that hashes the first user message.
 
 Why:
 
@@ -150,14 +153,20 @@ Why:
   opening text share one cached conversation;
 - that can reuse a stale conversation ID across unrelated requests and produce
   403/fallback failures that look like channel problems;
-- a real session key should come from `prompt_cache_key`,
+- explicit session keys should come from `prompt_cache_key`,
   `openai_prompt_cache_key`, `metadata.user_id`, or the existing session header
-  aliases already handled by `ExtractOpenAICompatPromptCacheKeyFromRawBody`.
+  aliases already handled by `ExtractOpenAICompatPromptCacheKeyFromRawBody`;
+- relay identity fallback is scoped by user, token, selected channel, multi-key
+  index, and ChatGPT Web account fingerprint, so it continues the same upstream
+  browser conversation without merging different channels/accounts.
 
 Good:
 
 ```go
 sessionKey := service.ExtractOpenAICompatPromptCacheKeyFromRawBody(rawBody, headers)
+if sessionKey == "" {
+    sessionKey, sessionSource = chatGPTWebSessionRouteIdentityFallback(info)
+}
 if sessionKey == "" {
     return chatGPTWebSessionRoute{}
 }
