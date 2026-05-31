@@ -77,16 +77,17 @@ type imageRunResult struct {
 }
 
 type chatRequest struct {
-	Model          string                `json:"model,omitempty"`
-	Messages       []dto.Message         `json:"messages,omitempty"`
-	Stream         *bool                 `json:"stream,omitempty"`
-	Tools          []dto.ToolCallRequest `json:"tools,omitempty"`
-	ToolChoice     any                   `json:"tool_choice,omitempty"`
-	ThinkingEffort string                `json:"thinking_effort,omitempty"`
-	DeepResearch   bool                  `json:"chatgpt_web_deep_research,omitempty"`
-	ResponseFormat *dto.ResponseFormat   `json:"response_format,omitempty"`
-	FallbackPrompt string                `json:"fallback_prompt,omitempty"`
-	ConversationID string                `json:"conversation_id,omitempty"`
+	Model           string                `json:"model,omitempty"`
+	Messages        []dto.Message         `json:"messages,omitempty"`
+	Stream          *bool                 `json:"stream,omitempty"`
+	Tools           []dto.ToolCallRequest `json:"tools,omitempty"`
+	ToolChoice      any                   `json:"tool_choice,omitempty"`
+	ThinkingEffort  string                `json:"thinking_effort,omitempty"`
+	DeepResearch    bool                  `json:"chatgpt_web_deep_research,omitempty"`
+	ResponseFormat  *dto.ResponseFormat   `json:"response_format,omitempty"`
+	FallbackPrompt  string                `json:"fallback_prompt,omitempty"`
+	ConversationID  string                `json:"conversation_id,omitempty"`
+	sessionRouteKey string
 }
 
 type chatResponse struct {
@@ -982,6 +983,7 @@ func applyChatGPTWebSessionRoute(req *chatRequest, route *chatGPTWebSessionRoute
 	if strings.TrimSpace(req.FallbackPrompt) == "" {
 		req.FallbackPrompt = fullPrompt
 	}
+	req.sessionRouteKey = route.Key
 	route.Incremental = true
 	if timing != nil {
 		timing.Set("session_route_incremental", true)
@@ -1008,6 +1010,30 @@ func recordChatGPTWebSessionRoute(route chatGPTWebSessionRoute, conversationID s
 		timing.Set("session_route_recorded", true)
 		timing.Set("session_route_recorded_conversation_hash", chatGPTWebShortHash(conversationID))
 	}
+}
+
+func clearChatGPTWebSessionRoute(routeKey string, timings ...*service.ChatGPTWebTiming) {
+	timing := firstChatGPTWebTiming(timings...)
+	routeKey = strings.TrimSpace(routeKey)
+	if routeKey == "" {
+		return
+	}
+	deleted, err := getChatGPTWebSessionRouteCache().DeleteMany([]string{routeKey})
+	if timing == nil {
+		return
+	}
+	if err != nil {
+		timing.Set("session_route_clear_error", common.MaskSensitiveInfo(err.Error()))
+		return
+	}
+	cleared := false
+	for _, ok := range deleted {
+		if ok {
+			cleared = true
+			break
+		}
+	}
+	timing.Set("session_route_cleared", cleared)
 }
 
 func messagesFromResponsesRequest(request dto.OpenAIResponsesRequest) []dto.Message {
@@ -3244,9 +3270,59 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 		timing.ObserveSince("stream_open_ms", streamOpenStart)
 	}
 	if err != nil {
+		if shouldRetryChatStreamWithFullContext(err, continuation.Available, req) {
+			fallbackPrompt := strings.TrimSpace(req.FallbackPrompt)
+			if timing != nil {
+				timing.Set("session_route_retry_full_context", true)
+				timing.Set("session_route_retry_reason", "stream_403")
+			}
+			clearChatGPTWebSessionRoute(req.sessionRouteKey, timing)
+			retryOpt := convOpt
+			retryOpt.Prompt = fallbackPrompt
+			retryOpt.ConvID = ""
+			retryOpt.ParentMsgID = uuid.NewString()
+			retryOpt.MessageID = uuid.NewString()
+			retryOpt.ConduitToken = ""
+			retryPrepareStart := time.Now()
+			if conduitToken, conduitErr := client.PrepareChatConversation(ctx, retryOpt); conduitErr == nil {
+				retryOpt.ConduitToken = conduitToken
+			} else if timing != nil {
+				timing.Set("session_route_retry_prepare_error", common.MaskSensitiveInfo(conduitErr.Error()))
+			}
+			if timing != nil {
+				timing.ObserveSince("session_route_retry_prepare_ms", retryPrepareStart)
+			}
+			retryStreamOpenStart := time.Now()
+			stream, err = client.StreamChatConversation(ctx, retryOpt)
+			if timing != nil {
+				timing.ObserveSince("session_route_retry_stream_open_ms", retryStreamOpenStart)
+			}
+			if err == nil {
+				if timing != nil {
+					timing.Set("session_route_retry_success", true)
+					timing.Set("conversation_continuation", false)
+					timing.Set("session_route_fallback_full_context", true)
+				}
+				return &chatStreamStart{Stream: stream, Baseline: imageBaseline{}, Prompt: fallbackPrompt}, nil
+			}
+			if timing != nil {
+				timing.Set("session_route_retry_success", false)
+			}
+		}
 		return nil, err
 	}
 	return &chatStreamStart{Stream: stream, Baseline: continuation.Baseline, Prompt: actualPrompt}, nil
+}
+
+func shouldRetryChatStreamWithFullContext(err error, continuationAvailable bool, req chatRequest) bool {
+	if err == nil || !continuationAvailable {
+		return false
+	}
+	if strings.TrimSpace(req.ConversationID) == "" || strings.TrimSpace(req.FallbackPrompt) == "" {
+		return false
+	}
+	var upstreamErr *UpstreamError
+	return errors.As(err, &upstreamErr) && upstreamErr != nil && upstreamErr.Status == http.StatusForbidden
 }
 
 func chatModelForWeb(model string) string {

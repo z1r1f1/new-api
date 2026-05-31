@@ -1522,6 +1522,12 @@ Responses contract locally instead of returning "endpoint not supported".
   collector should use the dedicated longer wait and require stable sediment
   refs before returning a preview-only result. This avoids returning after the
   first preview ref while later refs are still being added to the mapping.
+- ChatGPT Web session-route reuse is an optimization, not a hard dependency. If
+  a cached conversation is readable but `POST /backend-api/f/conversation`
+  returns upstream `403` while opening the stream, clear that route cache entry
+  and retry once with the stored full-context fallback prompt as a fresh
+  conversation. Do not loop indefinitely, and do not apply this fallback to
+  non-route fresh-conversation `403` errors.
 
 #### 4. Validation & Error Matrix
 
@@ -1550,6 +1556,15 @@ Responses contract locally instead of returning "endpoint not supported".
 - ChatGPT Web chat-tail image collection should not stop at the first preview
   sediment when `has_image_generation=true`; it must wait for a stable sediment
   set long enough to capture multi-image responses and late-arriving final refs.
+- ChatGPT Web cached conversation route hit + `f/conversation` stream-open
+  `403` + available `FallbackPrompt` -> clear the stale session route, send one
+  fresh full-context retry without `conversation_id`, and record timing such as
+  `session_route_retry_full_context`, `session_route_retry_reason=stream_403`,
+  `session_route_cleared`, and `session_route_retry_success`.
+- ChatGPT Web fresh conversation `f/conversation` `403`, or route hit without a
+  full-context fallback prompt -> propagate the upstream error through the
+  normal relay error path; do not retry locally because there is no stale route
+  to repair.
 - Responses stream has no `response.output_text.delta` but does include a
   completed message item with `content[0].type="output_text"` -> Claude
   `/v1/messages` clients still receive a `content_block_delta` before
@@ -1571,6 +1586,9 @@ Responses contract locally instead of returning "endpoint not supported".
   clients can execute the tool and continue the turn.
 - Base: `/v1/chat/completions` still returns chat completion chunks; only the
   source of text image-intent detection is constrained to latest user text.
+- Good: a reused ChatGPT Web session route whose cached conversation can no
+  longer be continued falls back to a fresh full-context turn once, then records
+  the new conversation id at normal stream completion.
 - Bad: returning raw `chat.completion` JSON/SSE from a `/v1/responses` request;
   Responses clients will treat it as malformed.
 - Bad: using the chat-completions text keyword heuristic for Responses text
@@ -1585,6 +1603,9 @@ Responses contract locally instead of returning "endpoint not supported".
 - Bad: ignoring image refs already present in ChatGPT Web SSE events as a signal
   that generation happened; this can miss image-only SSE turns or make the relay
   treat them as empty responses.
+- Bad: repeatedly retrying a stale cached `conversation_id` after upstream
+  `403`; this can turn an otherwise recoverable turn into repeated
+  `1142->1142->1142` style channel failures.
 
 #### 6. Tests Required
 
@@ -1608,6 +1629,9 @@ Responses contract locally instead of returning "endpoint not supported".
 - `relay/channel/chatgptimg`: regression tests proving stable sediment polling
   waits for late-arriving refs when the upstream stream reports real image
   generation, instead of returning the first preview-only ref set too early.
+- `relay/channel/chatgptimg`: regression test proving cached-conversation
+  stream-open `403` clears the session route and retries exactly once with the
+  full-context fallback prompt and no `conversation_id`.
 - `relay/channel/openai`: regression test that a Claude stream converted from a
   Responses stream with only `response.output_item.done` message text emits
   `content_block_delta` and does not stop as an empty message.

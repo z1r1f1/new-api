@@ -601,6 +601,103 @@ func TestApplyChatGPTWebSessionRouteUsesLatestPromptAndFullFallback(t *testing.T
 	}
 }
 
+func TestStartChatStreamFallsBackToFullContextWhenCachedConversationForbidden(t *testing.T) {
+	resetChatGPTWebSessionRouteCacheForTest()
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		resetChatGPTWebSessionRouteCacheForTest()
+	})
+
+	routeKey := "route-for-stale-conv"
+	recordChatGPTWebSessionRoute(chatGPTWebSessionRoute{
+		Enabled: true,
+		Key:     routeKey,
+	}, "stale-conv", nil)
+
+	var conversationPayloads []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/conversation/stale-conv":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"current_node":"parent-stale","mapping":{}}`))
+		case "/backend-api/f/conversation/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-test"}`))
+		case "/backend-api/f/conversation":
+			var payload map[string]any
+			body, _ := io.ReadAll(r.Body)
+			if err := common.Unmarshal(body, &payload); err != nil {
+				t.Fatalf("conversation payload is not json: %v", err)
+			}
+			conversationPayloads = append(conversationPayloads, payload)
+			if payload["conversation_id"] == "stale-conv" {
+				http.Error(w, `{"error":"conversation forbidden"}`, http.StatusForbidden)
+				return
+			}
+			if _, exists := payload["conversation_id"]; exists {
+				t.Fatalf("fallback request must start a fresh conversation, got %#v", payload["conversation_id"])
+			}
+			messages, _ := payload["messages"].([]any)
+			if len(messages) != 1 {
+				t.Fatalf("unexpected fallback messages: %#v", payload["messages"])
+			}
+			msg, _ := messages[0].(map[string]any)
+			content, _ := msg["content"].(map[string]any)
+			parts, _ := content["parts"].([]any)
+			if len(parts) != 1 || parts[0] != "full context prompt" {
+				t.Fatalf("fallback must send full context prompt, got %#v", parts)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc:             server.Client(),
+		cachedReqToken: "requirements-token",
+		reqExpiresAt:   time.Now().Add(time.Minute),
+	}
+	req := chatRequest{
+		Model:           "gpt-5.5-instant",
+		ConversationID:  "stale-conv",
+		FallbackPrompt:  "full context prompt",
+		sessionRouteKey: routeKey,
+	}
+	timing := service.NewChatGPTWebTiming()
+	started, err := startChatStream(context.Background(), client, req, "incremental prompt", nil, timing)
+	if err != nil {
+		t.Fatalf("startChatStream returned error: %v", err)
+	}
+	for range started.Stream {
+	}
+	if started.Prompt != "full context prompt" {
+		t.Fatalf("expected started prompt to switch to full context, got %q", started.Prompt)
+	}
+	if len(conversationPayloads) != 2 {
+		t.Fatalf("expected stale conversation attempt plus fallback attempt, got %d", len(conversationPayloads))
+	}
+	if snapshot := timing.Snapshot(); snapshot["session_route_retry_full_context"] != true || snapshot["session_route_retry_reason"] != "stream_403" {
+		t.Fatalf("expected route fallback timing, got %#v", snapshot)
+	}
+	if _, found, err := getChatGPTWebSessionRouteCache().Get(routeKey); err != nil || found {
+		t.Fatalf("expected stale session route cache to be cleared, found=%v err=%v", found, err)
+	}
+}
+
 func TestResponsesTextPromptDoesNotTriggerImageHeuristic(t *testing.T) {
 	info := &relaycommon.RelayInfo{RelayMode: relayconstant.RelayModeResponses}
 	req := chatRequest{
