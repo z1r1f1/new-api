@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useMemo } from 'react'
 import { AtSign, Loader2, Send } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
@@ -37,41 +38,57 @@ interface MessageComposerProps {
 export function MessageComposer(props: MessageComposerProps) {
   const { t } = useTranslation()
   const remaining = props.maxLength - props.value.length
+  const mentionQuery = getTrailingMentionQuery(props.value)
+  const mentionCandidates = useMemo(
+    () => filterMentionCandidates(props.mentionUsers, mentionQuery),
+    [mentionQuery, props.mentionUsers]
+  )
+  const showMentionCandidates = Boolean(
+    props.active && !props.sending && mentionQuery !== null
+  )
 
   const handleMention = (user: ChatUser): void => {
     const mention = `@${user.username} `
-    props.onChange(props.value ? `${props.value}${mention}` : mention)
+    if (mentionQuery === null) {
+      props.onChange(props.value ? `${props.value}${mention}` : mention)
+      return
+    }
+    const atIndex = props.value.lastIndexOf('@')
+    if (atIndex < 0) {
+      props.onChange(props.value ? `${props.value}${mention}` : mention)
+      return
+    }
+    props.onChange(`${props.value.slice(0, atIndex)}${mention}`)
   }
 
   return (
     <div className='border-border/80 bg-background border-t p-3 lg:p-4'>
-      {props.mentionUsers.length > 0 && (
-        <div className='mb-2 flex flex-wrap items-center gap-2'>
-          <span className='text-muted-foreground flex items-center gap-1 text-xs'>
-            <AtSign className='h-3.5 w-3.5' />
-            {t('Mention')}
-          </span>
-          {props.mentionUsers.map((user) => (
-            <Button
-              key={user.id}
-              type='button'
-              variant='outline'
-              size='sm'
-              disabled={!props.active || props.sending}
-              className='h-7 rounded-full px-2 text-xs'
-              onClick={() => handleMention(user)}
-            >
-              @{user.username}
-              {getChatUserDisplayName(user) !== user.username && (
-                <span className='text-muted-foreground ml-1 max-w-20 truncate'>
-                  {getChatUserDisplayName(user)}
-                </span>
-              )}
-            </Button>
-          ))}
-        </div>
-      )}
-      <div className='focus-within:border-primary/50 rounded-2xl border p-2'>
+      <div className='focus-within:border-primary/50 relative rounded-2xl border p-2'>
+        {showMentionCandidates && mentionCandidates.length > 0 && (
+          <div className='bg-popover text-popover-foreground absolute right-2 bottom-[calc(100%-0.25rem)] left-2 z-10 rounded-xl border p-2 shadow-lg'>
+            <div className='text-muted-foreground mb-1 flex items-center gap-1 px-1 text-xs'>
+              <AtSign className='h-3.5 w-3.5' />
+              {t('Mention')}
+            </div>
+            <div className='max-h-48 overflow-y-auto'>
+              {mentionCandidates.map((user) => (
+                <button
+                  key={user.id}
+                  type='button'
+                  className='hover:bg-muted flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm'
+                  onClick={() => handleMention(user)}
+                >
+                  <span className='font-medium'>@{user.username}</span>
+                  {getChatUserDisplayName(user) !== user.username && (
+                    <span className='text-muted-foreground truncate text-xs'>
+                      {getChatUserDisplayName(user)}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <Textarea
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
@@ -111,4 +128,26 @@ export function MessageComposer(props: MessageComposerProps) {
       </div>
     </div>
   )
+}
+
+function getTrailingMentionQuery(value: string): string | null {
+  const match = /(^|\s)@([^\s@]*)$/.exec(value)
+  return match?.[2] ?? null
+}
+
+function filterMentionCandidates(
+  users: ChatUser[],
+  query: string | null
+): ChatUser[] {
+  if (query === null) return []
+  const keyword = query.trim().toLowerCase()
+  return users
+    .filter((user) => {
+      if (!keyword) return true
+      return (
+        user.username.toLowerCase().includes(keyword) ||
+        getChatUserDisplayName(user).toLowerCase().includes(keyword)
+      )
+    })
+    .slice(0, 8)
 }
