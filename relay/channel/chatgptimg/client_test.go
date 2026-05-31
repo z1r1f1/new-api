@@ -770,6 +770,60 @@ func TestPollConversationForImagesWaitsForStableSedimentRefs(t *testing.T) {
 	}
 }
 
+func TestPollConversationForImagesReturnsDownloadableStableSedimentPreviewBeforeTimeout(t *testing.T) {
+	var mappingCalls int
+	var downloadCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/files/library":
+			_, _ = w.Write([]byte(`{"items": []}`))
+			return
+		case "/backend-api/conversation/conv-1":
+			mappingCalls++
+			_, _ = w.Write([]byte(`{"mapping":{"tool-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"sediment://sed_ready"}]},"recipient":"image_gen.text2im"}}}}`))
+			return
+		case "/backend-api/conversation/conv-1/attachment/sed_ready/download":
+			downloadCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/ready.png"}`))
+			return
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+
+	start := time.Now()
+	status, fids, sids := client.PollConversationForImages(context.Background(), "conv-1", PollOpts{
+		MaxWait:            500 * time.Millisecond,
+		Interval:           5 * time.Millisecond,
+		StableRounds:       2,
+		PreviewWait:        20 * time.Millisecond,
+		StableSedimentRefs: true,
+	})
+	elapsed := time.Since(start)
+	if status != PollStatusPreviewOnly {
+		t.Fatalf("expected stable preview status, got %s", status)
+	}
+	if len(fids) != 0 {
+		t.Fatalf("expected no final file ids, got %#v", fids)
+	}
+	if len(sids) != 1 || sids[0] != "sed_ready" {
+		t.Fatalf("expected stable sediment id, got %#v", sids)
+	}
+	if mappingCalls < 2 || downloadCalls < 1 {
+		t.Fatalf("expected stable mapping checks and download readiness check, mapping=%d download=%d", mappingCalls, downloadCalls)
+	}
+	if elapsed >= 250*time.Millisecond {
+		t.Fatalf("expected downloadable stable sediment preview before max wait, took %s", elapsed)
+	}
+}
+
 func TestChatGPTWebImagePollMaxWaitForActualGenerationUsesDedicatedTimeout(t *testing.T) {
 	t.Setenv("CHATGPT_WEB_CHAT_IMAGE_ACTUAL_POLL_TIMEOUT_SECONDS", "7")
 	if got := chatGPTWebChatImagePollMaxWaitFor(true); got != 7*time.Second {

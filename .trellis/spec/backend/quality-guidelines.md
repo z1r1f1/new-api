@@ -1519,9 +1519,13 @@ Responses contract locally instead of returning "endpoint not supported".
   result through conversation mapping/polling and resolves it to a downloadable
   or gateway-hosted URL.
 - When the upstream stream explicitly reports image generation, the chat-tail
-  collector should use the dedicated longer wait and require stable sediment
-  refs before returning a preview-only result. This avoids returning after the
-  first preview ref while later refs are still being added to the mapping.
+  collector should use the dedicated longer wait for final refs, but it must
+  not hold a downloadable stable sediment preview until the whole max-wait
+  expires. Once sediment refs are stable for the configured rounds, the
+  sediment download endpoint is ready, and `PreviewWait` has elapsed, return the
+  preview refs immediately. This avoids returning after the first unstable
+  preview ref while also avoiding 30s+ tail latency after the Web UI already has
+  a usable image.
 - ChatGPT Web session-route reuse is an optimization, not a hard dependency. If
   a cached conversation is readable but `POST /backend-api/f/conversation`
   returns upstream `403` while opening the stream, clear that route cache entry
@@ -1556,6 +1560,9 @@ Responses contract locally instead of returning "endpoint not supported".
 - ChatGPT Web chat-tail image collection should not stop at the first preview
   sediment when `has_image_generation=true`; it must wait for a stable sediment
   set long enough to capture multi-image responses and late-arriving final refs.
+- ChatGPT Web stable sediment preview with a resolvable download URL -> return
+  `preview_only` before `MaxWait` instead of waiting for final `file-service`
+  refs that may never appear in API-visible form.
 - ChatGPT Web cached conversation route hit + `f/conversation` stream-open
   `403` + available `FallbackPrompt` -> clear the stale session route, send one
   fresh full-context retry without `conversation_id`, and record timing such as
@@ -1603,6 +1610,9 @@ Responses contract locally instead of returning "endpoint not supported".
 - Bad: ignoring image refs already present in ChatGPT Web SSE events as a signal
   that generation happened; this can miss image-only SSE turns or make the relay
   treat them as empty responses.
+- Bad: waiting until `MaxWait` just because only stable `sediment://` refs are
+  present; if the sediment attachment download URL is already available, the
+  client should receive the gateway-hosted image without a 30s+ tail delay.
 - Bad: repeatedly retrying a stale cached `conversation_id` after upstream
   `403`; this can turn an otherwise recoverable turn into repeated
   `1142->1142->1142` style channel failures.
@@ -1629,6 +1639,8 @@ Responses contract locally instead of returning "endpoint not supported".
 - `relay/channel/chatgptimg`: regression tests proving stable sediment polling
   waits for late-arriving refs when the upstream stream reports real image
   generation, instead of returning the first preview-only ref set too early.
+- `relay/channel/chatgptimg`: regression test proving downloadable stable
+  sediment previews return before the full poll timeout.
 - `relay/channel/chatgptimg`: regression test proving cached-conversation
   stream-open `403` clears the session route and retries exactly once with the
   full-context fallback prompt and no `conversation_id`.

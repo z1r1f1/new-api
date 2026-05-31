@@ -2707,6 +2707,9 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 					stableCount = 1
 					lastSedSig = sig
 				}
+				if stableCount >= opt.StableRounds && time.Since(firstAnyRefTs) >= opt.PreviewWait && c.sedimentRefsDownloadReady(ctx, convID, mappingSedimentIDs) {
+					return PollStatusPreviewOnly, nil, mappingSedimentIDs
+				}
 			} else if time.Since(firstAnyRefTs) >= opt.PreviewWait {
 				return PollStatusPreviewOnly, nil, mappingSedimentIDs
 			}
@@ -2778,6 +2781,23 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		return PollStatusPreviewOnly, nil, lastBroadSed
 	}
 	return PollStatusTimeout, nil, nil
+}
+
+func (c *Client) sedimentRefsDownloadReady(ctx context.Context, convID string, sedimentIDs []string) bool {
+	if c == nil || strings.TrimSpace(convID) == "" || len(sedimentIDs) == 0 {
+		return false
+	}
+	for _, sid := range sedimentIDs {
+		sid = strings.TrimSpace(strings.TrimPrefix(sid, "sed:"))
+		if sid == "" {
+			return false
+		}
+		downloadURL, err := c.ImageDownloadURL(ctx, convID, "sed:"+sid)
+		if err != nil || strings.TrimSpace(downloadURL) == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func mergeStringSets(sets ...map[string]struct{}) map[string]struct{} {
