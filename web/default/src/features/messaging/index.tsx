@@ -18,26 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  Loader2,
-  MessageCircle,
-  MessageSquarePlus,
-  Plus,
-  Send,
-  UserPlus,
-  Users,
-} from 'lucide-react'
+import { Sparkles } from 'lucide-react'
 import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
-import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Textarea } from '@/components/ui/textarea'
+import { Card, CardContent } from '@/components/ui/card'
 import {
   addChatMember,
   createDirectConversation,
@@ -46,32 +33,27 @@ import {
   listChatMessages,
   markChatRead,
   messagingQueryKeys,
+  removeChatMember,
   sendChatMessage,
 } from './api'
+import { ConversationDetailsPanel } from './components/conversation-details-panel'
+import { ConversationHeader } from './components/conversation-header'
+import { ConversationSidebar } from './components/conversation-sidebar'
+import { MessageComposer } from './components/message-composer'
+import { MessageList } from './components/message-list'
+import { RealtimeStatusBadge } from './components/realtime-status-badge'
+import { StartConversationPanel } from './components/start-conversation-panel'
 import { useChatRealtime } from './hooks/use-chat-realtime'
-import type { ChatConversation, ChatEvent, ChatMessage } from './types'
-
-function parseMemberIds(value: string): number[] {
-  return value
-    .split(',')
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isInteger(item) && item > 0)
-}
-
-function formatChatTime(timestamp: number): string {
-  if (!timestamp) return ''
-  return new Intl.DateTimeFormat(undefined, {
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(timestamp * 1000))
-}
-
-function getConversationTitle(conversation: ChatConversation): string {
-  if (conversation.title.trim()) return conversation.title
-  return ''
-}
+import {
+  type ConversationFilter,
+  filterMessages,
+  getConversationFallbackTitle,
+  MAX_MESSAGE_LENGTH,
+  mergeMessages,
+  MESSAGE_PAGE_SIZE,
+  parseMemberIds,
+} from './lib/format'
+import type { ApiResponse, ChatEvent, ChatMessage } from './types'
 
 export function Messaging() {
   const { t } = useTranslation()
@@ -85,6 +67,13 @@ export function Messaging() {
   const [groupTitle, setGroupTitle] = useState('')
   const [groupMemberIds, setGroupMemberIds] = useState('')
   const [memberUserId, setMemberUserId] = useState('')
+  const [removeMemberUserId, setRemoveMemberUserId] = useState('')
+  const [conversationSearch, setConversationSearch] = useState('')
+  const [conversationFilter, setConversationFilter] =
+    useState<ConversationFilter>('all')
+  const [messageSearch, setMessageSearch] = useState('')
+  const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
+    useState<Record<number, boolean>>({})
 
   const conversationsQuery = useQuery({
     queryKey: messagingQueryKeys.conversations,
@@ -110,12 +99,46 @@ export function Messaging() {
     queryKey: activeConversationId
       ? messagingQueryKeys.messages(activeConversationId)
       : ['messaging', 'messages', 'idle'],
-    queryFn: () => listChatMessages(activeConversationId ?? 0),
+    queryFn: () =>
+      listChatMessages(activeConversationId ?? 0, 0, MESSAGE_PAGE_SIZE),
     enabled: Boolean(activeConversationId),
     select: (response) => response.data ?? [],
   })
 
   const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data])
+  const filteredMessages = useMemo(
+    () => filterMessages(messages, messageSearch),
+    [messageSearch, messages]
+  )
+  const filteredConversations = useMemo(() => {
+    const keyword = conversationSearch.trim().toLowerCase()
+    return conversations.filter((conversation) => {
+      if (
+        conversationFilter !== 'all' &&
+        conversation.type !== conversationFilter
+      ) {
+        return false
+      }
+      if (!keyword) return true
+      const title = getConversationFallbackTitle(conversation).toLowerCase()
+      return (
+        title.includes(keyword) || String(conversation.id).includes(keyword)
+      )
+    })
+  }, [conversationFilter, conversationSearch, conversations])
+
+  const conversationStats = useMemo(() => {
+    const directCount = conversations.filter(
+      (conversation) => conversation.type === 'direct'
+    ).length
+    const groupCount = conversations.filter(
+      (conversation) => conversation.type === 'group'
+    ).length
+    const activeCount = conversations.filter(
+      (conversation) => conversation.last_message_id > 0
+    ).length
+    return { directCount, groupCount, activeCount, total: conversations.length }
+  }, [conversations])
 
   const invalidateConversations = useCallback(() => {
     void queryClient.invalidateQueries({
@@ -127,14 +150,10 @@ export function Messaging() {
     (message: ChatMessage) => {
       queryClient.setQueryData(
         messagingQueryKeys.messages(message.conversation_id),
-        (current: { data?: ChatMessage[]; success?: boolean } | undefined) => {
-          const existing = current?.data ?? []
-          if (existing.some((item) => item.id === message.id)) return current
-          return {
-            success: true,
-            data: [...existing, message],
-          }
-        }
+        (current: ApiResponse<ChatMessage[]> | undefined) => ({
+          success: true,
+          data: mergeMessages(current?.data ?? [], [message]),
+        })
       )
     },
     [queryClient]
@@ -142,16 +161,17 @@ export function Messaging() {
 
   const handleRealtimeEvent = useCallback(
     (event: ChatEvent) => {
-      if (event.type === 'conversation.created') {
-        invalidateConversations()
-        return
-      }
-      if (event.type === 'conversation.updated') {
-        invalidateConversations()
-        return
-      }
       if (event.type === 'message.created' && event.message) {
         appendMessage(event.message)
+        invalidateConversations()
+        return
+      }
+      if (
+        event.type === 'conversation.created' ||
+        event.type === 'conversation.updated' ||
+        event.type === 'member.added' ||
+        event.type === 'member.removed'
+      ) {
         invalidateConversations()
       }
     },
@@ -176,7 +196,38 @@ export function Messaging() {
     onSuccess: (response) => {
       if (response.data) appendMessage(response.data)
       setMessageBody('')
+      setMessageSearch('')
       invalidateConversations()
+    },
+  })
+
+  const loadOlderMutation = useMutation({
+    mutationFn: () => {
+      if (!activeConversationId || messages.length === 0) {
+        throw new Error(t('No earlier messages to load'))
+      }
+      return listChatMessages(
+        activeConversationId,
+        messages[0].id,
+        MESSAGE_PAGE_SIZE
+      )
+    },
+    onSuccess: (response) => {
+      if (!activeConversationId) return
+      const olderMessages = response.data ?? []
+      queryClient.setQueryData(
+        messagingQueryKeys.messages(activeConversationId),
+        (current: ApiResponse<ChatMessage[]> | undefined) => ({
+          success: true,
+          data: mergeMessages(current?.data ?? [], olderMessages),
+        })
+      )
+      if (olderMessages.length < MESSAGE_PAGE_SIZE) {
+        setHistoryExhaustedByConversation((current) => ({
+          ...current,
+          [activeConversationId]: true,
+        }))
+      }
     },
   })
 
@@ -216,7 +267,24 @@ export function Messaging() {
     },
     onSuccess: () => {
       setMemberUserId('')
+      invalidateConversations()
       toast.success(t('Member added'))
+    },
+  })
+
+  const removeMemberMutation = useMutation({
+    mutationFn: () => {
+      if (!activeConversationId)
+        throw new Error(t('Select a conversation first'))
+      return removeChatMember(
+        activeConversationId,
+        Number(removeMemberUserId.trim())
+      )
+    },
+    onSuccess: () => {
+      setRemoveMemberUserId('')
+      invalidateConversations()
+      toast.success(t('Member removed'))
     },
   })
 
@@ -229,7 +297,12 @@ export function Messaging() {
   }, [activeConversationId, messages])
 
   const handleSendMessage = (): void => {
-    if (!messageBody.trim()) return
+    const body = messageBody.trim()
+    if (!body) return
+    if (body.length > MAX_MESSAGE_LENGTH) {
+      toast.error(t('Message is too long'))
+      return
+    }
     sendMutation.mutate()
   }
 
@@ -259,306 +332,175 @@ export function Messaging() {
     addMemberMutation.mutate()
   }
 
-  return (
-    <div className='bg-background flex h-full min-h-0 flex-col gap-4 p-4 lg:flex-row'>
-      <aside className='flex min-h-0 w-full flex-col gap-4 lg:w-88'>
-        <Card className='min-h-0 flex-1'>
-          <CardHeader className='pb-3'>
-            <div className='flex items-center justify-between gap-3'>
-              <CardTitle className='flex items-center gap-2 text-base'>
-                <MessageCircle className='h-4 w-4' />
-                {t('Messages')}
-              </CardTitle>
-              <Badge
-                variant={realtimeStatus === 'connected' ? 'default' : 'outline'}
-              >
-                {t(realtimeStatus)}
-              </Badge>
-            </div>
-          </CardHeader>
-          <CardContent className='min-h-0 p-0'>
-            <ConversationList
-              conversations={conversations}
-              activeConversationId={activeConversationId}
-              loading={conversationsQuery.isPending}
-              onSelect={setActiveConversationId}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className='pb-3'>
-            <CardTitle className='flex items-center gap-2 text-sm'>
-              <MessageSquarePlus className='h-4 w-4' />
-              {t('Start conversation')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='space-y-3'>
-            <div className='flex gap-2'>
-              <Input
-                value={directUserId}
-                inputMode='numeric'
-                onChange={(event) => setDirectUserId(event.target.value)}
-                placeholder={t('Peer user ID')}
-              />
-              <Button
-                type='button'
-                onClick={handleCreateDirect}
-                disabled={createDirectMutation.isPending}
-              >
-                <Plus className='h-4 w-4' />
-              </Button>
-            </div>
-            <div className='space-y-2'>
-              <Input
-                value={groupTitle}
-                onChange={(event) => setGroupTitle(event.target.value)}
-                placeholder={t('Group name')}
-              />
-              <div className='flex gap-2'>
-                <Input
-                  value={groupMemberIds}
-                  onChange={(event) => setGroupMemberIds(event.target.value)}
-                  placeholder={t('Member IDs, separated by commas')}
-                />
-                <Button
-                  type='button'
-                  variant='secondary'
-                  onClick={handleCreateGroup}
-                  disabled={createGroupMutation.isPending}
-                >
-                  <Users className='h-4 w-4' />
-                </Button>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      </aside>
+  const handleRemoveMember = (): void => {
+    const userId = Number(removeMemberUserId.trim())
+    if (!Number.isInteger(userId) || userId <= 0) {
+      toast.error(t('Enter a valid user ID'))
+      return
+    }
+    removeMemberMutation.mutate()
+  }
 
-      <main className='min-w-0 flex-1'>
-        <Card className='flex h-full min-h-0 flex-col'>
-          <CardHeader className='border-border border-b'>
-            <div className='flex flex-col gap-3 md:flex-row md:items-center md:justify-between'>
-              <div>
-                <CardTitle className='text-base'>
-                  {activeConversation ? (
-                    <ConversationTitle conversation={activeConversation} />
-                  ) : (
-                    t('Select a conversation')
-                  )}
-                </CardTitle>
-                {activeConversation && (
-                  <p className='text-muted-foreground mt-1 text-xs'>
-                    {t('Conversation ID')}: {activeConversation.id} ·{' '}
-                    {t(activeConversation.type)}
-                  </p>
-                )}
-              </div>
-              {activeConversation?.type === 'group' && (
-                <div className='flex gap-2'>
-                  <Input
-                    value={memberUserId}
-                    inputMode='numeric'
-                    onChange={(event) => setMemberUserId(event.target.value)}
-                    placeholder={t('User ID')}
-                    className='w-36'
-                  />
-                  <Button
-                    type='button'
-                    variant='outline'
-                    onClick={handleAddMember}
-                    disabled={addMemberMutation.isPending}
-                  >
-                    <UserPlus className='h-4 w-4' />
-                    {t('Add')}
-                  </Button>
-                </div>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className='flex min-h-0 flex-1 flex-col p-0'>
-            <MessageList
-              messages={messages}
-              currentUserId={currentUserId}
-              loading={messagesQuery.isPending}
-              empty={!activeConversation}
-            />
-            <div className='border-border flex gap-2 border-t p-3'>
-              <Textarea
-                value={messageBody}
-                onChange={(event) => setMessageBody(event.target.value)}
-                placeholder={t('Type a message...')}
-                disabled={!activeConversation || sendMutation.isPending}
-                className='min-h-12 resize-none'
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' && !event.shiftKey) {
-                    event.preventDefault()
-                    handleSendMessage()
-                  }
-                }}
+  const handleRefresh = (): void => {
+    invalidateConversations()
+    if (activeConversationId) {
+      void queryClient.invalidateQueries({
+        queryKey: messagingQueryKeys.messages(activeConversationId),
+      })
+    }
+  }
+
+  const canLoadOlder = Boolean(
+    activeConversationId &&
+    messages.length > 0 &&
+    !historyExhaustedByConversation[activeConversationId]
+  )
+
+  return (
+    <div className='from-background via-muted/20 to-background flex h-full min-h-0 flex-col bg-[radial-gradient(circle_at_top_left,var(--tw-gradient-stops))] p-3 lg:p-4'>
+      <MessagingHero
+        realtimeStatus={realtimeStatus}
+        total={conversationStats.total}
+        groupCount={conversationStats.groupCount}
+        activeCount={conversationStats.activeCount}
+      />
+      <div className='grid min-h-0 flex-1 gap-4 xl:grid-cols-[22rem_minmax(0,1fr)_20rem]'>
+        <aside className='flex min-h-0 flex-col gap-4'>
+          <ConversationSidebar
+            conversations={filteredConversations}
+            allConversationCount={conversations.length}
+            activeConversationId={activeConversationId}
+            loading={conversationsQuery.isPending}
+            searchText={conversationSearch}
+            filter={conversationFilter}
+            directCount={conversationStats.directCount}
+            groupCount={conversationStats.groupCount}
+            onSearchChange={setConversationSearch}
+            onFilterChange={setConversationFilter}
+            onSelect={setActiveConversationId}
+            onRefresh={handleRefresh}
+          />
+          <StartConversationPanel
+            directUserId={directUserId}
+            groupTitle={groupTitle}
+            groupMemberIds={groupMemberIds}
+            creatingDirect={createDirectMutation.isPending}
+            creatingGroup={createGroupMutation.isPending}
+            onDirectUserIdChange={setDirectUserId}
+            onGroupTitleChange={setGroupTitle}
+            onGroupMemberIdsChange={setGroupMemberIds}
+            onCreateDirect={handleCreateDirect}
+            onCreateGroup={handleCreateGroup}
+          />
+        </aside>
+
+        <main className='min-w-0'>
+          <Card className='border-border/80 bg-background/95 flex h-full min-h-0 overflow-hidden shadow-sm'>
+            <div className='flex min-w-0 flex-1 flex-col'>
+              <ConversationHeader
+                conversation={activeConversation}
+                realtimeStatus={realtimeStatus}
+                messageCount={messages.length}
+                searchText={messageSearch}
+                onSearchChange={setMessageSearch}
+                onRefresh={handleRefresh}
               />
-              <Button
-                type='button'
-                onClick={handleSendMessage}
-                disabled={!activeConversation || sendMutation.isPending}
-                className='self-end'
-              >
-                <Send className='h-4 w-4' />
-                {t('Send')}
-              </Button>
+              <CardContent className='flex min-h-0 flex-1 flex-col p-0'>
+                <MessageList
+                  messages={filteredMessages}
+                  allMessageCount={messages.length}
+                  currentUserId={currentUserId}
+                  loading={messagesQuery.isPending}
+                  empty={!activeConversation}
+                  searchText={messageSearch}
+                  canLoadOlder={canLoadOlder}
+                  loadingOlder={loadOlderMutation.isPending}
+                  onLoadOlder={() => loadOlderMutation.mutate()}
+                />
+                <MessageComposer
+                  value={messageBody}
+                  active={Boolean(activeConversation)}
+                  sending={sendMutation.isPending}
+                  maxLength={MAX_MESSAGE_LENGTH}
+                  onChange={setMessageBody}
+                  onSend={handleSendMessage}
+                />
+              </CardContent>
             </div>
-          </CardContent>
-        </Card>
-      </main>
+          </Card>
+        </main>
+
+        <aside className='hidden min-h-0 xl:flex'>
+          <ConversationDetailsPanel
+            conversation={activeConversation}
+            currentUserId={currentUserId}
+            realtimeStatus={realtimeStatus}
+            messageCount={messages.length}
+            memberUserId={memberUserId}
+            removeMemberUserId={removeMemberUserId}
+            addingMember={addMemberMutation.isPending}
+            removingMember={removeMemberMutation.isPending}
+            onMemberUserIdChange={setMemberUserId}
+            onRemoveMemberUserIdChange={setRemoveMemberUserId}
+            onAddMember={handleAddMember}
+            onRemoveMember={handleRemoveMember}
+          />
+        </aside>
+      </div>
     </div>
   )
 }
 
-interface ConversationListProps {
-  conversations: ChatConversation[]
-  activeConversationId: number | null
-  loading: boolean
-  onSelect: (conversationId: number) => void
+interface MessagingHeroProps {
+  realtimeStatus: string
+  total: number
+  groupCount: number
+  activeCount: number
 }
 
-function ConversationList(props: ConversationListProps) {
+function MessagingHero(props: MessagingHeroProps) {
   const { t } = useTranslation()
 
-  if (props.loading) {
-    return (
-      <div className='text-muted-foreground flex items-center gap-2 p-4 text-sm'>
-        <Loader2 className='h-4 w-4 animate-spin' />
-        {t('Loading conversations...')}
-      </div>
-    )
-  }
-
-  if (props.conversations.length === 0) {
-    return (
-      <div className='text-muted-foreground p-4 text-sm'>
-        {t('No conversations yet. Start one with a user ID.')}
-      </div>
-    )
-  }
-
   return (
-    <ScrollArea className='h-[360px] lg:h-[calc(100vh-20rem)]'>
-      <div className='space-y-1 p-2'>
-        {props.conversations.map((conversation) => (
-          <button
-            key={conversation.id}
-            type='button'
-            onClick={() => props.onSelect(conversation.id)}
-            className={cn(
-              'hover:bg-muted w-full rounded-lg px-3 py-2 text-left transition-colors',
-              props.activeConversationId === conversation.id && 'bg-muted'
-            )}
-          >
-            <div className='flex items-center justify-between gap-2'>
-              <span className='truncate text-sm font-medium'>
-                <ConversationTitle conversation={conversation} />
-              </span>
-              <Badge variant='outline'>{t(conversation.type)}</Badge>
-            </div>
-            <div className='text-muted-foreground mt-1 flex justify-between gap-2 text-xs'>
-              <span>
-                {t('Last message')}: #{conversation.last_message_id || '-'}
-              </span>
-              <span>{formatChatTime(conversation.last_message_at)}</span>
-            </div>
-          </button>
-        ))}
+    <div className='bg-background/80 mb-4 flex flex-col gap-3 rounded-3xl border p-4 shadow-sm backdrop-blur md:flex-row md:items-center md:justify-between'>
+      <div className='min-w-0'>
+        <div className='mb-2 flex flex-wrap items-center gap-2'>
+          <Badge variant='secondary' className='gap-1 rounded-full'>
+            <Sparkles className='h-3.5 w-3.5' />
+            {t('Enterprise messaging')}
+          </Badge>
+          <RealtimeStatusBadge status={props.realtimeStatus} />
+        </div>
+        <h1 className='text-foreground text-2xl font-semibold tracking-tight'>
+          {t('Messages command center')}
+        </h1>
+        <p className='text-muted-foreground mt-1 text-sm'>
+          {t(
+            'Coordinate direct and group conversations with realtime delivery, message history, and member operations.'
+          )}
+        </p>
       </div>
-    </ScrollArea>
+      <div className='grid grid-cols-3 gap-2 md:w-[26rem]'>
+        <MetricTile label={t('All chats')} value={props.total} />
+        <MetricTile label={t('Groups')} value={props.groupCount} />
+        <MetricTile label={t('Active chats')} value={props.activeCount} />
+      </div>
+    </div>
   )
 }
 
-interface ConversationTitleProps {
-  conversation: ChatConversation
+interface MetricTileProps {
+  label: string
+  value: number
 }
 
-function ConversationTitle(props: ConversationTitleProps) {
-  const { t } = useTranslation()
-  const explicitTitle = getConversationTitle(props.conversation)
-  if (explicitTitle) return explicitTitle
-  if (props.conversation.type === 'direct') {
-    return (
-      <>
-        {t('Direct chat')} #{props.conversation.id}
-      </>
-    )
-  }
+function MetricTile(props: MetricTileProps) {
   return (
-    <>
-      {t('Group chat')} #{props.conversation.id}
-    </>
-  )
-}
-
-interface MessageListProps {
-  messages: ChatMessage[]
-  currentUserId: number | null
-  loading: boolean
-  empty: boolean
-}
-
-function MessageList(props: MessageListProps) {
-  const { t } = useTranslation()
-
-  if (props.empty) {
-    return (
-      <div className='text-muted-foreground flex flex-1 items-center justify-center p-6 text-center text-sm'>
-        {t('Select a conversation to read messages.')}
+    <div className='bg-muted/30 rounded-2xl border px-3 py-2'>
+      <div className='text-muted-foreground text-[11px] font-medium tracking-wide uppercase'>
+        {props.label}
       </div>
-    )
-  }
-
-  if (props.loading) {
-    return (
-      <div className='text-muted-foreground flex flex-1 items-center justify-center gap-2 p-6 text-sm'>
-        <Loader2 className='h-4 w-4 animate-spin' />
-        {t('Loading messages...')}
-      </div>
-    )
-  }
-
-  if (props.messages.length === 0) {
-    return (
-      <div className='text-muted-foreground flex flex-1 items-center justify-center p-6 text-center text-sm'>
-        {t('No messages yet. Send the first message below.')}
-      </div>
-    )
-  }
-
-  return (
-    <ScrollArea className='min-h-0 flex-1'>
-      <div className='space-y-3 p-4'>
-        {props.messages.map((message) => {
-          const isMine = message.sender_id === props.currentUserId
-          return (
-            <div
-              key={message.id}
-              className={cn('flex', isMine ? 'justify-end' : 'justify-start')}
-            >
-              <div
-                className={cn(
-                  'max-w-[80%] rounded-2xl px-3 py-2 text-sm shadow-sm',
-                  isMine
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted text-foreground'
-                )}
-              >
-                <div className='mb-1 text-xs opacity-75'>
-                  {t('User')} #{message.sender_id} ·{' '}
-                  {formatChatTime(message.created_at)}
-                </div>
-                <div className='break-words whitespace-pre-wrap'>
-                  {message.body}
-                </div>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </ScrollArea>
+      <div className='text-xl font-semibold tabular-nums'>{props.value}</div>
+    </div>
   )
 }
