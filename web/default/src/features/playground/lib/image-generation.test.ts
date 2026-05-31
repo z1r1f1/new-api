@@ -6,9 +6,13 @@ import {
   extractImageGenerationWaitTaskId,
   getImageGenerationWaitMessage,
   imageTaskResultToMarkdown,
+  parseGeneratedImagesFromMarkdown,
 } from './image-generation'
 import { formatMessageForAPI } from './message-utils'
-import { buildChatCompletionPayload } from './payload-builder'
+import {
+  buildChatCompletionPayload,
+  buildPlaygroundPreviewPayload,
+} from './payload-builder'
 
 const config: PlaygroundConfig = {
   model: 'gpt-image-2',
@@ -53,7 +57,7 @@ describe('buildImageGenerationPayload', () => {
       config
     )
 
-    assert.equal(payload.prompt, '再来一张')
+    assert.match(payload.prompt, /^再来一张/)
     assert.deepEqual(payload.reference_images, [
       '/pg/images/generations/task_first/image/0',
     ])
@@ -70,8 +74,51 @@ describe('buildImageGenerationPayload', () => {
       config
     )
 
-    assert.equal(payload.prompt, '改成漫画风格')
+    assert.match(payload.prompt, /^改成漫画风格/)
     assert.equal(payload.image, 'data:image/png;base64,abc123')
+  })
+
+  test('instructs image edits to return a newly generated image instead of the source image', () => {
+    const payload = buildImageGenerationPayload(
+      [
+        message(
+          'user',
+          '改成漫画风格\n\n![attached image 1](data:image/png;base64,abc123)'
+        ),
+      ],
+      config
+    )
+
+    assert.match(payload.prompt, /^改成漫画风格/)
+    assert.match(payload.prompt, /return a newly generated edited image/i)
+    assert.match(
+      payload.prompt,
+      /do not return the input\/reference image unchanged/i
+    )
+    assert.equal(payload.image, 'data:image/png;base64,abc123')
+  })
+
+  test('does not reuse previous user attachment images as generated references', () => {
+    const payload = buildImageGenerationPayload(
+      [
+        message(
+          'user',
+          '改成漫画风格\n\n![original.png](data:image/png;base64,original)'
+        ),
+        message(
+          'assistant',
+          '![generated image 1](/pg/images/generations/task_done/image/0)'
+        ),
+        message('user', '再加一只猫'),
+      ],
+      config
+    )
+
+    assert.match(payload.prompt, /^再加一只猫/)
+    assert.equal(payload.image, undefined)
+    assert.deepEqual(payload.reference_images, [
+      '/pg/images/generations/task_done/image/0',
+    ])
   })
 })
 
@@ -125,6 +172,18 @@ describe('image generation task rendering', () => {
       'task_abc123'
     )
     assert.equal(extractImageGenerationWaitTaskId('Task ID: `resp_abc`'), '')
+  })
+
+  test('does not render arbitrary user attachments as generated images', () => {
+    const parsed = parseGeneratedImagesFromMarkdown(
+      'input image\n\n![original.png](data:image/png;base64,original)'
+    )
+
+    assert.equal(
+      parsed.text,
+      'input image\n\n![original.png](data:image/png;base64,original)'
+    )
+    assert.deepEqual(parsed.images, [])
   })
 })
 
@@ -209,5 +268,152 @@ describe('buildChatCompletionPayload', () => {
     )
 
     assert.equal(payload.chatgpt_web_deep_research, true)
+  })
+
+  test('routes ChatGPT Web image-capable text image requests through image generation preview payload', () => {
+    const result = buildPlaygroundPreviewPayload({
+      messages: [message('user', '生成一张美女图片')],
+      config: { ...config, model: 'gpt-5.5-thinking' },
+      parameterEnabled: {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      },
+      customRequestMode: false,
+      customRequestBody: '',
+    })
+
+    assert.equal(result.error, null)
+    assert.equal(result.payload?.model, 'gpt-5.5-thinking')
+    assert.equal(
+      (result.payload as { prompt?: string } | null)?.prompt,
+      '生成一张美女图片'
+    )
+  })
+
+  test('routes ChatGPT Web image-capable image edits through image generation preview payload', () => {
+    const result = buildPlaygroundPreviewPayload({
+      messages: [
+        message(
+          'user',
+          '改成漫画风格\n\n![attached image 1](data:image/png;base64,abc123)'
+        ),
+      ],
+      config: { ...config, model: 'gpt-5.5-thinking' },
+      parameterEnabled: {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      },
+      customRequestMode: false,
+      customRequestBody: '',
+    })
+
+    assert.equal(result.error, null)
+    assert.equal(result.payload?.model, 'gpt-5.5-thinking')
+    assert.equal(
+      (result.payload as { image?: string } | null)?.image,
+      'data:image/png;base64,abc123'
+    )
+    assert.match(
+      String((result.payload as { prompt?: string } | null)?.prompt || ''),
+      /return a newly generated edited image/i
+    )
+  })
+
+  test('routes ChatGPT Web follow-up edits of prior generated images through image generation preview payload', () => {
+    const result = buildPlaygroundPreviewPayload({
+      messages: [
+        message('user', '生成一张猫咪头像'),
+        message(
+          'assistant',
+          '![generated image 1](/pg/images/generations/task_done/image/0)'
+        ),
+        message('user', '再加一只猫'),
+      ],
+      config: { ...config, model: 'gpt-5.5-thinking' },
+      parameterEnabled: {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      },
+      customRequestMode: false,
+      customRequestBody: '',
+    })
+
+    assert.equal(result.error, null)
+    assert.equal(result.payload?.model, 'gpt-5.5-thinking')
+    assert.deepEqual(
+      (result.payload as { reference_images?: string[] } | null)
+        ?.reference_images,
+      ['/pg/images/generations/task_done/image/0']
+    )
+    assert.match(
+      String((result.payload as { prompt?: string } | null)?.prompt || ''),
+      /return a newly generated edited image/i
+    )
+  })
+
+  test('keeps ChatGPT Web image understanding prompts on chat completions', () => {
+    const result = buildPlaygroundPreviewPayload({
+      messages: [
+        message(
+          'user',
+          '请描述这张图\n\n![attached image 1](data:image/png;base64,abc123)'
+        ),
+      ],
+      config: { ...config, model: 'gpt-5.5-thinking' },
+      parameterEnabled: {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      },
+      customRequestMode: false,
+      customRequestBody: '',
+    })
+
+    const payload = result.payload as { messages?: unknown[]; prompt?: string }
+    assert.equal(result.error, null)
+    assert.ok(Array.isArray(payload.messages))
+    assert.equal(payload.prompt, undefined)
+  })
+
+  test('keeps ChatGPT Web image style questions on chat completions', () => {
+    const result = buildPlaygroundPreviewPayload({
+      messages: [
+        message(
+          'user',
+          '这张图是什么风格？\n\n![attached image 1](data:image/png;base64,abc123)'
+        ),
+      ],
+      config: { ...config, model: 'gpt-5.5-thinking' },
+      parameterEnabled: {
+        temperature: false,
+        top_p: false,
+        max_tokens: false,
+        frequency_penalty: false,
+        presence_penalty: false,
+        seed: false,
+      },
+      customRequestMode: false,
+      customRequestBody: '',
+    })
+
+    const payload = result.payload as { messages?: unknown[]; prompt?: string }
+    assert.equal(result.error, null)
+    assert.ok(Array.isArray(payload.messages))
+    assert.equal(payload.prompt, undefined)
   })
 })

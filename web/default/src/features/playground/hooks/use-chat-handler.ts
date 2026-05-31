@@ -36,7 +36,8 @@ import {
   getImageGenerationWaitMessage,
   imageResponseToMarkdown,
   imageTaskResultToMarkdown,
-  isImageGenerationModel,
+  isImageGenerationRequestPayload,
+  shouldUseImageGenerationPayload,
   isSuccessfulImageTaskStatus,
   isTerminalImageTaskStatus,
   loadPendingImageTasks,
@@ -1035,7 +1036,10 @@ export function useChatHandler({
       const model = overridePayload
         ? getPayloadModel(overridePayload)
         : config.model
-      if (isImageGenerationModel(model)) {
+      if (
+        isImageGenerationRequestPayload(overridePayload) ||
+        shouldUseImageGenerationPayload(messages, model)
+      ) {
         sendImageGenerationChat(messages, overridePayload)
         return
       }
