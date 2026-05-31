@@ -1518,6 +1518,10 @@ Responses contract locally instead of returning "endpoint not supported".
   clients should receive image Markdown only after the adapter re-collects the
   result through conversation mapping/polling and resolves it to a downloadable
   or gateway-hosted URL.
+- When the upstream stream explicitly reports image generation, the chat-tail
+  collector should use the dedicated longer wait and require stable sediment
+  refs before returning a preview-only result. This avoids returning after the
+  first preview ref while later refs are still being added to the mapping.
 
 #### 4. Validation & Error Matrix
 
@@ -1543,6 +1547,9 @@ Responses contract locally instead of returning "endpoint not supported".
   the refs as a hint that image generation happened, then collect the API-visible
   image result via conversation mapping/polling. Do not materialize the raw SSE
   `file-service://` or `sediment://` pointer directly for request clients.
+- ChatGPT Web chat-tail image collection should not stop at the first preview
+  sediment when `has_image_generation=true`; it must wait for a stable sediment
+  set long enough to capture multi-image responses and late-arriving final refs.
 - Responses stream has no `response.output_text.delta` but does include a
   completed message item with `content[0].type="output_text"` -> Claude
   `/v1/messages` clients still receive a `content_block_delta` before
@@ -1598,6 +1605,9 @@ Responses contract locally instead of returning "endpoint not supported".
   captures generated file/sediment refs from non-user messages, ignores
   user-uploaded refs, filters baseline refs, and uses SSE refs as conversation
   collection hints rather than directly downloading the raw web-internal refs.
+- `relay/channel/chatgptimg`: regression tests proving stable sediment polling
+  waits for late-arriving refs when the upstream stream reports real image
+  generation, instead of returning the first preview-only ref set too early.
 - `relay/channel/openai`: regression test that a Claude stream converted from a
   Responses stream with only `response.output_item.done` message text emits
   `content_block_delta` and does not stop as an empty message.

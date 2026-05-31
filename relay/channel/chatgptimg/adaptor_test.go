@@ -1265,7 +1265,7 @@ func TestCollectChatGeneratedImageMarkdownSkipsLongPollForTextOnlyChat(t *testin
 	}
 
 	start := time.Now()
-	markdown, err := collectChatGeneratedImageMarkdown(context.Background(), client, "conv-text", imageBaseline{}, false, nil, "", "", "")
+	markdown, err := collectChatGeneratedImageMarkdown(context.Background(), client, "conv-text", imageBaseline{}, false, false, nil, "", "", "")
 	if err != nil {
 		t.Fatalf("collectChatGeneratedImageMarkdown returned error: %v", err)
 	}

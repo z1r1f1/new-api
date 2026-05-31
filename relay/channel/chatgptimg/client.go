@@ -2548,6 +2548,7 @@ type PollOpts struct {
 	Interval            time.Duration
 	StableRounds        int
 	PreviewWait         time.Duration
+	StableSedimentRefs  bool
 }
 
 type PollStatus string
@@ -2696,7 +2697,20 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 			if firstAnyRefTs.IsZero() {
 				firstAnyRefTs = time.Now()
 			}
-			if time.Since(firstAnyRefTs) >= opt.PreviewWait {
+			if opt.StableSedimentRefs {
+				sortedSed := append([]string(nil), mappingSedimentIDs...)
+				sort.Strings(sortedSed)
+				sig := strings.Join(sortedSed, ",")
+				if sig == lastSedSig && sig != "" {
+					stableCount++
+				} else {
+					stableCount = 1
+					lastSedSig = sig
+				}
+				if sig != "" && stableCount >= opt.StableRounds && time.Since(firstAnyRefTs) >= opt.PreviewWait {
+					return PollStatusPreviewOnly, nil, mappingSedimentIDs
+				}
+			} else if time.Since(firstAnyRefTs) >= opt.PreviewWait {
 				return PollStatusPreviewOnly, nil, mappingSedimentIDs
 			}
 		}
@@ -2745,7 +2759,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 		if firstToolTs.IsZero() && len(newMsgs) >= 1 {
 			firstToolTs = time.Now()
 		}
-		if len(newMsgs) >= 2 {
+		if len(newMsgs) >= 2 && !opt.StableSedimentRefs {
 			sortedSed := append([]string(nil), allSed...)
 			sort.Strings(sortedSed)
 			sig := strings.Join(sortedSed, ",")
@@ -2758,7 +2772,7 @@ func (c *Client) PollConversationForImages(ctx context.Context, convID string, o
 				stableCount = 0
 				lastSedSig = sig
 			}
-		} else if !firstToolTs.IsZero() && time.Since(firstToolTs) >= opt.PreviewWait {
+		} else if !opt.StableSedimentRefs && !firstToolTs.IsZero() && time.Since(firstToolTs) >= opt.PreviewWait {
 			return PollStatusPreviewOnly, allFile, allSed
 		}
 		sleepContext(ctx, opt.Interval)

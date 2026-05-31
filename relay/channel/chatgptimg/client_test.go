@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -720,6 +721,62 @@ func TestPollConversationForImagesReturnsPreviewWhenSedimentIsReady(t *testing.T
 	}
 	if len(sids) != 1 || sids[0] != "sed_ready" {
 		t.Fatalf("expected sediment id, got %#v", sids)
+	}
+}
+
+func TestPollConversationForImagesWaitsForStableSedimentRefs(t *testing.T) {
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/backend-api/files/library" {
+			_, _ = w.Write([]byte(`{"items": []}`))
+			return
+		}
+		if r.URL.Path != "/backend-api/conversation/conv-1" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		calls++
+		body := `{"mapping":{"tool-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"sediment://sed_ready"}]},"recipient":"image_gen.text2im"}}}}`
+		if calls >= 2 {
+			body = `{"mapping":{"tool-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"sediment://sed_ready"},{"asset_pointer":"sediment://sed_extra"}]},"recipient":"image_gen.text2im"}}}}`
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL},
+		hc:   server.Client(),
+	}
+
+	status, fids, sids := client.PollConversationForImages(context.Background(), "conv-1", PollOpts{
+		MaxWait:            50 * time.Millisecond,
+		Interval:           time.Millisecond,
+		StableRounds:       2,
+		PreviewWait:        time.Millisecond,
+		StableSedimentRefs: true,
+	})
+	if status != PollStatusPreviewOnly {
+		t.Fatalf("expected preview status, got %s", status)
+	}
+	if len(fids) != 0 {
+		t.Fatalf("expected no file ids, got %#v", fids)
+	}
+	sort.Strings(sids)
+	if len(sids) != 2 || sids[0] != "sed_extra" || sids[1] != "sed_ready" {
+		t.Fatalf("expected stable sediment refs, got %#v", sids)
+	}
+	if calls < 2 {
+		t.Fatalf("expected multiple polls to stabilize refs, got %d", calls)
+	}
+}
+
+func TestChatGPTWebImagePollMaxWaitForActualGenerationUsesDedicatedTimeout(t *testing.T) {
+	t.Setenv("CHATGPT_WEB_CHAT_IMAGE_ACTUAL_POLL_TIMEOUT_SECONDS", "7")
+	if got := chatGPTWebChatImagePollMaxWaitFor(true); got != 7*time.Second {
+		t.Fatalf("expected dedicated actual-image max wait, got %s", got)
+	}
+	if got := chatGPTWebChatImagePollMaxWaitFor(false); got != chatGPTWebChatImagePollMaxWait {
+		t.Fatalf("expected normal chat-image max wait, got %s", got)
 	}
 }
 

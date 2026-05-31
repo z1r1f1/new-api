@@ -108,6 +108,7 @@ const chatGPTWebDeepResearchRecoverInterval = 5 * time.Second
 const chatGPTWebHandoffRecoverMaxWait = 45 * time.Second
 const chatGPTWebHandoffRecoverInterval = time.Second
 const chatGPTWebChatImagePollMaxWait = 30 * time.Second
+const chatGPTWebChatImagePollActualMaxWait = 75 * time.Second
 const chatGPTWebChatImageDownloadURLMaxWait = 10 * time.Second
 const chatGPTWebImagePollDefaultMaxWait = 10 * time.Minute
 const chatGPTWebImagePollTestMaxWait = 45 * time.Second
@@ -1546,7 +1547,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		}
 	}
 	if imageMarkdown == "" {
-		if markdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
+		if markdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, hasImageGeneration, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
 			return nil, err
 		} else {
 			imageMarkdown = markdown
@@ -1658,6 +1659,13 @@ func chatGPTWebImagePollMaxWait(testMode bool) time.Duration {
 		return chatGPTWebImagePollTestMaxWait
 	}
 	return chatGPTWebDurationFromEnv("CHATGPT_WEB_IMAGE_POLL_TIMEOUT_SECONDS", chatGPTWebImagePollDefaultMaxWait, time.Minute)
+}
+
+func chatGPTWebChatImagePollMaxWaitFor(actualImageGeneration bool) time.Duration {
+	if actualImageGeneration {
+		return chatGPTWebDurationFromEnv("CHATGPT_WEB_CHAT_IMAGE_ACTUAL_POLL_TIMEOUT_SECONDS", chatGPTWebChatImagePollActualMaxWait, 5*time.Second)
+	}
+	return chatGPTWebChatImagePollMaxWait
 }
 
 func chatGPTWebImageDownloadURLMaxWait(testMode bool) time.Duration {
@@ -2360,7 +2368,7 @@ func recoverChatCompletionTextWithFetcher(ctx context.Context, fetch chatComplet
 	}
 }
 
-func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) (string, error) {
+func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool, actualImageGeneration bool, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) (string, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
@@ -2403,10 +2411,11 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		}
 		pollStart := time.Now()
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
-			MaxWait:             chatGPTWebChatImagePollMaxWait,
+			MaxWait:             chatGPTWebChatImagePollMaxWaitFor(actualImageGeneration),
 			Interval:            2 * time.Second,
 			StableRounds:        2,
 			PreviewWait:         8 * time.Second,
+			StableSedimentRefs:  actualImageGeneration,
 			BaselineToolIDs:     baseline.ToolIDs,
 			BaselineFileIDs:     baseline.FileIDs,
 			BaselineSedimentIDs: baseline.SedimentIDs,
@@ -3447,7 +3456,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		}
 	}
 	if imageMarkdown == "" {
-		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, info, prompt, model, publicBaseURL, timing); err != nil {
+		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, state.HasImageGeneration, info, prompt, model, publicBaseURL, timing); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		} else {
@@ -3616,7 +3625,7 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		}
 	}
 	if imageMarkdown == "" {
-		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, info, prompt, model, publicBaseURL, timing); err != nil {
+		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, state.HasImageGeneration, info, prompt, model, publicBaseURL, timing); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		} else {
