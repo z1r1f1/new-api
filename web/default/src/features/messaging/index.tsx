@@ -376,8 +376,8 @@ export function Messaging() {
 
   return (
     <div className='bg-background flex h-full min-h-0 p-3 lg:p-4'>
-      <div className='grid min-h-0 flex-1 gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]'>
-        <aside className='min-h-0'>
+      <div className='grid h-full min-h-0 flex-1 gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]'>
+        <aside className='h-full min-h-0'>
           <ChatSidebar
             activeTab={sidebarTab}
             users={filteredUsers}
@@ -397,9 +397,9 @@ export function Messaging() {
           />
         </aside>
 
-        <main className='min-w-0'>
+        <main className='h-full min-h-0 min-w-0'>
           <Card className='border-border/80 flex h-full min-h-0 overflow-hidden shadow-sm'>
-            <div className='flex min-w-0 flex-1 flex-col'>
+            <div className='flex min-h-0 min-w-0 flex-1 flex-col'>
               <ChatHeader
                 conversation={activeConversation}
                 pendingUser={selectedUser}
@@ -461,7 +461,7 @@ function ChatHeader(props: ChatHeaderProps) {
   const subtitle = getHeaderSubtitle(props.conversation, props.pendingUser, t)
 
   return (
-    <CardHeader className='border-border/80 border-b'>
+    <CardHeader className='border-border/80 shrink-0 border-b'>
       <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
         <div className='flex min-w-0 items-center gap-3'>
           {props.conversation ? (

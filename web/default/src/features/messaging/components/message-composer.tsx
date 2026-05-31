@@ -62,7 +62,7 @@ export function MessageComposer(props: MessageComposerProps) {
   }
 
   return (
-    <div className='border-border/80 bg-background border-t p-3 lg:p-4'>
+    <div className='border-border/80 bg-background shrink-0 border-t p-3 lg:p-4'>
       <div className='focus-within:border-primary/50 relative rounded-2xl border p-2'>
         {showMentionCandidates && mentionCandidates.length > 0 && (
           <div className='bg-popover text-popover-foreground absolute right-2 bottom-[calc(100%-0.25rem)] left-2 z-10 rounded-xl border p-2 shadow-lg'>
