@@ -420,8 +420,11 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
 
 - Pending task storage item: `PendingImageGenerationTask`
   (`taskId`, `messageKey`, `sessionId`, `debugId`, `startedAt`, `updatedAt`).
-- Submit endpoint: `POST /pg/images/generations` -> `202` with `task_id`,
-  `status`, and `poll_url`.
+- Text-to-image submit endpoint: `POST /pg/images/generations` -> `202` with
+  `task_id`, `status`, and `poll_url`.
+- Image-edit submit endpoint: `POST /pg/images/edits` -> `202` with `task_id`,
+  `status`, and a `poll_url` that still points at
+  `/pg/images/generations/:task_id`.
 - Poll endpoint: `GET /pg/images/generations/:task_id` -> task status plus
   optional OpenAI-image-compatible `data`.
 
@@ -468,6 +471,15 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
 - Completed task responses with `b64_json` should render a markdown image using
   `/pg/images/generations/:task_id/image/:index` instead of embedding large
   base64 strings in saved chat messages.
+- Playground image-to-image requests must submit to `/pg/images/edits`, not
+  `/pg/images/generations`. The frontend should treat any image payload field
+  (`image`, `images`, or `reference_images`) as an edit request. This matters
+  for ChatGPT Web image channels: sending a referenced image through the
+  generations path can reuse/preview the source image and return the same bytes
+  instead of an edited result.
+- `/pg/images/edits` uses the same async task storage and polling endpoints as
+  `/pg/images/generations`; only the submit route changes so relay mode becomes
+  image edit (`RelayModeImagesEdits`) before provider conversion.
 
 #### 4. Validation & Error Matrix
 
@@ -488,6 +500,10 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
   mark the message error.
 - Component unmounts or aborts while polling -> do not remove the pending task
   from storage.
+- Payload has no image/reference fields -> submit to `/pg/images/generations`.
+- Payload has `image`, `images`, or `reference_images` -> submit to
+  `/pg/images/edits`; the returned task is still polled through
+  `/pg/images/generations/:task_id`.
 
 #### 5. Good/Base/Bad Cases
 
@@ -500,11 +516,19 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
 - Good: a text chat request started in the playground keeps writing to the
   original session after route changes; returning to the playground shows the
   latest streamed/final content instead of an abandoned loading message.
+- Good: Playground text-to-image sends `POST /pg/images/generations`, then polls
+  `/pg/images/generations/:task_id`.
+- Good: Playground image-to-image sends `POST /pg/images/edits` with `image` or
+  `reference_images`, then polls `/pg/images/generations/:task_id`; a real
+  smoke check should verify the edited image bytes differ from the source image
+  when the prompt asks for a visible change.
 - Good: the sidebar/session header displays the current playground session title
   directly; do not reintroduce the default-playground session dropdown unless a
   separate session-browser UX is intentionally designed.
 - Base: synchronous image-generation responses without a task id still render
   directly from the response payload.
+- Bad: sending image-to-image payloads to `/pg/images/generations`; ChatGPT Web
+  can return the referenced/source image again.
 - Bad: deleting the pending task before the message update is committed; a route
   change can strand the saved chat message at “Generating image”.
 
@@ -516,9 +540,26 @@ resp, err := adaptor.DoRequest(c, info, requestBody)
 - `web/default`: unit test for extracting localized task ids from wait text.
 - `web/default`: unit test for updating inactive session messages in durable
   storage.
+- `web/default`: unit test that image payloads are classified as edit requests,
+  while text-only image prompts remain generation requests.
+- `router`: regression test that `POST /pg/images/edits` is registered.
 - `web/default`: run typecheck and a production build for hook changes.
 
 #### 7. Wrong vs Correct
+
+Wrong:
+
+```typescript
+sendImageGeneration(payloadWithImage) // posts to /pg/images/generations
+```
+
+Correct:
+
+```typescript
+const endpoint = isImageEditRequestPayload(payloadWithImage)
+  ? API_ENDPOINTS.IMAGE_EDITS
+  : API_ENDPOINTS.IMAGE_GENERATIONS
+```
 
 Wrong:
 

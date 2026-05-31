@@ -41,3 +41,21 @@ func TestSetRelayRouterRegistersResponsesWebSocketCompatibilityRoute(t *testing.
 		t.Fatal("expected OpenAI Responses websocket compatibility route to be registered")
 	}
 }
+
+func TestSetRelayRouterRegistersPlaygroundImageEditRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	SetRelayRouter(r)
+
+	routes := map[string]bool{}
+	for _, route := range r.Routes() {
+		routes[route.Method+" "+route.Path] = true
+	}
+
+	if !routes["POST /pg/images/generations"] {
+		t.Fatal("expected Playground image generation route to be registered")
+	}
+	if !routes["POST /pg/images/edits"] {
+		t.Fatal("expected Playground image edit route to be registered")
+	}
+}

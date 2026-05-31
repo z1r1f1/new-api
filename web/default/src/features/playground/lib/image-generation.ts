@@ -378,6 +378,15 @@ export function isImageGenerationRequestPayload(
   )
 }
 
+export function isImageEditRequestPayload(
+  payload: PlaygroundRequestPayload | ImageGenerationRequest | undefined
+): boolean {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false
+  }
+  return hasImageEditInputs(payload as Record<string, unknown>)
+}
+
 function parseJsonObject(value: string): Record<string, unknown> | null {
   const candidates = [value]
   const firstBrace = value.indexOf('{')

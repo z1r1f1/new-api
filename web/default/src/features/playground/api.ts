@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { api } from '@/lib/api'
 import { API_ENDPOINTS } from './constants'
+import { isImageEditRequestPayload } from './lib/image-generation'
 import type {
   ChatCompletionResponse,
   PlaygroundRequestPayload,
@@ -98,7 +99,10 @@ export async function sendImageGeneration(
   signal?: AbortSignal,
   debugId?: string
 ): Promise<ImageGenerationSubmitResponse> {
-  const res = await api.post(API_ENDPOINTS.IMAGE_GENERATIONS, payload, {
+  const endpoint = isImageEditRequestPayload(payload)
+    ? API_ENDPOINTS.IMAGE_EDITS
+    : API_ENDPOINTS.IMAGE_GENERATIONS
+  const res = await api.post(endpoint, payload, {
     headers: getPlaygroundDebugHeaders(debugId),
     signal,
     skipErrorHandler: true,

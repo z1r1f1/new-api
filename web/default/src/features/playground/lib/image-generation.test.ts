@@ -6,6 +6,7 @@ import {
   extractImageGenerationWaitTaskId,
   getImageGenerationWaitMessage,
   imageTaskResultToMarkdown,
+  isImageEditRequestPayload,
   parseGeneratedImagesFromMarkdown,
 } from './image-generation'
 import { formatMessageForAPI } from './message-utils'
@@ -119,6 +120,29 @@ describe('buildImageGenerationPayload', () => {
     assert.deepEqual(payload.reference_images, [
       '/pg/images/generations/task_done/image/0',
     ])
+  })
+
+  test('marks image inputs as edit requests so Playground uses the edits endpoint', () => {
+    const payload = buildImageGenerationPayload(
+      [
+        message(
+          'user',
+          '改成漫画风格\n\n![attached image 1](data:image/png;base64,abc123)'
+        ),
+      ],
+      config
+    )
+
+    assert.equal(isImageEditRequestPayload(payload), true)
+  })
+
+  test('keeps text-only image generation on the generations endpoint', () => {
+    const payload = buildImageGenerationPayload(
+      [message('user', '生成一张猫咪头像')],
+      config
+    )
+
+    assert.equal(isImageEditRequestPayload(payload), false)
   })
 })
 
