@@ -953,16 +953,20 @@ func TestStreamResponsesCompletionConvertsToolJSONToFunctionCall(t *testing.T) {
 	}
 }
 
-func TestStreamChatCompletionUsesSSEImageRefsWithoutConversationPolling(t *testing.T) {
+func TestStreamChatCompletionUsesSSEImageRefsAsConversationPollHint(t *testing.T) {
 	service.InitTokenEncoders()
 	var mappingRequests int
+	var directSSEDownloadRequests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/backend-api/files/file_generated/download":
-			_, _ = w.Write([]byte(`{"download_url":"` + "http://" + r.Host + `/image.png"}`))
+			directSSEDownloadRequests++
+			http.Error(w, `{"error":"sse ref is web-internal"}`, http.StatusNotFound)
 		case "/backend-api/conversation/conv-1":
 			mappingRequests++
-			t.Fatalf("stream should use SSE image refs before conversation polling")
+			_, _ = w.Write([]byte(`{"mapping":{"node-1":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://file_polled"}]}}}},"current_node":"node-1"}`))
+		case "/backend-api/files/file_polled/download":
+			_, _ = w.Write([]byte(`{"download_url":"` + "http://" + r.Host + `/image.png"}`))
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -985,10 +989,13 @@ func TestStreamChatCompletionUsesSSEImageRefsWithoutConversationPolling(t *testi
 	}
 	body := string(out)
 	if !strings.Contains(body, server.URL+"/image.png") {
-		t.Fatalf("expected stream to contain direct SSE image markdown, got:\n%s", body)
+		t.Fatalf("expected stream to contain polled image markdown, got:\n%s", body)
 	}
-	if mappingRequests != 0 {
-		t.Fatalf("expected no conversation polling, got %d mapping requests", mappingRequests)
+	if mappingRequests == 0 {
+		t.Fatal("expected SSE refs to trigger conversation image collection")
+	}
+	if directSSEDownloadRequests != 0 {
+		t.Fatalf("expected web-internal SSE ref not to be materialized directly, got %d direct requests", directSSEDownloadRequests)
 	}
 }
 

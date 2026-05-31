@@ -108,6 +108,7 @@ const chatGPTWebDeepResearchRecoverInterval = 5 * time.Second
 const chatGPTWebHandoffRecoverMaxWait = 45 * time.Second
 const chatGPTWebHandoffRecoverInterval = time.Second
 const chatGPTWebChatImagePollMaxWait = 30 * time.Second
+const chatGPTWebChatImageDownloadURLMaxWait = 10 * time.Second
 const chatGPTWebImagePollDefaultMaxWait = 10 * time.Minute
 const chatGPTWebImagePollTestMaxWait = 45 * time.Second
 const chatGPTWebImageRunDefaultTimeout = 20 * time.Minute
@@ -1541,16 +1542,11 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	if len(sseImageRefs) > 0 {
 		if timing != nil {
 			timing.Set("chat_sse_image_ref_count", len(sseImageRefs))
-		}
-		if client != nil && strings.TrimSpace(conversationID) != "" {
-			if timing != nil {
-				timing.Set("chat_image_source", "sse")
-			}
-			imageMarkdown = imageRefsToMarkdown(c.Request.Context(), client, conversationID, sseImageRefs, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing)
+			timing.Set("chat_sse_image_refs_as_poll_hint", true)
 		}
 	}
 	if imageMarkdown == "" {
-		if markdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
+		if markdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
 			return nil, err
 		} else {
 			imageMarkdown = markdown
@@ -2398,6 +2394,9 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		toolMsgs = filtered
 	}
 	fileRefs, hasFileRefs := imageRefsFromToolMsgs(toolMsgs)
+	if hasFileRefs && timing != nil {
+		timing.Set("chat_image_source", "mapping")
+	}
 	if !hasFileRefs {
 		if !allowPoll && len(toolMsgs) == 0 {
 			return "", nil
@@ -2422,6 +2421,9 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 			for _, sid := range sids {
 				fileRefs = append(fileRefs, "sed:"+sid)
 			}
+			if timing != nil {
+				timing.Set("chat_image_source", "poll")
+			}
 		case PollStatusImageError:
 			return "", imageGenerationUpstreamError()
 		}
@@ -2430,7 +2432,7 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		return "", nil
 	}
 	markdownStart := time.Now()
-	markdown := imageRefsToMarkdown(ctx, client, conversationID, fileRefs, info, prompt, modelName, publicBaseURL, timing)
+	markdown := imageRefsToMarkdownWithDownloadWait(ctx, client, conversationID, fileRefs, info, prompt, modelName, publicBaseURL, chatGPTWebChatImageDownloadURLMaxWait, 2*time.Second, timing)
 	if timing != nil {
 		timing.ObserveSince("chat_image_markdown_ms", markdownStart)
 		timing.Set("chat_image_ref_count", len(fileRefs))
@@ -2569,31 +2571,24 @@ func imageRefsFromToolMsgs(toolMsgs []ImageToolMsg) ([]string, bool) {
 }
 
 func imageRefsToMarkdown(ctx context.Context, client *Client, conversationID string, fileRefs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) string {
+	return imageRefsToMarkdownWithDownloadWait(ctx, client, conversationID, fileRefs, info, prompt, modelName, publicBaseURL, 0, 0, timings...)
+}
+
+func imageRefsToMarkdownWithDownloadWait(ctx context.Context, client *Client, conversationID string, fileRefs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, maxWait, interval time.Duration, timings ...*service.ChatGPTWebTiming) string {
 	timing := firstChatGPTWebTiming(timings...)
 	refs := dedupeStrings(fileRefs)
 	if len(refs) == 0 {
 		return ""
 	}
-	publicURLs, ok := materializeImageRefsToPublicURLs(ctx, client, conversationID, refs, info, prompt, modelName, publicBaseURL, timing)
+	signedURLs := resolveImageDownloadURLsWithWait(ctx, client, conversationID, refs, maxWait, interval, timing)
+	if len(signedURLs) == 0 {
+		return ""
+	}
+	publicURLs, ok := materializeSignedImageURLsToPublicURLs(ctx, client, signedURLs, info, prompt, modelName, publicBaseURL, timing)
 	if ok {
 		return imageURLsToMarkdown(publicURLs)
 	}
-	var b strings.Builder
-	for index, ref := range refs {
-		downloadURLStart := time.Now()
-		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
-		if timing != nil {
-			timing.ObserveSince("chat_image_download_url_ms", downloadURLStart)
-		}
-		if err != nil || strings.TrimSpace(signedURL) == "" {
-			continue
-		}
-		if b.Len() > 0 {
-			b.WriteByte('\n')
-		}
-		b.WriteString(fmt.Sprintf("![image_%d](%s)", index+1, signedURL))
-	}
-	return b.String()
+	return imageURLsToMarkdown(signedURLs)
 }
 
 func imageURLsToMarkdown(urls []string) string {
@@ -2757,19 +2752,15 @@ func isMarkdownDestination(content string, start, end int) bool {
 	return start >= 2 && content[start-2:start] == "](" && end < len(content) && content[end] == ')'
 }
 
-func materializeImageRefsToPublicURLs(ctx context.Context, client *Client, conversationID string, refs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) ([]string, bool) {
+func materializeSignedImageURLsToPublicURLs(ctx context.Context, client *Client, signedURLs []string, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) ([]string, bool) {
 	timing := firstChatGPTWebTiming(timings...)
-	if client == nil || info == nil || info.UserId <= 0 || len(refs) == 0 {
+	if client == nil || info == nil || info.UserId <= 0 || len(signedURLs) == 0 {
 		return nil, false
 	}
-	data := make([]dto.ImageData, 0, len(refs))
-	for _, ref := range refs {
-		downloadURLStart := time.Now()
-		signedURL, err := client.ImageDownloadURL(ctx, conversationID, ref)
-		if timing != nil {
-			timing.ObserveSince("image_ref_download_url_ms", downloadURLStart)
-		}
-		if err != nil || strings.TrimSpace(signedURL) == "" {
+	data := make([]dto.ImageData, 0, len(signedURLs))
+	for _, signedURL := range signedURLs {
+		signedURL = strings.TrimSpace(signedURL)
+		if signedURL == "" {
 			continue
 		}
 		fetchStart := time.Now()
@@ -3452,16 +3443,11 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	if len(sseImageRefs) > 0 {
 		if timing != nil {
 			timing.Set("chat_sse_image_ref_count", len(sseImageRefs))
-		}
-		if client != nil && strings.TrimSpace(state.ConversationID) != "" {
-			if timing != nil {
-				timing.Set("chat_image_source", "sse")
-			}
-			imageMarkdown = imageRefsToMarkdown(ctx, client, state.ConversationID, sseImageRefs, info, prompt, model, publicBaseURL, timing)
+			timing.Set("chat_sse_image_refs_as_poll_hint", true)
 		}
 	}
 	if imageMarkdown == "" {
-		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
+		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, info, prompt, model, publicBaseURL, timing); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		} else {
@@ -3626,16 +3612,11 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 	if len(sseImageRefs) > 0 {
 		if timing != nil {
 			timing.Set("chat_sse_image_ref_count", len(sseImageRefs))
-		}
-		if client != nil && strings.TrimSpace(state.ConversationID) != "" {
-			if timing != nil {
-				timing.Set("chat_image_source", "sse")
-			}
-			imageMarkdown = imageRefsToMarkdown(ctx, client, state.ConversationID, sseImageRefs, info, prompt, model, publicBaseURL, timing)
+			timing.Set("chat_sse_image_refs_as_poll_hint", true)
 		}
 	}
 	if imageMarkdown == "" {
-		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
+		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll || len(sseImageRefs) > 0, info, prompt, model, publicBaseURL, timing); err != nil {
 			_ = pw.CloseWithError(err)
 			return
 		} else {

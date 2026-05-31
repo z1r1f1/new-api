@@ -1513,7 +1513,11 @@ Responses contract locally instead of returning "endpoint not supported".
   Track `file-service://...` as file ids and `sediment://...` as `sed:<id>`
   refs, filter refs that existed in the pre-request baseline, and skip
   user-authored upload refs so reference images are not returned as generated
-  images.
+  images. These SSE refs are ChatGPT Web internal pointers; use them as a
+  readiness/polling hint, not as the final API-visible image source. Request
+  clients should receive image Markdown only after the adapter re-collects the
+  result through conversation mapping/polling and resolves it to a downloadable
+  or gateway-hosted URL.
 
 #### 4. Validation & Error Matrix
 
@@ -1535,9 +1539,10 @@ Responses contract locally instead of returning "endpoint not supported".
   history or final assistant output merely mentions image generation -> do not
   inject image-generation instructions and do not enable best-effort image
   polling unless the upstream stream reports an image-generation marker.
-- ChatGPT Web SSE includes generated image refs in a non-user message -> append
-  image Markdown from those refs directly and do not call the conversation
-  mapping/poll path just to rediscover the same refs.
+- ChatGPT Web SSE includes generated image refs in a non-user message -> record
+  the refs as a hint that image generation happened, then collect the API-visible
+  image result via conversation mapping/polling. Do not materialize the raw SSE
+  `file-service://` or `sediment://` pointer directly for request clients.
 - Responses stream has no `response.output_text.delta` but does include a
   completed message item with `content[0].type="output_text"` -> Claude
   `/v1/messages` clients still receive a `content_block_delta` before
@@ -1567,9 +1572,12 @@ Responses contract locally instead of returning "endpoint not supported".
   ordinary explanations such as "I can help generate images" can otherwise
   trigger `allow_image_poll=true` and add roughly a minute of final-stream
   latency.
-- Bad: ignoring image refs already present in ChatGPT Web SSE events and always
-  waiting for conversation mapping polling; this adds avoidable tail latency and
-  extra upstream calls.
+- Bad: exposing or directly materializing ChatGPT Web SSE `file-service://` /
+  `sediment://` refs as the API image result; those pointers are web-internal
+  and may fail outside the web conversation flow.
+- Bad: ignoring image refs already present in ChatGPT Web SSE events as a signal
+  that generation happened; this can miss image-only SSE turns or make the relay
+  treat them as empty responses.
 
 #### 6. Tests Required
 
@@ -1588,8 +1596,8 @@ Responses contract locally instead of returning "endpoint not supported".
   or enable image polling for a normal latest-user text request.
 - `relay/channel/chatgptimg`: regression tests proving ChatGPT Web chat SSE
   captures generated file/sediment refs from non-user messages, ignores
-  user-uploaded refs, filters baseline refs, and can render direct SSE refs
-  without hitting conversation mapping polling.
+  user-uploaded refs, filters baseline refs, and uses SSE refs as conversation
+  collection hints rather than directly downloading the raw web-internal refs.
 - `relay/channel/openai`: regression test that a Claude stream converted from a
   Responses stream with only `response.output_item.done` message text emits
   `content_block_delta` and does not stop as an empty message.
