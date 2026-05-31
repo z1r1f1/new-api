@@ -1503,6 +1503,11 @@ Responses contract locally instead of returning "endpoint not supported".
   image-generation instructions or trigger the final image-poll timeout after a
   normal text answer. Image models and explicit upstream image-generation SSE
   markers still enable image polling.
+- Chat-generated image polling for `/v1/chat/completions` text streams is a
+  best-effort tail step and must keep `chatGPTWebChatImagePollMaxWait` at 30
+  seconds unless product requirements explicitly accept longer final-stream
+  latency. Full image generation endpoints use the separate `image_poll_ms`
+  lifecycle and are not constrained by this chat-tail timeout.
 
 #### 4. Validation & Error Matrix
 

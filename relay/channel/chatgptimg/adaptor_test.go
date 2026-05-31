@@ -1176,6 +1176,12 @@ func TestStreamChatCompletionConvertsToolJSONToToolCalls(t *testing.T) {
 	}
 }
 
+func TestChatGeneratedImagePollMaxWaitIsThirtySeconds(t *testing.T) {
+	if chatGPTWebChatImagePollMaxWait != 30*time.Second {
+		t.Fatalf("expected chat image poll max wait to be 30s, got %s", chatGPTWebChatImagePollMaxWait)
+	}
+}
+
 func TestCollectChatGeneratedImageMarkdownSkipsLongPollForTextOnlyChat(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

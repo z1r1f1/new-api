@@ -107,6 +107,7 @@ const chatGPTWebDeepResearchRecoverMaxWait = 3 * time.Minute
 const chatGPTWebDeepResearchRecoverInterval = 5 * time.Second
 const chatGPTWebHandoffRecoverMaxWait = 45 * time.Second
 const chatGPTWebHandoffRecoverInterval = time.Second
+const chatGPTWebChatImagePollMaxWait = 30 * time.Second
 const chatGPTWebImagePollDefaultMaxWait = 10 * time.Minute
 const chatGPTWebImagePollTestMaxWait = 45 * time.Second
 const chatGPTWebImageRunDefaultTimeout = 20 * time.Minute
@@ -2385,7 +2386,7 @@ func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conv
 		}
 		pollStart := time.Now()
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, conversationID, PollOpts{
-			MaxWait:             60 * time.Second,
+			MaxWait:             chatGPTWebChatImagePollMaxWait,
 			Interval:            2 * time.Second,
 			StableRounds:        2,
 			PreviewWait:         8 * time.Second,
