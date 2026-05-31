@@ -526,7 +526,7 @@ func TestResolveChatGPTWebSessionRouteUsesCachedConversation(t *testing.T) {
 	}
 }
 
-func TestResolveChatGPTWebSessionRouteFallsBackToFirstUserMessageSeed(t *testing.T) {
+func TestResolveChatGPTWebSessionRouteDoesNotReuseMessageSeedWithoutExplicitSessionKey(t *testing.T) {
 	resetChatGPTWebSessionRouteCacheForTest()
 	oldRedisEnabled := common.RedisEnabled
 	common.RedisEnabled = false
@@ -551,10 +551,9 @@ func TestResolveChatGPTWebSessionRouteFallsBackToFirstUserMessageSeed(t *testing
 		},
 	}
 	firstRoute := resolveChatGPTWebSessionRoute(info, firstReq, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
-	if !firstRoute.Enabled || firstRoute.SessionSource != "message_seed" || firstRoute.Reused {
-		t.Fatalf("expected first request to create message-seed route without hit, got %#v", firstRoute)
+	if firstRoute.Enabled || firstRoute.SessionSource != "" || firstRoute.Reused {
+		t.Fatalf("expected request without explicit session key to skip route reuse, got %#v", firstRoute)
 	}
-	recordChatGPTWebSessionRoute(firstRoute, "conv-from-first-turn", nil)
 
 	secondReq := chatRequest{
 		Model: "gpt-5.5-thinking",
@@ -565,8 +564,8 @@ func TestResolveChatGPTWebSessionRouteFallsBackToFirstUserMessageSeed(t *testing
 		},
 	}
 	secondRoute := resolveChatGPTWebSessionRoute(info, secondReq, []byte(`{"model":"gpt-5.5-thinking"}`), nil)
-	if !secondRoute.Enabled || !secondRoute.Reused || secondRoute.CachedConversationID != "conv-from-first-turn" {
-		t.Fatalf("expected second request to reuse first-turn ChatGPT Web conversation, got %#v", secondRoute)
+	if secondRoute.Enabled || secondRoute.Reused || secondRoute.CachedConversationID != "" {
+		t.Fatalf("expected follow-up without explicit session key to skip route reuse, got %#v", secondRoute)
 	}
 }
 

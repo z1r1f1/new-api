@@ -138,27 +138,36 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
-### Retry channel selection
+### ChatGPT Web session reuse
 
-When a relay request retries after a channel failure, the retry selector should
-prefer channels that have not already appeared in the current request's
-`use_channel` history. This keeps the next retry from landing on the same bad
-channel again when alternatives exist.
+ChatGPT Web session reuse must be driven by an explicit prompt cache key or
+session identifier from the request body / headers, not by a heuristic that
+hashes the first user message.
 
-For ChatGPT Web image relays, combine the per-request used-channel preference
-with the existing idle-channel preference so retries still avoid busy image
-channels when possible.
+Why:
 
-Example:
+- hashing the first user message makes independent requests with the same
+  opening text share one cached conversation;
+- that can reuse a stale conversation ID across unrelated requests and produce
+  403/fallback failures that look like channel problems;
+- a real session key should come from `prompt_cache_key`,
+  `openai_prompt_cache_key`, `metadata.user_id`, or the existing session header
+  aliases already handled by `ExtractOpenAICompatPromptCacheKeyFromRawBody`.
+
+Good:
 
 ```go
-// Good: prefer unused channels on retry, then keep the existing ChatGPT Web
-// image busy-avoidance preference.
-prefer := retryParam.preferredRetryChannel()
-if prefer != nil {
-    channel, _ = model.GetRandomSatisfiedChannelWithPreference(group, modelName, retry, prefer)
-} else {
-    channel, _ = model.GetRandomSatisfiedChannel(group, modelName, retry)
+sessionKey := service.ExtractOpenAICompatPromptCacheKeyFromRawBody(rawBody, headers)
+if sessionKey == "" {
+    return chatGPTWebSessionRoute{}
+}
+```
+
+Bad:
+
+```go
+if sessionKey == "" {
+    sessionKey = deriveChatGPTWebSessionKeyFromMessages(req)
 }
 ```
 

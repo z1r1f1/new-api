@@ -885,10 +885,6 @@ func resolveChatGPTWebSessionRoute(info *relaycommon.RelayInfo, req chatRequest,
 	sessionKey := service.ExtractOpenAICompatPromptCacheKeyFromRawBody(rawBody, headers)
 	sessionSource := "explicit"
 	if sessionKey == "" {
-		sessionKey = deriveChatGPTWebSessionKeyFromMessages(req)
-		sessionSource = "message_seed"
-	}
-	if sessionKey == "" {
 		if timing != nil {
 			timing.Set("session_route_enabled", false)
 			timing.Set("session_route_reason", "missing_session_key")
@@ -938,28 +934,6 @@ func resolveChatGPTWebSessionRoute(info *relaycommon.RelayInfo, req chatRequest,
 		}
 	}
 	return route
-}
-
-func deriveChatGPTWebSessionKeyFromMessages(req chatRequest) string {
-	firstUser := ""
-	for _, msg := range req.Messages {
-		role := strings.ToLower(strings.TrimSpace(msg.Role))
-		if role != "" && role != "user" {
-			continue
-		}
-		if text := strings.TrimSpace(messageTextContent(msg)); text != "" {
-			firstUser = normalizeChatGPTWebSessionSeedText(text)
-			break
-		}
-	}
-	if firstUser == "" {
-		return ""
-	}
-	return "message_seed:" + hashCachePart(firstUser)
-}
-
-func normalizeChatGPTWebSessionSeedText(text string) string {
-	return strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
 }
 
 func applyChatGPTWebSessionRoute(req *chatRequest, route *chatGPTWebSessionRoute, fullPrompt string, info *relaycommon.RelayInfo, timings ...*service.ChatGPTWebTiming) string {
