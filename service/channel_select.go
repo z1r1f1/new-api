@@ -2,6 +2,8 @@ package service
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -53,6 +55,53 @@ func (p *RetryParam) shouldPreferIdleChatGPTWebImage() bool {
 	return ShouldUseChatGPTWebImageBusyAvoidance(p.RelayMode, p.ModelName)
 }
 
+func (p *RetryParam) preferredRetryChannel() func(*model.Channel) bool {
+	if p == nil {
+		return nil
+	}
+	usedChannels := usedChannelSet(p.Ctx)
+	preferIdle := p.shouldPreferIdleChatGPTWebImage()
+	if len(usedChannels) == 0 && !preferIdle {
+		return nil
+	}
+	return func(channel *model.Channel) bool {
+		if channel == nil {
+			return false
+		}
+		if len(usedChannels) > 0 {
+			if _, ok := usedChannels[channel.Id]; ok {
+				return false
+			}
+		}
+		if preferIdle {
+			return PreferIdleChatGPTWebImageChannel(channel)
+		}
+		return true
+	}
+}
+
+func usedChannelSet(c *gin.Context) map[int]struct{} {
+	if c == nil {
+		return nil
+	}
+	used := c.GetStringSlice("use_channel")
+	if len(used) == 0 {
+		return nil
+	}
+	set := make(map[int]struct{}, len(used))
+	for _, raw := range used {
+		id, err := strconv.Atoi(strings.TrimSpace(raw))
+		if err != nil || id <= 0 {
+			continue
+		}
+		set[id] = struct{}{}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return set
+}
+
 // CacheGetRandomSatisfiedChannel tries to get a random channel that satisfies the requirements.
 // 尝试获取一个满足要求的随机渠道。
 //
@@ -93,6 +142,7 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 	var err error
 	selectGroup := param.TokenGroup
 	userGroup := common.GetContextKeyString(param.Ctx, constant.ContextKeyUserGroup)
+	preferRetryChannel := param.preferredRetryChannel()
 
 	if param.TokenGroup == "auto" {
 		if len(setting.GetAutoGroups()) == 0 {
@@ -123,8 +173,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			}
 			logger.LogDebug(param.Ctx, "Auto selecting group: %s, priorityRetry: %d", autoGroup, priorityRetry)
 
-			if param.shouldPreferIdleChatGPTWebImage() {
-				channel, _ = model.GetRandomSatisfiedChannelWithPreference(autoGroup, param.ModelName, priorityRetry, PreferIdleChatGPTWebImageChannel)
+			if preferRetryChannel != nil {
+				channel, _ = model.GetRandomSatisfiedChannelWithPreference(autoGroup, param.ModelName, priorityRetry, preferRetryChannel)
 			} else {
 				channel, _ = model.GetRandomSatisfiedChannel(autoGroup, param.ModelName, priorityRetry)
 			}
@@ -165,8 +215,8 @@ func CacheGetRandomSatisfiedChannel(param *RetryParam) (*model.Channel, string, 
 			break
 		}
 	} else {
-		if param.shouldPreferIdleChatGPTWebImage() {
-			channel, err = model.GetRandomSatisfiedChannelWithPreference(param.TokenGroup, param.ModelName, param.GetRetry(), PreferIdleChatGPTWebImageChannel)
+		if preferRetryChannel != nil {
+			channel, err = model.GetRandomSatisfiedChannelWithPreference(param.TokenGroup, param.ModelName, param.GetRetry(), preferRetryChannel)
 		} else {
 			channel, err = model.GetRandomSatisfiedChannel(param.TokenGroup, param.ModelName, param.GetRetry())
 		}

@@ -108,6 +108,48 @@ func TestCacheGetRandomSatisfiedChannelAvoidsBusyChatGPTWebImageChannel(t *testi
 	require.Equal(t, 1016, ch.Id)
 }
 
+func TestCacheGetRandomSatisfiedChannelAvoidsPreviouslyUsedChatGPTWebImageChannel(t *testing.T) {
+	resetChatGPTWebImageBusyForTest()
+	t.Cleanup(resetChatGPTWebImageBusyForTest)
+
+	oldMemoryCacheEnabled := common.MemoryCacheEnabled
+	oldRedisEnabled := common.RedisEnabled
+	common.MemoryCacheEnabled = true
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		_ = model.DB.Exec("DELETE FROM abilities").Error
+		_ = model.DB.Exec("DELETE FROM channels").Error
+		common.MemoryCacheEnabled = oldMemoryCacheEnabled
+		common.RedisEnabled = oldRedisEnabled
+		if oldMemoryCacheEnabled {
+			model.InitChannelCache()
+		}
+	})
+
+	require.NoError(t, model.DB.Exec("DELETE FROM abilities").Error)
+	require.NoError(t, model.DB.Exec("DELETE FROM channels").Error)
+
+	insertBusySelectionChannel(t, 1119, 10, 100)
+	insertBusySelectionChannel(t, 1016, 5, 100)
+	model.InitChannelCache()
+
+	ctx := gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New())
+	ctx.Set("use_channel", []string{"1119"})
+
+	ch, group, err := CacheGetRandomSatisfiedChannel(&RetryParam{
+		Ctx:        ctx,
+		TokenGroup: "svip",
+		ModelName:  "gpt-image-2",
+		RelayMode:  relayconstant.RelayModeImagesGenerations,
+		Retry:      common.GetPointer(0),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "svip", group)
+	require.NotNil(t, ch)
+	require.Equal(t, 1016, ch.Id)
+}
+
 func TestCacheGetRandomSatisfiedChannelFallsBackWhenAllChatGPTWebImageChannelsBusy(t *testing.T) {
 	resetChatGPTWebImageBusyForTest()
 	t.Cleanup(resetChatGPTWebImageBusyForTest)

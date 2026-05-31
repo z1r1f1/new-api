@@ -138,6 +138,30 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### Retry channel selection
+
+When a relay request retries after a channel failure, the retry selector should
+prefer channels that have not already appeared in the current request's
+`use_channel` history. This keeps the next retry from landing on the same bad
+channel again when alternatives exist.
+
+For ChatGPT Web image relays, combine the per-request used-channel preference
+with the existing idle-channel preference so retries still avoid busy image
+channels when possible.
+
+Example:
+
+```go
+// Good: prefer unused channels on retry, then keep the existing ChatGPT Web
+// image busy-avoidance preference.
+prefer := retryParam.preferredRetryChannel()
+if prefer != nil {
+    channel, _ = model.GetRandomSatisfiedChannelWithPreference(group, modelName, retry, prefer)
+} else {
+    channel, _ = model.GetRandomSatisfiedChannel(group, modelName, retry)
+}
+```
+
 ### Responses WebSocket relay
 
 #### 1. Scope / Trigger
