@@ -59,6 +59,26 @@ func TestBuildChatPromptAddsImageGenerationInstruction(t *testing.T) {
 	}
 }
 
+func TestBuildChatPromptIgnoresAssistantImageGenerationText(t *testing.T) {
+	req := chatRequest{
+		Model: "gpt-5.5-instant",
+		Messages: []dto.Message{
+			{Role: "user", Content: "hello"},
+			{Role: "assistant", Content: "我可以帮你生成图片，也可以解释这类任务为什么会变慢。"},
+			{Role: "user", Content: "继续解释"},
+		},
+		ResponseFormat: &dto.ResponseFormat{Type: "json_object"},
+	}
+
+	got := buildChatPrompt(req)
+	if strings.Contains(got, chatImageGenerationInstruction) {
+		t.Fatalf("assistant text must not inject image generation instruction: %q", got)
+	}
+	if !strings.Contains(got, "valid JSON object only") {
+		t.Fatalf("non-image prompt should preserve JSON response-format instruction: %q", got)
+	}
+}
+
 func TestBuildChatPromptAddsToolBridgeInstruction(t *testing.T) {
 	req := chatRequest{
 		Model: "gpt-5.5-thinking",
@@ -1189,14 +1209,39 @@ func TestCollectChatGeneratedImageMarkdownSkipsLongPollForTextOnlyChat(t *testin
 }
 
 func TestShouldPollChatGeneratedImagesDetectsIntent(t *testing.T) {
-	if !shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: 帮我生成图片：一只小猫", "", false) {
+	catRequest := chatRequest{
+		Model:    "gpt-5.5-pro",
+		Messages: []dto.Message{{Role: "user", Content: "帮我生成图片：一只小猫"}},
+	}
+	if !shouldPollChatGeneratedImages(catRequest, "User: 帮我生成图片：一只小猫", "", false) {
 		t.Fatal("expected Chinese image generation intent to enable polling")
 	}
-	if !shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: 生成一张性感美女图片", "", false) {
+
+	portraitRequest := chatRequest{
+		Model:    "gpt-5.5-pro",
+		Messages: []dto.Message{{Role: "user", Content: "生成一张性感美女图片"}},
+	}
+	if !shouldPollChatGeneratedImages(portraitRequest, "User: 生成一张性感美女图片", "", false) {
 		t.Fatal("expected Chinese generate-a-picture intent to enable polling")
 	}
-	if shouldPollChatGeneratedImages(chatRequest{Model: "gpt-5.5-pro"}, "User: hello", "hello", false) {
+
+	textRequest := chatRequest{
+		Model:    "gpt-5.5-pro",
+		Messages: []dto.Message{{Role: "user", Content: "hello"}},
+	}
+	if shouldPollChatGeneratedImages(textRequest, "User: hello", "hello", false) {
 		t.Fatal("expected plain text chat to skip image polling")
+	}
+}
+
+func TestShouldPollChatGeneratedImagesIgnoresAssistantTextIntent(t *testing.T) {
+	req := chatRequest{Model: "gpt-5.5-instant", Messages: []dto.Message{{Role: "user", Content: "hello"}}}
+	content := "我可以帮你生成图片，也可以解释这类任务为什么会变慢。"
+	if shouldPollChatGeneratedImages(req, "User: hello", content, false) {
+		t.Fatal("assistant text mentioning image generation must not trigger image polling")
+	}
+	if !shouldPollChatGeneratedImages(req, "User: hello", content, true) {
+		t.Fatal("explicit upstream image-generation marker must still trigger image polling")
 	}
 }
 

@@ -1496,6 +1496,13 @@ Responses contract locally instead of returning "endpoint not supported".
   on ChatGPT Web image polling for about a minute. Responses mode should only
   poll for chat-generated images when the model itself is an image model or the
   upstream SSE explicitly reports image generation.
+- For `/v1/chat/completions`, plain text image-intent heuristics must inspect
+  the latest user-role message in `chatRequest.Messages`, not the rendered
+  prompt string and not assistant output text. Rendered prompts contain history,
+  system/tool instructions, and assistant text; using them as intent can inject
+  image-generation instructions or trigger the final image-poll timeout after a
+  normal text answer. Image models and explicit upstream image-generation SSE
+  markers still enable image polling.
 
 #### 4. Validation & Error Matrix
 
@@ -1510,6 +1517,13 @@ Responses contract locally instead of returning "endpoint not supported".
   normally and skip image polling.
 - `/v1/responses` image model, or upstream SSE reports image generation ->
   preserve image generation instructions and image polling.
+- `/v1/chat/completions` latest user message asks to create/draw/generate an
+  image -> inject the ChatGPT Web image-generation instruction and allow image
+  polling.
+- `/v1/chat/completions` latest user message is normal text, while assistant
+  history or final assistant output merely mentions image generation -> do not
+  inject image-generation instructions and do not enable best-effort image
+  polling unless the upstream stream reports an image-generation marker.
 - Responses stream has no `response.output_text.delta` but does include a
   completed message item with `content[0].type="output_text"` -> Claude
   `/v1/messages` clients still receive a `content_block_delta` before
@@ -1529,12 +1543,16 @@ Responses contract locally instead of returning "endpoint not supported".
 - Good: `/v1/responses` with `tools` and `input: "读取 AGENTS.md"` emits a
   `function_call` item for the matching local tool, so Codex/Claude-style
   clients can execute the tool and continue the turn.
-- Base: `/v1/chat/completions` behavior stays unchanged and still returns chat
-  completion chunks.
+- Base: `/v1/chat/completions` still returns chat completion chunks; only the
+  source of text image-intent detection is constrained to latest user text.
 - Bad: returning raw `chat.completion` JSON/SSE from a `/v1/responses` request;
   Responses clients will treat it as malformed.
 - Bad: using the chat-completions text keyword heuristic for Responses text
   models; this makes ordinary text analysis prompts wait for image polling.
+- Bad: scanning rendered prompts or assistant output for image-generation words;
+  ordinary explanations such as "I can help generate images" can otherwise
+  trigger `allow_image_poll=true` and add roughly a minute of final-stream
+  latency.
 
 #### 6. Tests Required
 
@@ -1546,8 +1564,11 @@ Responses contract locally instead of returning "endpoint not supported".
   events, not chat completion chunks.
 - `relay/channel/chatgptimg`: regression tests proving Responses text prompts
   do not inject image-generation instructions or enable image polling purely
-  from text keywords, while chat-completions text prompts and Responses image
-  models still do.
+  from text keywords, while chat-completions latest-user image prompts and
+  Responses image models still do.
+- `relay/channel/chatgptimg`: regression tests proving assistant history/output
+  that mentions image generation does not inject image-generation instructions
+  or enable image polling for a normal latest-user text request.
 - `relay/channel/openai`: regression test that a Claude stream converted from a
   Responses stream with only `response.output_item.done` message text emits
   `content_block_delta` and does not stop as an empty message.

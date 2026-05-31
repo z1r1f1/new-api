@@ -1718,7 +1718,7 @@ func buildLatestChatGPTWebMessagePromptWithTextImageIntent(req chatRequest, allo
 	var b strings.Builder
 	b.WriteString(content)
 	appendChatGPTWebToolInstruction(&b, req)
-	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || (allowTextIntent && chatTextRequestsImageGeneration(content))
+	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || (allowTextIntent && chatRequestUserRequestsImageGeneration(req))
 	if req.ResponseFormat != nil && !imageGenerationIntent {
 		switch req.ResponseFormat.Type {
 		case "json_object":
@@ -1762,10 +1762,9 @@ func buildChatPromptWithTextImageIntent(req chatRequest, allowTextIntent bool) s
 		}
 		b.WriteString(content)
 	}
-	conversationText := b.String()
 	appendChatGPTWebToolInstruction(&b, req)
 
-	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || (allowTextIntent && chatTextRequestsImageGeneration(conversationText))
+	imageGenerationIntent := common.IsImageGenerationModel(req.Model) || (allowTextIntent && chatRequestUserRequestsImageGeneration(req))
 	if req.ResponseFormat != nil && !imageGenerationIntent {
 		switch req.ResponseFormat.Type {
 		case "json_object":
@@ -2438,7 +2437,17 @@ func shouldPollChatGeneratedImagesWithTextIntent(req chatRequest, prompt, conten
 	if !allowTextIntent {
 		return false
 	}
-	return chatTextRequestsImageGeneration(prompt) || chatTextRequestsImageGeneration(content)
+	// Only the current user request should opt into best-effort image polling.
+	// The built prompt contains assistant/history/system text, and assistant output
+	// may mention image generation while explaining capabilities or latency; using
+	// either as intent makes normal streams wait for the image poll timeout before
+	// sending the final SSE terminator. Actual image tool execution is still
+	// covered by hasImageGeneration above.
+	return chatRequestUserRequestsImageGeneration(req)
+}
+
+func chatRequestUserRequestsImageGeneration(req chatRequest) bool {
+	return chatTextRequestsImageGeneration(latestChatGPTWebUserText(req))
 }
 
 func allowTextImageIntent(info *relaycommon.RelayInfo) bool {
