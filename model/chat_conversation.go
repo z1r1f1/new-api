@@ -19,6 +19,11 @@ const (
 )
 
 const (
+	ChatDefaultGroupDirectKey = "__default_group__"
+	ChatDefaultGroupTitle     = "Default group"
+)
+
+const (
 	ChatConversationMemberRoleOwner  = "owner"
 	ChatConversationMemberRoleMember = "member"
 	ChatMessageTypeText              = "text"
@@ -147,6 +152,68 @@ func GetOrCreateDirectConversation(userAID, userBID int) (*ChatConversation, err
 			userAID: ChatConversationMemberRoleMember,
 			userBID: ChatConversationMemberRoleMember,
 		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return conversation, nil
+}
+
+func GetOrCreateDefaultGroupConversation() (*ChatConversation, error) {
+	users, err := ListEnabledChatUsers()
+	if err != nil {
+		return nil, err
+	}
+	if len(users) == 0 {
+		return nil, nil
+	}
+
+	ownerID := users[0].Id
+	ownerSelectedFromAdmin := users[0].Role >= common.RoleAdminUser
+	memberIDs := make([]int, 0, len(users))
+	for _, user := range users {
+		memberIDs = append(memberIDs, user.Id)
+		if user.Role >= common.RoleAdminUser && !ownerSelectedFromAdmin {
+			ownerID = user.Id
+			ownerSelectedFromAdmin = true
+		}
+	}
+
+	conversation := &ChatConversation{}
+	err = DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("direct_key = ?", ChatDefaultGroupDirectKey).First(conversation).Error; err == nil {
+			if conversation.OwnerId <= 0 {
+				conversation.OwnerId = ownerID
+			}
+			if conversation.Title == "" {
+				conversation.Title = ChatDefaultGroupTitle
+			}
+			conversation.Type = ChatConversationTypeGroup
+			if err := tx.Save(conversation).Error; err != nil {
+				return err
+			}
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			conversation.Type = ChatConversationTypeGroup
+			conversation.Title = ChatDefaultGroupTitle
+			conversation.OwnerId = ownerID
+			conversation.DirectKey = ChatDefaultGroupDirectKey
+			conversation.LastMessageId = 0
+			conversation.LastMessageAt = 0
+			conversation.CreatedAt = common.GetTimestamp()
+			conversation.UpdatedAt = conversation.CreatedAt
+			if err := tx.Create(conversation).Error; err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+
+		roleByUserID := make(map[int]string, len(memberIDs))
+		for _, userID := range memberIDs {
+			roleByUserID[userID] = ChatConversationMemberRoleMember
+		}
+		roleByUserID[ownerID] = ChatConversationMemberRoleOwner
+		return ensureConversationMembers(tx, conversation.Id, roleByUserID)
 	})
 	if err != nil {
 		return nil, err
@@ -315,6 +382,10 @@ func conversationMemberIDs(conversationID int) ([]int, error) {
 		result = append(result, member.UserId)
 	}
 	return result, nil
+}
+
+func ConversationMemberIDsForChat(conversationID int) ([]int, error) {
+	return conversationMemberIDs(conversationID)
 }
 
 func deleteChatConversationMembers(conversationID int) error {

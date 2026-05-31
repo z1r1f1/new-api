@@ -18,6 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type ChatConversationType = 'direct' | 'group'
 
+export interface ChatUser {
+  id: number
+  username: string
+  display_name: string
+  role: number
+}
+
 export interface ChatConversation {
   id: number
   type: ChatConversationType
@@ -28,23 +35,25 @@ export interface ChatConversation {
   last_message_at: number
   created_at: number
   updated_at: number
+  unread_count: number
+  last_read_message_id: number
+  is_default: boolean
+  peer?: ChatUser
+  members: ChatUser[]
 }
 
 export interface ChatMessage {
   id: number
   conversation_id: number
   sender_id: number
+  sender_username: string
+  sender_display_name: string
   message_type: 'text'
   client_message_id: string
   body: string
   created_at: number
   updated_at: number
-}
-
-export interface ChatUser {
-  id: number
-  username: string
-  display_name: string
+  read_by: ChatUser[]
 }
 
 export interface ChatEvent {

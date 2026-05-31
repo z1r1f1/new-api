@@ -33,38 +33,52 @@ func (service *Service) ListUsers(ctx context.Context, currentUserID int) ([]*mo
 	return model.ListChatUsers(currentUserID)
 }
 
-func (service *Service) ListConversations(ctx context.Context, userID int) ([]*model.ChatConversation, error) {
+func (service *Service) ListConversations(ctx context.Context, userID int) ([]*ConversationResponse, error) {
 	if userID <= 0 {
 		return nil, ErrInvalidRequest
 	}
 	if err := model.EnsureChatTables(); err != nil {
 		return nil, err
 	}
-	return model.ListUserConversations(userID)
+	if _, err := model.GetOrCreateDefaultGroupConversation(); err != nil {
+		return nil, err
+	}
+	conversations, err := model.ListUserConversations(userID)
+	if err != nil {
+		return nil, err
+	}
+	return service.decorateConversations(conversations, userID)
 }
 
-func (service *Service) CreateDirectConversation(ctx context.Context, currentUserID int, peerUserID int) (*model.ChatConversation, error) {
+func (service *Service) CreateDirectConversation(ctx context.Context, currentUserID int, peerUserID int) (*ConversationResponse, error) {
 	if currentUserID <= 0 || peerUserID <= 0 {
 		return nil, ErrInvalidRequest
 	}
 	if err := model.EnsureChatTables(); err != nil {
 		return nil, err
 	}
+	if err := service.requireDirectConversationAllowed(currentUserID, peerUserID); err != nil {
+		return nil, err
+	}
 	conversation, err := model.GetOrCreateDirectConversation(currentUserID, peerUserID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := service.decorateConversation(conversation, currentUserID)
 	if err != nil {
 		return nil, err
 	}
 	service.publishToUsers(ctx, []int{currentUserID, peerUserID}, Event{
 		Type:           EventTypeConversationCreated,
 		ConversationID: conversation.Id,
-		Conversation:   conversation,
+		Conversation:   response,
 		MemberIDs:      []int{currentUserID, peerUserID},
 		CreatedAt:      common.GetTimestamp(),
 	})
-	return conversation, nil
+	return response, nil
 }
 
-func (service *Service) CreateGroupConversation(ctx context.Context, ownerID int, title string, memberIDs []int) (*model.ChatConversation, error) {
+func (service *Service) CreateGroupConversation(ctx context.Context, ownerID int, title string, memberIDs []int) (*ConversationResponse, error) {
 	if ownerID <= 0 {
 		return nil, ErrInvalidRequest
 	}
@@ -72,6 +86,10 @@ func (service *Service) CreateGroupConversation(ctx context.Context, ownerID int
 		return nil, err
 	}
 	conversation, err := model.CreateGroupConversation(ownerID, title, memberIDs)
+	if err != nil {
+		return nil, err
+	}
+	response, err := service.decorateConversation(conversation, ownerID)
 	if err != nil {
 		return nil, err
 	}
@@ -86,14 +104,14 @@ func (service *Service) CreateGroupConversation(ctx context.Context, ownerID int
 	service.publishToUsers(ctx, userIDs, Event{
 		Type:           EventTypeConversationCreated,
 		ConversationID: conversation.Id,
-		Conversation:   conversation,
+		Conversation:   response,
 		MemberIDs:      userIDs,
 		CreatedAt:      common.GetTimestamp(),
 	})
-	return conversation, nil
+	return response, nil
 }
 
-func (service *Service) SendMessage(ctx context.Context, currentUserID int, conversationID int, body string, clientMessageID string) (*model.ChatMessage, error) {
+func (service *Service) SendMessage(ctx context.Context, currentUserID int, conversationID int, body string, clientMessageID string) (*MessageResponse, error) {
 	if currentUserID <= 0 || conversationID <= 0 || body == "" {
 		return nil, ErrInvalidRequest
 	}
@@ -110,17 +128,21 @@ func (service *Service) SendMessage(ctx context.Context, currentUserID int, conv
 	if err := service.refreshReadStatesAfterMessage(conversationID, currentUserID, message.Id); err != nil {
 		return nil, err
 	}
+	response, err := service.decorateMessage(message)
+	if err != nil {
+		return nil, err
+	}
 	service.publishBestEffort(ctx, ConversationChannel(conversationID), Event{
 		Type:           EventTypeMessageCreated,
 		ConversationID: conversationID,
-		Message:        message,
+		Message:        response,
 		UserID:         currentUserID,
 		CreatedAt:      message.CreatedAt,
 	})
-	return message, nil
+	return response, nil
 }
 
-func (service *Service) ListMessages(ctx context.Context, currentUserID int, conversationID int, limit int, beforeMessageID int) ([]*model.ChatMessage, error) {
+func (service *Service) ListMessages(ctx context.Context, currentUserID int, conversationID int, limit int, beforeMessageID int) ([]*MessageResponse, error) {
 	if currentUserID <= 0 || conversationID <= 0 {
 		return nil, ErrInvalidRequest
 	}
@@ -130,7 +152,11 @@ func (service *Service) ListMessages(ctx context.Context, currentUserID int, con
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return nil, err
 	}
-	return model.ListConversationMessages(conversationID, limit, beforeMessageID)
+	messages, err := model.ListConversationMessages(conversationID, limit, beforeMessageID)
+	if err != nil {
+		return nil, err
+	}
+	return service.decorateMessages(messages)
 }
 
 func (service *Service) MarkRead(ctx context.Context, currentUserID int, conversationID int, lastReadMessageID int) error {

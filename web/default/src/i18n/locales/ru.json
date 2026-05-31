@@ -4785,6 +4785,16 @@
     "No users found": "Пользователи не найдены",
     "Search users": "Поиск пользователей",
     "Select a user": "Выберите пользователя",
-    "Select a user first": "Сначала выберите пользователя"
+    "Select a user first": "Сначала выберите пользователя",
+    "Choose a user or conversation from the left to start chatting.": "Выберите пользователя или беседу слева, чтобы начать чат.",
+    "Conversations": "Беседы",
+    "Default group": "Группа по умолчанию",
+    "Everyone is in this group": "Все пользователи находятся в этой группе",
+    "Group conversation": "Групповая беседа",
+    "Mention": "Упомянуть",
+    "No conversations yet": "Бесед пока нет",
+    "Read": "Прочитано",
+    "Search conversations": "Поиск бесед",
+    "Unread": "Не прочитано"
   }
 }

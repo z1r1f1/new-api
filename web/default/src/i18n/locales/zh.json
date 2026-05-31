@@ -4785,6 +4785,16 @@
     "No users found": "未找到用户",
     "Search users": "搜索用户",
     "Select a user": "选择一个用户",
-    "Select a user first": "请先选择用户"
+    "Select a user first": "请先选择用户",
+    "Choose a user or conversation from the left to start chatting.": "从左侧选择用户或会话开始聊天。",
+    "Conversations": "会话",
+    "Default group": "默认群组",
+    "Everyone is in this group": "所有用户都在此群组中",
+    "Group conversation": "群组会话",
+    "Mention": "提及",
+    "No conversations yet": "暂无会话",
+    "Read": "已读",
+    "Search conversations": "搜索会话",
+    "Unread": "未读"
   }
 }

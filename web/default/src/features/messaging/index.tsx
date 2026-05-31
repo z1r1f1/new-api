@@ -36,20 +36,25 @@ import {
   messagingQueryKeys,
   sendChatMessage,
 } from './api'
+import { ChatSidebar } from './components/chat-sidebar'
 import { MessageComposer } from './components/message-composer'
 import { MessageList } from './components/message-list'
 import { RealtimeStatusBadge } from './components/realtime-status-badge'
-import { UserSidebar } from './components/user-sidebar'
 import { useChatRealtime } from './hooks/use-chat-realtime'
 import {
   filterChatUsers,
+  filterConversations,
   filterMessages,
   getChatUserDisplayName,
   getChatUserInitial,
+  getConversationInitial,
+  getConversationTitle,
   getDirectConversationKey,
+  getTotalUnreadCount,
   MAX_MESSAGE_LENGTH,
   mergeMessages,
   MESSAGE_PAGE_SIZE,
+  type SidebarTab,
 } from './lib/format'
 import type {
   ApiResponse,
@@ -63,13 +68,14 @@ export function Messaging() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const currentUserId = useAuthStore((state) => state.auth.user?.id ?? null)
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('users')
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [activeConversationId, setActiveConversationId] = useState<
     number | null
   >(null)
   const [openingUserId, setOpeningUserId] = useState<number | null>(null)
   const [messageBody, setMessageBody] = useState('')
-  const [userSearch, setUserSearch] = useState('')
+  const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
   const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
     useState<Record<number, boolean>>({})
@@ -87,13 +93,21 @@ export function Messaging() {
   })
 
   const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data])
-  const filteredUsers = useMemo(
-    () => filterChatUsers(users, userSearch),
-    [userSearch, users]
-  )
   const conversations = useMemo(
     () => conversationsQuery.data ?? [],
     [conversationsQuery.data]
+  )
+  const filteredUsers = useMemo(
+    () => filterChatUsers(users, sidebarSearch),
+    [sidebarSearch, users]
+  )
+  const filteredConversations = useMemo(
+    () => filterConversations(conversations, sidebarSearch),
+    [conversations, sidebarSearch]
+  )
+  const totalUnreadCount = useMemo(
+    () => getTotalUnreadCount(conversations),
+    [conversations]
   )
   const selectedUser = useMemo(
     () => users.find((user) => user.id === selectedUserId) ?? null,
@@ -102,12 +116,18 @@ export function Messaging() {
   const activeConversation = useMemo(
     () =>
       activeConversationId
-        ? conversations.find(
+        ? (conversations.find(
             (conversation) => conversation.id === activeConversationId
-          ) ?? null
+          ) ?? null)
         : null,
     [activeConversationId, conversations]
   )
+  const mentionUsers = useMemo(() => {
+    if (!activeConversation || activeConversation.type !== 'group') return []
+    return activeConversation.members.filter(
+      (member) => member.id !== currentUserId
+    )
+  }, [activeConversation, currentUserId])
 
   const messagesQuery = useQuery({
     queryKey: activeConversationId
@@ -120,6 +140,7 @@ export function Messaging() {
   })
 
   const messages = useMemo(() => messagesQuery.data ?? [], [messagesQuery.data])
+  const lastMessageId = messages.at(-1)?.id ?? 0
   const filteredMessages = useMemo(
     () => filterMessages(messages, messageSearch),
     [messageSearch, messages]
@@ -153,10 +174,12 @@ export function Messaging() {
       const directKey = getDirectConversationKey(currentUserId, user.id)
       const existingConversation = knownConversations.find(
         (conversation) =>
-          conversation.type === 'direct' && conversation.direct_key === directKey
+          conversation.type === 'direct' &&
+          conversation.direct_key === directKey
       )
       if (!existingConversation) return false
       setActiveConversationId(existingConversation.id)
+      setSelectedUserId(user.id)
       return true
     },
     [currentUserId]
@@ -171,6 +194,7 @@ export function Messaging() {
     onSuccess: (response) => {
       if (response.data) {
         setActiveConversationId(response.data.id)
+        setSelectedUserId(response.data.peer?.id ?? null)
         void queryClient.invalidateQueries({
           queryKey: messagingQueryKeys.messages(response.data.id),
         })
@@ -188,7 +212,7 @@ export function Messaging() {
   const sendMutation = useMutation({
     mutationFn: () => {
       if (!activeConversationId) {
-        throw new Error(t('Select a user first'))
+        throw new Error(t('Select a conversation first'))
       }
       return sendChatMessage(activeConversationId, {
         body: messageBody.trim(),
@@ -243,14 +267,25 @@ export function Messaging() {
         invalidateConversations()
         return
       }
+      if (event.type === 'message.read') {
+        invalidateConversations()
+        if (event.conversation_id) {
+          void queryClient.invalidateQueries({
+            queryKey: messagingQueryKeys.messages(event.conversation_id),
+          })
+        }
+        return
+      }
       if (
         event.type === 'conversation.created' ||
-        event.type === 'conversation.updated'
+        event.type === 'conversation.updated' ||
+        event.type === 'member.added' ||
+        event.type === 'member.removed'
       ) {
         invalidateConversations()
       }
     },
-    [appendMessage, invalidateConversations]
+    [appendMessage, invalidateConversations, queryClient]
   )
 
   const realtimeStatus = useChatRealtime({
@@ -260,12 +295,11 @@ export function Messaging() {
   })
 
   useEffect(() => {
-    const lastMessage = messages.at(-1)
-    if (!activeConversationId || !lastMessage) return
+    if (!activeConversationId || !lastMessageId) return
     void markChatRead(activeConversationId, {
-      last_read_message_id: lastMessage.id,
-    })
-  }, [activeConversationId, messages])
+      last_read_message_id: lastMessageId,
+    }).then(() => invalidateConversations())
+  }, [activeConversationId, invalidateConversations, lastMessageId])
 
   const handleSelectUser = (user: ChatUser): void => {
     setSelectedUserId(user.id)
@@ -274,6 +308,13 @@ export function Messaging() {
     setActiveConversationId(null)
     if (openDirectConversation(user, conversations)) return
     createDirectMutation.mutate(user.id)
+  }
+
+  const handleSelectConversation = (conversation: ChatConversation): void => {
+    setActiveConversationId(conversation.id)
+    setSelectedUserId(conversation.peer?.id ?? null)
+    setMessageBody('')
+    setMessageSearch('')
   }
 
   const handleSendMessage = (): void => {
@@ -298,8 +339,8 @@ export function Messaging() {
 
   const canLoadOlder = Boolean(
     activeConversationId &&
-      messages.length > 0 &&
-      !historyExhaustedByConversation[activeConversationId]
+    messages.length > 0 &&
+    !historyExhaustedByConversation[activeConversationId]
   )
   const loadingThread = Boolean(
     selectedUser && !activeConversation && createDirectMutation.isPending
@@ -309,14 +350,21 @@ export function Messaging() {
     <div className='bg-background flex h-full min-h-0 p-3 lg:p-4'>
       <div className='grid min-h-0 flex-1 gap-4 lg:grid-cols-[20rem_minmax(0,1fr)]'>
         <aside className='min-h-0'>
-          <UserSidebar
+          <ChatSidebar
+            activeTab={sidebarTab}
             users={filteredUsers}
+            conversations={filteredConversations}
             activeUserId={selectedUserId}
-            loading={usersQuery.isPending}
-            searchText={userSearch}
+            activeConversationId={activeConversationId}
+            loadingUsers={usersQuery.isPending}
+            loadingConversations={conversationsQuery.isPending}
+            searchText={sidebarSearch}
             openingUserId={openingUserId}
-            onSearchChange={setUserSearch}
-            onSelect={handleSelectUser}
+            totalUnreadCount={totalUnreadCount}
+            onTabChange={setSidebarTab}
+            onSearchChange={setSidebarSearch}
+            onSelectUser={handleSelectUser}
+            onSelectConversation={handleSelectConversation}
             onRefresh={handleRefresh}
           />
         </aside>
@@ -325,7 +373,8 @@ export function Messaging() {
           <Card className='border-border/80 flex h-full min-h-0 overflow-hidden shadow-sm'>
             <div className='flex min-w-0 flex-1 flex-col'>
               <ChatHeader
-                user={selectedUser}
+                conversation={activeConversation}
+                pendingUser={selectedUser}
                 realtimeStatus={realtimeStatus}
                 messageCount={messages.length}
                 searchText={messageSearch}
@@ -335,11 +384,12 @@ export function Messaging() {
               />
               <CardContent className='flex min-h-0 flex-1 flex-col p-0'>
                 <MessageList
+                  conversation={activeConversation}
                   messages={filteredMessages}
                   allMessageCount={messages.length}
                   currentUserId={currentUserId}
                   loading={messagesQuery.isPending || loadingThread}
-                  empty={!selectedUser}
+                  empty={!activeConversationId}
                   searchText={messageSearch}
                   canLoadOlder={canLoadOlder}
                   loadingOlder={loadOlderMutation.isPending}
@@ -347,9 +397,10 @@ export function Messaging() {
                 />
                 <MessageComposer
                   value={messageBody}
-                  active={Boolean(selectedUser && activeConversationId)}
+                  active={Boolean(activeConversationId)}
                   sending={sendMutation.isPending}
                   maxLength={MAX_MESSAGE_LENGTH}
+                  mentionUsers={mentionUsers}
                   onChange={setMessageBody}
                   onSend={handleSendMessage}
                 />
@@ -363,7 +414,8 @@ export function Messaging() {
 }
 
 interface ChatHeaderProps {
-  user: ChatUser | null
+  conversation: ChatConversation | null
+  pendingUser: ChatUser | null
   realtimeStatus: string
   messageCount: number
   searchText: string
@@ -374,18 +426,24 @@ interface ChatHeaderProps {
 
 function ChatHeader(props: ChatHeaderProps) {
   const { t } = useTranslation()
-  const title = props.user
-    ? t('Chat with {{name}}', { name: `@${props.user.username}` })
-    : t('Select a user')
+  const active = Boolean(props.conversation)
+  const title = getHeaderTitle(props.conversation, props.pendingUser, t)
+  const subtitle = getHeaderSubtitle(props.conversation, props.pendingUser, t)
 
   return (
     <CardHeader className='border-border/80 border-b'>
       <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
         <div className='flex min-w-0 items-center gap-3'>
-          {props.user ? (
+          {props.conversation ? (
             <Avatar size='lg' className='shadow-sm'>
               <AvatarFallback className='bg-muted'>
-                {getChatUserInitial(props.user)}
+                {getConversationInitial(props.conversation)}
+              </AvatarFallback>
+            </Avatar>
+          ) : props.pendingUser ? (
+            <Avatar size='lg' className='shadow-sm'>
+              <AvatarFallback className='bg-muted'>
+                {getChatUserInitial(props.pendingUser)}
               </AvatarFallback>
             </Avatar>
           ) : (
@@ -396,22 +454,20 @@ function ChatHeader(props: ChatHeaderProps) {
           <div className='min-w-0'>
             <CardTitle className='truncate text-base'>{title}</CardTitle>
             <div className='text-muted-foreground mt-1 flex items-center gap-2 text-xs'>
-              {props.user ? (
+              <span className='truncate'>{subtitle}</span>
+              {active && (
                 <>
-                  <span>{getChatUserDisplayName(props.user)}</span>
                   <span>·</span>
                   <span>
                     {t('{{count}} messages', { count: props.messageCount })}
                   </span>
-                  {props.loading && (
-                    <>
-                      <span>·</span>
-                      <Loader2 className='h-3 w-3 animate-spin' />
-                    </>
-                  )}
                 </>
-              ) : (
-                <span>{t('Choose a user from the left to start chatting.')}</span>
+              )}
+              {props.loading && (
+                <>
+                  <span>·</span>
+                  <Loader2 className='h-3 w-3 animate-spin' />
+                </>
               )}
             </div>
           </div>
@@ -423,7 +479,7 @@ function ChatHeader(props: ChatHeaderProps) {
               value={props.searchText}
               onChange={(event) => props.onSearchChange(event.target.value)}
               placeholder={t('Search in conversation')}
-              disabled={!props.user}
+              disabled={!active}
               className='pl-9'
             />
           </div>
@@ -440,5 +496,34 @@ function ChatHeader(props: ChatHeaderProps) {
         </div>
       </div>
     </CardHeader>
+  )
+}
+
+function getHeaderTitle(
+  conversation: ChatConversation | null,
+  pendingUser: ChatUser | null,
+  translate: (key: string, options?: Record<string, unknown>) => string
+): string {
+  if (conversation) {
+    const title = getConversationTitle(conversation)
+    return conversation.is_default ? translate(title) : title
+  }
+  if (pendingUser) {
+    return translate('Chat with {{name}}', { name: `@${pendingUser.username}` })
+  }
+  return translate('Select a conversation')
+}
+
+function getHeaderSubtitle(
+  conversation: ChatConversation | null,
+  pendingUser: ChatUser | null,
+  translate: (key: string) => string
+): string {
+  if (conversation?.is_default) return translate('Everyone is in this group')
+  if (conversation?.type === 'group') return translate('Group conversation')
+  if (conversation?.peer) return getChatUserDisplayName(conversation.peer)
+  if (pendingUser) return getChatUserDisplayName(pendingUser)
+  return translate(
+    'Choose a user or conversation from the left to start chatting.'
   )
 }

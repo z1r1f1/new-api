@@ -16,28 +16,19 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useTranslation } from 'react-i18next'
-import { getConversationTitle } from '../lib/format'
-import type { ChatConversation } from '../types'
+import { useQuery } from '@tanstack/react-query'
+import { useAuthStore } from '@/stores/auth-store'
+import { listChatConversations, messagingQueryKeys } from '../api'
+import { getTotalUnreadCount } from '../lib/format'
 
-interface ConversationTitleProps {
-  conversation: ChatConversation
-}
+export function useChatUnreadCount(): number {
+  const currentUserId = useAuthStore((state) => state.auth.user?.id ?? null)
+  const query = useQuery({
+    queryKey: messagingQueryKeys.conversations,
+    queryFn: listChatConversations,
+    enabled: Boolean(currentUserId),
+    select: (response) => getTotalUnreadCount(response.data ?? []),
+  })
 
-export function ConversationTitle(props: ConversationTitleProps) {
-  const { t } = useTranslation()
-  const explicitTitle = getConversationTitle(props.conversation)
-  if (explicitTitle) return explicitTitle
-  if (props.conversation.type === 'direct') {
-    return (
-      <>
-        {t('Direct chat')} #{props.conversation.id}
-      </>
-    )
-  }
-  return (
-    <>
-      {t('Group chat')} #{props.conversation.id}
-    </>
-  )
+  return query.data ?? 0
 }

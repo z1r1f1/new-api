@@ -20,24 +20,12 @@ import type { ChatConversation, ChatMessage, ChatUser } from '../types'
 
 export const MESSAGE_PAGE_SIZE = 40
 export const MAX_MESSAGE_LENGTH = 2000
-export const QUICK_REPLIES = [
-  'Received, I will follow up shortly.',
-  'Please add more context for the next step.',
-  'This has been scheduled for review.',
-]
 
-export type ConversationFilter = 'all' | 'direct' | 'group'
+export type SidebarTab = 'users' | 'conversations'
 
 export type MessageRow =
   | { kind: 'divider'; key: string; timestamp: number }
   | { kind: 'message'; key: string; message: ChatMessage }
-
-export function parseMemberIds(value: string): number[] {
-  return value
-    .split(',')
-    .map((item) => Number(item.trim()))
-    .filter((item) => Number.isInteger(item) && item > 0)
-}
 
 export function formatChatTime(timestamp: number): string {
   if (!timestamp) return '—'
@@ -59,34 +47,19 @@ export function formatChatDate(timestamp: number): string {
 }
 
 export function getConversationTitle(conversation: ChatConversation): string {
+  if (conversation.is_default) return 'Default group'
+  if (conversation.type === 'direct' && conversation.peer) {
+    return getChatUserDisplayName(conversation.peer)
+  }
   if (conversation.title.trim()) return conversation.title
-  return ''
-}
-
-export function getConversationFallbackTitle(
-  conversation: ChatConversation
-): string {
-  const explicitTitle = getConversationTitle(conversation)
-  if (explicitTitle) return explicitTitle
-  if (conversation.type === 'direct') return `Direct chat #${conversation.id}`
-  return `Group chat #${conversation.id}`
+  if (conversation.type === 'direct') return 'Direct chat'
+  return 'Group chat'
 }
 
 export function getConversationInitial(conversation: ChatConversation): string {
-  const title = getConversationFallbackTitle(conversation).trim()
+  const title = getConversationTitle(conversation).trim()
   if (!title) return '#'
   return title.slice(0, 1).toUpperCase()
-}
-
-export function getConversationTone(conversation: ChatConversation): string {
-  const tones = [
-    'from-sky-500/80 to-cyan-500/80',
-    'from-emerald-500/80 to-teal-500/80',
-    'from-amber-500/80 to-orange-500/80',
-    'from-violet-500/80 to-fuchsia-500/80',
-    'from-slate-500/80 to-zinc-600/80',
-  ]
-  return tones[Math.abs(conversation.id) % tones.length]
 }
 
 export function mergeMessages(
@@ -123,9 +96,13 @@ export function filterMessages(
 ): ChatMessage[] {
   const keyword = searchText.trim().toLowerCase()
   if (!keyword) return messages
-  return messages.filter((message) =>
-    message.body.toLowerCase().includes(keyword)
-  )
+  return messages.filter((message) => {
+    return (
+      message.body.toLowerCase().includes(keyword) ||
+      message.sender_username.toLowerCase().includes(keyword) ||
+      message.sender_display_name.toLowerCase().includes(keyword)
+    )
+  })
 }
 
 export function filterChatUsers(
@@ -138,9 +115,19 @@ export function filterChatUsers(
     const displayName = getChatUserDisplayName(user).toLowerCase()
     return (
       displayName.includes(keyword) ||
-      user.username.toLowerCase().includes(keyword) ||
-      String(user.id).includes(keyword)
+      user.username.toLowerCase().includes(keyword)
     )
+  })
+}
+
+export function filterConversations(
+  conversations: ChatConversation[],
+  searchText: string
+): ChatConversation[] {
+  const keyword = searchText.trim().toLowerCase()
+  if (!keyword) return conversations
+  return conversations.filter((conversation) => {
+    return getConversationTitle(conversation).toLowerCase().includes(keyword)
   })
 }
 
@@ -148,13 +135,45 @@ export function getChatUserDisplayName(user: ChatUser): string {
   const displayName = user.display_name.trim()
   if (displayName) return displayName
   if (user.username.trim()) return user.username
-  return `User #${user.id}`
+  return 'User'
 }
 
 export function getChatUserInitial(user: ChatUser): string {
   const name = getChatUserDisplayName(user).trim()
   if (!name) return '#'
   return name.slice(0, 1).toUpperCase()
+}
+
+export function getMessageSenderName(message: ChatMessage): string {
+  const displayName = message.sender_display_name.trim()
+  if (displayName) return displayName
+  if (message.sender_username.trim()) return message.sender_username
+  return 'User'
+}
+
+export function getMessageReadLabel(
+  message: ChatMessage,
+  conversation: ChatConversation | null,
+  currentUserId: number | null
+): 'read' | 'unread' {
+  if (!currentUserId || message.sender_id !== currentUserId) return 'read'
+  if (!conversation) return 'unread'
+  const otherMembers = conversation.members.filter(
+    (member) => member.id !== currentUserId
+  )
+  if (otherMembers.length === 0) return 'read'
+  const readByIds = new Set(message.read_by.map((user) => user.id))
+  return otherMembers.every((member) => readByIds.has(member.id))
+    ? 'read'
+    : 'unread'
+}
+
+export function getTotalUnreadCount(conversations: ChatConversation[]): number {
+  return conversations.reduce(
+    (total, conversation) =>
+      total + Math.max(0, conversation.unread_count || 0),
+    0
+  )
 }
 
 export function getDirectConversationKey(

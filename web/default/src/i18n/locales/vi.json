@@ -4699,7 +4699,7 @@
     "Matched path prefixes": "Tiền tố đường dẫn khớp",
     "Manual blacklist entries are still enforced globally and are not limited by this counting scope.": "Các mục danh sách đen thủ công vẫn được áp dụng toàn cục và không bị giới hạn bởi phạm vi đếm này.",
     "Messages": "Tin nhắn",
-    "Direct chat": "Trò chuyện trực tiếp",
+    "Direct chat": "Trò chuyện riêng",
     "Group chat": "Trò chuyện nhóm",
     "direct": "trực tiếp",
     "group": "nhóm",
@@ -4785,6 +4785,16 @@
     "No users found": "Không tìm thấy người dùng",
     "Search users": "Tìm kiếm người dùng",
     "Select a user": "Chọn người dùng",
-    "Select a user first": "Vui lòng chọn người dùng trước"
+    "Select a user first": "Vui lòng chọn người dùng trước",
+    "Choose a user or conversation from the left to start chatting.": "Chọn người dùng hoặc cuộc trò chuyện ở bên trái để bắt đầu trò chuyện.",
+    "Conversations": "Cuộc trò chuyện",
+    "Default group": "Nhóm mặc định",
+    "Everyone is in this group": "Tất cả người dùng đều ở trong nhóm này",
+    "Group conversation": "Cuộc trò chuyện nhóm",
+    "Mention": "Nhắc đến",
+    "No conversations yet": "Chưa có cuộc trò chuyện",
+    "Read": "Đã đọc",
+    "Search conversations": "Tìm kiếm cuộc trò chuyện",
+    "Unread": "Chưa đọc"
   }
 }

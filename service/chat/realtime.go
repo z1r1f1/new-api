@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/model"
 	"github.com/centrifugal/centrifuge"
 )
 
@@ -21,14 +20,14 @@ const (
 )
 
 type Event struct {
-	Type              string                  `json:"type"`
-	ConversationID    int                     `json:"conversation_id,omitempty"`
-	Conversation      *model.ChatConversation `json:"conversation,omitempty"`
-	Message           *model.ChatMessage      `json:"message,omitempty"`
-	UserID            int                     `json:"user_id,omitempty"`
-	MemberIDs         []int                   `json:"member_ids,omitempty"`
-	LastReadMessageID int                     `json:"last_read_message_id,omitempty"`
-	CreatedAt         int64                   `json:"created_at,omitempty"`
+	Type              string                `json:"type"`
+	ConversationID    int                   `json:"conversation_id,omitempty"`
+	Conversation      *ConversationResponse `json:"conversation,omitempty"`
+	Message           *MessageResponse      `json:"message,omitempty"`
+	UserID            int                   `json:"user_id,omitempty"`
+	MemberIDs         []int                 `json:"member_ids,omitempty"`
+	LastReadMessageID int                   `json:"last_read_message_id,omitempty"`
+	CreatedAt         int64                 `json:"created_at,omitempty"`
 }
 
 type Publisher interface {

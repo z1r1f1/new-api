@@ -4785,6 +4785,16 @@
     "No users found": "ユーザーが見つかりません",
     "Search users": "ユーザーを検索",
     "Select a user": "ユーザーを選択",
-    "Select a user first": "先にユーザーを選択してください"
+    "Select a user first": "先にユーザーを選択してください",
+    "Choose a user or conversation from the left to start chatting.": "左側からユーザーまたは会話を選択してチャットを開始してください。",
+    "Conversations": "会話",
+    "Default group": "デフォルトグループ",
+    "Everyone is in this group": "すべてのユーザーがこのグループに参加しています",
+    "Group conversation": "グループ会話",
+    "Mention": "メンション",
+    "No conversations yet": "まだ会話がありません",
+    "Read": "既読",
+    "Search conversations": "会話を検索",
+    "Unread": "未読"
   }
 }

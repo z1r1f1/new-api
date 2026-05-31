@@ -17,13 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useEffect, useMemo, useRef } from 'react'
-import {
-  CheckCheck,
-  Clock3,
-  Copy,
-  Loader2,
-  MessageCircle,
-} from 'lucide-react'
+import { CheckCheck, Clock3, Copy, Loader2, MessageCircle } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -31,10 +25,18 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
-import { buildMessageRows, formatChatDate, formatChatTime } from '../lib/format'
-import type { ChatMessage } from '../types'
+import {
+  buildMessageRows,
+  formatChatDate,
+  formatChatTime,
+  getChatUserInitial,
+  getMessageReadLabel,
+  getMessageSenderName,
+} from '../lib/format'
+import type { ChatConversation, ChatMessage } from '../types'
 
 interface MessageListProps {
+  conversation: ChatConversation | null
   messages: ChatMessage[]
   allMessageCount: number
   currentUserId: number | null
@@ -64,9 +66,13 @@ export function MessageList(props: MessageListProps) {
           <div className='bg-primary/10 text-primary mx-auto mb-4 flex size-14 items-center justify-center rounded-2xl'>
             <MessageCircle className='h-6 w-6' />
           </div>
-          <h2 className='text-lg font-semibold'>{t('Select a user')}</h2>
+          <h2 className='text-lg font-semibold'>
+            {t('Select a conversation')}
+          </h2>
           <p className='text-muted-foreground mt-2 text-sm'>
-            {t('Choose a user from the left to start chatting.')}
+            {t(
+              'Choose a user or conversation from the left to start chatting.'
+            )}
           </p>
         </div>
       </div>
@@ -139,6 +145,8 @@ export function MessageList(props: MessageListProps) {
               key={row.key}
               message={row.message}
               mine={row.message.sender_id === props.currentUserId}
+              conversation={props.conversation}
+              currentUserId={props.currentUserId}
             />
           )
         })}
@@ -169,10 +177,17 @@ function DateDivider(props: DateDividerProps) {
 interface MessageBubbleProps {
   message: ChatMessage
   mine: boolean
+  conversation: ChatConversation | null
+  currentUserId: number | null
 }
 
 function MessageBubble(props: MessageBubbleProps) {
   const { t } = useTranslation()
+  const readLabel = getMessageReadLabel(
+    props.message,
+    props.conversation,
+    props.currentUserId
+  )
 
   const handleCopy = (): void => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) return
@@ -191,7 +206,12 @@ function MessageBubble(props: MessageBubbleProps) {
       {!props.mine && (
         <Avatar size='sm' className='mt-1'>
           <AvatarFallback className='bg-muted text-[10px]'>
-            #{props.message.sender_id}
+            {getChatUserInitial({
+              id: props.message.sender_id,
+              username: props.message.sender_username,
+              display_name: props.message.sender_display_name,
+              role: 0,
+            })}
           </AvatarFallback>
         </Avatar>
       )}
@@ -203,12 +223,10 @@ function MessageBubble(props: MessageBubbleProps) {
       >
         <div className='text-muted-foreground flex items-center gap-2 px-1 text-[11px]'>
           <span>
-            {props.mine ? t('You') : `${t('User')} #${props.message.sender_id}`}
+            {props.mine ? t('You') : getMessageSenderName(props.message)}
           </span>
           <span>·</span>
           <span>{formatChatTime(props.message.created_at)}</span>
-          <span>·</span>
-          <span>{t('Message #{{id}}', { id: props.message.id })}</span>
         </div>
         <div
           className={cn(
@@ -236,7 +254,7 @@ function MessageBubble(props: MessageBubbleProps) {
           {props.mine && (
             <span className='text-muted-foreground flex items-center gap-1 px-1 text-[11px]'>
               <CheckCheck className='h-3.5 w-3.5' />
-              {t('Sent')}
+              {readLabel === 'read' ? t('Read') : t('Unread')}
             </span>
           )}
         </div>

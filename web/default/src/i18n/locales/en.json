@@ -4785,6 +4785,16 @@
     "No users found": "No users found",
     "Search users": "Search users",
     "Select a user": "Select a user",
-    "Select a user first": "Select a user first"
+    "Select a user first": "Select a user first",
+    "Choose a user or conversation from the left to start chatting.": "Choose a user or conversation from the left to start chatting.",
+    "Conversations": "Conversations",
+    "Default group": "Default group",
+    "Everyone is in this group": "Everyone is in this group",
+    "Group conversation": "Group conversation",
+    "Mention": "Mention",
+    "No conversations yet": "No conversations yet",
+    "Read": "Read",
+    "Search conversations": "Search conversations",
+    "Unread": "Unread"
   }
 }

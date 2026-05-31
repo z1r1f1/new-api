@@ -37,6 +37,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { ROLE } from '@/lib/roles'
 import { type SidebarData } from '@/components/layout/types'
+import { useChatUnreadCount } from '@/features/messaging/hooks/use-chat-unread-count'
 
 /**
  * Root navigation groups for the application sidebar.
@@ -46,6 +47,7 @@ import { type SidebarData } from '@/components/layout/types'
  */
 export function useSidebarData(): SidebarData {
   const { t } = useTranslation()
+  const unreadMessages = useChatUnreadCount()
 
   return {
     navGroups: [
@@ -62,6 +64,7 @@ export function useSidebarData(): SidebarData {
             title: t('Messages'),
             url: '/messages',
             icon: MessageCircle,
+            badge: unreadMessages > 0 ? String(unreadMessages) : undefined,
           },
           {
             title: t('Chat'),

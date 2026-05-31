@@ -93,9 +93,10 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 
 func TestChatUsersRouteListsEnabledPeers(t *testing.T) {
 	setupChatSmokeTestDB(t)
-	seedChatSmokeUser(t, 1, "alice", "Alice", common.UserStatusEnabled)
-	seedChatSmokeUser(t, 2, "bob", "Bob", common.UserStatusEnabled)
-	seedChatSmokeUser(t, 3, "charlie", "Charlie", common.UserStatusDisabled)
+	seedChatSmokeUser(t, 1, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+	seedChatSmokeUser(t, 2, "bob", "Bob", common.RoleAdminUser, common.UserStatusEnabled)
+	seedChatSmokeUser(t, 3, "charlie", "Charlie", common.RoleAdminUser, common.UserStatusDisabled)
+	seedChatSmokeUser(t, 4, "dave", "Dave", common.RoleCommonUser, common.UserStatusEnabled)
 
 	gin.SetMode(gin.TestMode)
 	root := gin.New()
@@ -172,7 +173,7 @@ func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
 	require.True(t, db.Migrator().HasTable(&model.ChatReadState{}))
 }
 
-func seedChatSmokeUser(t *testing.T, id int, username string, displayName string, status int) {
+func seedChatSmokeUser(t *testing.T, id int, username string, displayName string, role int, status int) {
 	t.Helper()
 
 	require.NoError(t, model.DB.Create(&model.User{
@@ -180,6 +181,7 @@ func seedChatSmokeUser(t *testing.T, id int, username string, displayName string
 		Username:    username,
 		Password:    "password-" + username,
 		DisplayName: displayName,
+		Role:        role,
 		Status:      status,
 		AffCode:     username + "-aff",
 	}).Error)
@@ -204,6 +206,8 @@ func initializeChatSmokeTestRuntime(t *testing.T) *chatservice.RealtimeServer {
 
 func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	setupChatSmokeTestDB(t)
+	seedChatSmokeUser(t, 1, "smoke-user-1", "Smoke User", common.RoleCommonUser, common.UserStatusEnabled)
+	seedChatSmokeUser(t, 2, "smoke-admin", "Smoke Admin", common.RoleAdminUser, common.UserStatusEnabled)
 	initializeChatSmokeTestRuntime(t)
 
 	gin.SetMode(gin.TestMode)
@@ -304,7 +308,7 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.Equal(t, message.Body, messageCreated.Message.Body)
 }
 
-func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, peerUserID int) *model.ChatConversation {
+func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, peerUserID int) *chatservice.ConversationResponse {
 	t.Helper()
 
 	payload, err := common.Marshal(map[string]any{"user_id": peerUserID})
@@ -327,12 +331,12 @@ func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL st
 	require.NoError(t, common.DecodeJson(resp.Body, &apiResp))
 	require.True(t, apiResp.Success, apiResp.Message)
 
-	var conversation model.ChatConversation
+	var conversation chatservice.ConversationResponse
 	require.NoError(t, common.Unmarshal(apiResp.Data, &conversation))
 	return &conversation
 }
 
-func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, body string) *model.ChatMessage {
+func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, body string) *chatservice.MessageResponse {
 	t.Helper()
 
 	payload, err := common.Marshal(map[string]any{
@@ -358,7 +362,7 @@ func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, c
 	require.NoError(t, common.DecodeJson(resp.Body, &apiResp))
 	require.True(t, apiResp.Success, apiResp.Message)
 
-	var message model.ChatMessage
+	var message chatservice.MessageResponse
 	require.NoError(t, common.Unmarshal(apiResp.Data, &message))
 	return &message
 }
