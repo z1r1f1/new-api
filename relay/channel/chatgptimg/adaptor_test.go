@@ -953,6 +953,45 @@ func TestStreamResponsesCompletionConvertsToolJSONToFunctionCall(t *testing.T) {
 	}
 }
 
+func TestStreamChatCompletionUsesSSEImageRefsWithoutConversationPolling(t *testing.T) {
+	service.InitTokenEncoders()
+	var mappingRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/files/file_generated/download":
+			_, _ = w.Write([]byte(`{"download_url":"` + "http://" + r.Host + `/image.png"}`))
+		case "/backend-api/conversation/conv-1":
+			mappingRequests++
+			t.Fatalf("stream should use SSE image refs before conversation polling")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://file_generated"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	client := &Client{opts: ClientOptions{BaseURL: server.URL}, hc: server.Client()}
+	pr, pw := io.Pipe()
+	req := chatRequest{Model: "gpt-5.5-pro", Messages: []dto.Message{{Role: "user", Content: "生成一张小猫图片"}}}
+	go streamChatCompletion(context.Background(), client, stream, req, "User: 生成一张小猫图片", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+
+	out, err := io.ReadAll(pr)
+	if err != nil {
+		t.Fatalf("read stream output failed: %v", err)
+	}
+	body := string(out)
+	if !strings.Contains(body, server.URL+"/image.png") {
+		t.Fatalf("expected stream to contain direct SSE image markdown, got:\n%s", body)
+	}
+	if mappingRequests != 0 {
+		t.Fatalf("expected no conversation polling, got %d mapping requests", mappingRequests)
+	}
+}
+
 func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	stream := make(chan SSEEvent, 2)
 	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["hello"]}}}}`)}
@@ -1173,6 +1212,26 @@ func TestStreamChatCompletionConvertsToolJSONToToolCalls(t *testing.T) {
 	}
 	if strings.Contains(body, `"content":"{\"tool_call\"`) {
 		t.Fatalf("tool stream must not leak structured JSON as text:\n%s", body)
+	}
+}
+
+func TestChatImageRefsFromSSEStateFiltersBaseline(t *testing.T) {
+	state := &ChatSSEState{
+		FileIDs:     []string{"old_file", "new_file", "new_file"},
+		SedimentIDs: []string{"old_sed", "new_sed", "new_sed"},
+	}
+	refs := chatImageRefsFromSSEState(state, imageBaseline{
+		FileIDs:     map[string]struct{}{"old_file": {}},
+		SedimentIDs: map[string]struct{}{"old_sed": {}},
+	})
+	want := []string{"new_file", "sed:new_sed"}
+	if len(refs) != len(want) {
+		t.Fatalf("expected refs %#v, got %#v", want, refs)
+	}
+	for i := range want {
+		if refs[i] != want[i] {
+			t.Fatalf("expected refs %#v, got %#v", want, refs)
+		}
 	}
 }
 

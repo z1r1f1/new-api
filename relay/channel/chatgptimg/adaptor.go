@@ -1489,7 +1489,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		}
 		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info, requestPublicBaseURLForImages(c, info), route, timing), nil
 	}
-	content, conversationID, usedPrompt, baseline, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt, playgroundDebugCapture(c), timing)
+	content, conversationID, usedPrompt, baseline, sseImageRefs, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt, playgroundDebugCapture(c), timing)
 	if err != nil {
 		return nil, err
 	}
@@ -1537,9 +1537,26 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 	hasInlineDataImage := chatContentHasInlineDataImage(content)
 	allowImagePoll := !hasInlineDataImage && shouldPollChatGeneratedImagesForRelay(info, req, usedPrompt, textContent, hasImageGeneration)
 	timing.Set("allow_image_poll", allowImagePoll)
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
-		return nil, err
-	} else if imageMarkdown != "" {
+	imageMarkdown := ""
+	if len(sseImageRefs) > 0 {
+		if timing != nil {
+			timing.Set("chat_sse_image_ref_count", len(sseImageRefs))
+		}
+		if client != nil && strings.TrimSpace(conversationID) != "" {
+			if timing != nil {
+				timing.Set("chat_image_source", "sse")
+			}
+			imageMarkdown = imageRefsToMarkdown(c.Request.Context(), client, conversationID, sseImageRefs, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing)
+		}
+	}
+	if imageMarkdown == "" {
+		if markdown, err := collectChatGeneratedImageMarkdown(c.Request.Context(), client, conversationID, baseline, allowImagePoll, info, usedPrompt, req.Model, requestPublicBaseURLForImages(c, info), timing); err != nil {
+			return nil, err
+		} else {
+			imageMarkdown = markdown
+		}
+	}
+	if imageMarkdown != "" {
 		content = appendMarkdownBlock(content, imageMarkdown)
 	}
 	usage := buildChatUsage(usedPrompt, textContent, req.Model)
@@ -2158,13 +2175,13 @@ type chatStreamStart struct {
 	Prompt   string
 }
 
-func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (string, string, string, imageBaseline, bool, error) {
+func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (string, string, string, imageBaseline, []string, bool, error) {
 	timing := firstChatGPTWebTiming(timings...)
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	started, err := startChatStream(ctx, client, req, prompt, captureRequestBody, timing)
 	if err != nil {
-		return "", "", "", imageBaseline{}, false, err
+		return "", "", "", imageBaseline{}, nil, false, err
 	}
 	parseStart := time.Now()
 	result := ParseChatSSE(started.Stream)
@@ -2175,12 +2192,13 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 		timing.Set("stream_handoff", result.HasStreamHandoff)
 	}
 	if result.Err != nil {
-		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, result.Err
+		return "", result.ConversationID, started.Prompt, started.Baseline, chatImageRefsFromSSEResult(result, started.Baseline), result.HasImageGeneration, result.Err
 	}
 	if containsImageGenerationUpstreamErrorText(result.Content) {
-		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, imageGenerationUpstreamError()
+		return "", result.ConversationID, started.Prompt, started.Baseline, chatImageRefsFromSSEResult(result, started.Baseline), result.HasImageGeneration, imageGenerationUpstreamError()
 	}
-	if strings.TrimSpace(result.Content) == "" {
+	sseImageRefs := chatImageRefsFromSSEResult(result, started.Baseline)
+	if strings.TrimSpace(result.Content) == "" && len(sseImageRefs) == 0 {
 		recovered := ""
 		if req.DeepResearch && result.HasDeepResearchInternalEvent {
 			recovered = recoverDeepResearchTextFromConversation(ctx, client, result.ConversationID, timing)
@@ -2196,10 +2214,10 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 	if strings.TrimSpace(result.Content) == "" && req.DeepResearch && result.HasDeepResearchInternalEvent {
 		result.Content = chatGPTWebDeepResearchPendingMessage
 	}
-	if strings.TrimSpace(result.Content) == "" {
-		return "", result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, errors.New("chatgpt web channel: empty chat response")
+	if strings.TrimSpace(result.Content) == "" && len(sseImageRefs) == 0 {
+		return "", result.ConversationID, started.Prompt, started.Baseline, sseImageRefs, result.HasImageGeneration, errors.New("chatgpt web channel: empty chat response")
 	}
-	return result.Content, result.ConversationID, started.Prompt, started.Baseline, result.HasImageGeneration, nil
+	return result.Content, result.ConversationID, started.Prompt, started.Baseline, sseImageRefs, result.HasImageGeneration, nil
 }
 
 func runChatCompletionProbe(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (string, string, string, error) {
@@ -2500,6 +2518,39 @@ func chatTextRequestsImageGeneration(text string) bool {
 		}
 	}
 	return false
+}
+
+func chatImageRefsFromSSEResult(result ChatSSEResult, baseline imageBaseline) []string {
+	state := &ChatSSEState{FileIDs: result.FileIDs, SedimentIDs: result.SedimentIDs}
+	return chatImageRefsFromSSEState(state, baseline)
+}
+
+func chatImageRefsFromSSEState(state *ChatSSEState, baseline imageBaseline) []string {
+	if state == nil {
+		return nil
+	}
+	refs := make([]string, 0, len(state.FileIDs)+len(state.SedimentIDs))
+	for _, fid := range state.FileIDs {
+		fid = strings.TrimSpace(fid)
+		if fid == "" {
+			continue
+		}
+		if _, ok := baseline.FileIDs[fid]; ok {
+			continue
+		}
+		refs = append(refs, fid)
+	}
+	for _, sid := range state.SedimentIDs {
+		sid = strings.TrimSpace(strings.TrimPrefix(sid, "sed:"))
+		if sid == "" {
+			continue
+		}
+		if _, ok := baseline.SedimentIDs[sid]; ok {
+			continue
+		}
+		refs = append(refs, "sed:"+sid)
+	}
+	return dedupeStrings(refs)
 }
 
 func imageRefsFromToolMsgs(toolMsgs []ImageToolMsg) ([]string, bool) {
@@ -3343,7 +3394,8 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		_ = pw.CloseWithError(imageGenerationUpstreamError())
 		return
 	}
-	if strings.TrimSpace(state.Content) == "" {
+	sseImageRefs := chatImageRefsFromSSEState(state, baseline)
+	if strings.TrimSpace(state.Content) == "" && len(sseImageRefs) == 0 {
 		recovered := ""
 		if req.DeepResearch && state.HasDeepResearchInternalEvent {
 			recovered = recoverDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
@@ -3396,10 +3448,27 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		timing.Set("has_image_generation", state.HasImageGeneration)
 		timing.Set("has_inline_image", state.HasInlineImage)
 	}
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
-		_ = pw.CloseWithError(err)
-		return
-	} else if imageMarkdown != "" {
+	imageMarkdown := ""
+	if len(sseImageRefs) > 0 {
+		if timing != nil {
+			timing.Set("chat_sse_image_ref_count", len(sseImageRefs))
+		}
+		if client != nil && strings.TrimSpace(state.ConversationID) != "" {
+			if timing != nil {
+				timing.Set("chat_image_source", "sse")
+			}
+			imageMarkdown = imageRefsToMarkdown(ctx, client, state.ConversationID, sseImageRefs, info, prompt, model, publicBaseURL, timing)
+		}
+	}
+	if imageMarkdown == "" {
+		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		} else {
+			imageMarkdown = markdown
+		}
+	}
+	if imageMarkdown != "" {
 		if strings.TrimSpace(state.Content) != "" {
 			imageMarkdown = "\n\n" + imageMarkdown
 		}
@@ -3501,7 +3570,8 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		_ = pw.CloseWithError(imageGenerationUpstreamError())
 		return
 	}
-	if strings.TrimSpace(state.Content) == "" {
+	sseImageRefs := chatImageRefsFromSSEState(state, baseline)
+	if strings.TrimSpace(state.Content) == "" && len(sseImageRefs) == 0 {
 		recovered := ""
 		if req.DeepResearch && state.HasDeepResearchInternalEvent {
 			recovered = recoverDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
@@ -3552,10 +3622,27 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		timing.Set("has_image_generation", state.HasImageGeneration)
 		timing.Set("has_inline_image", state.HasInlineImage)
 	}
-	if imageMarkdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
-		_ = pw.CloseWithError(err)
-		return
-	} else if imageMarkdown != "" {
+	imageMarkdown := ""
+	if len(sseImageRefs) > 0 {
+		if timing != nil {
+			timing.Set("chat_sse_image_ref_count", len(sseImageRefs))
+		}
+		if client != nil && strings.TrimSpace(state.ConversationID) != "" {
+			if timing != nil {
+				timing.Set("chat_image_source", "sse")
+			}
+			imageMarkdown = imageRefsToMarkdown(ctx, client, state.ConversationID, sseImageRefs, info, prompt, model, publicBaseURL, timing)
+		}
+	}
+	if imageMarkdown == "" {
+		if markdown, err := collectChatGeneratedImageMarkdown(ctx, client, state.ConversationID, baseline, allowImagePoll, info, prompt, model, publicBaseURL, timing); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		} else {
+			imageMarkdown = markdown
+		}
+	}
+	if imageMarkdown != "" {
 		if strings.TrimSpace(outputText) != "" {
 			imageMarkdown = "\n\n" + imageMarkdown
 		}

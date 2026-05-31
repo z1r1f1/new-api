@@ -465,6 +465,40 @@ func assertDeepResearchPayload(t *testing.T, index int, payload map[string]any) 
 	}
 }
 
+func TestParseChatSSECapturesAssistantImageRefs(t *testing.T) {
+	stream := make(chan SSEEvent, 2)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen","image_gen_task_id":"task-1"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://file_generated"},{"asset_pointer":"sediment://sed_preview"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if result.ConversationID != "conv-1" {
+		t.Fatalf("expected conversation id, got %q", result.ConversationID)
+	}
+	if len(result.FileIDs) != 1 || result.FileIDs[0] != "file_generated" {
+		t.Fatalf("expected generated file id, got %#v", result.FileIDs)
+	}
+	if len(result.SedimentIDs) != 1 || result.SedimentIDs[0] != "sed_preview" {
+		t.Fatalf("expected preview sediment id, got %#v", result.SedimentIDs)
+	}
+	if result.ImageGenTaskID != "task-1" {
+		t.Fatalf("expected image task id, got %q", result.ImageGenTaskID)
+	}
+}
+
+func TestParseChatSSEIgnoresUserUploadedImageRefs(t *testing.T) {
+	stream := make(chan SSEEvent, 3)
+	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1","message":{"author":{"role":"user"},"content":{"parts":[{"asset_pointer":"file-service://uploaded_input"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`{"v":{"message":{"author":{"role":"tool","name":"image_gen"},"metadata":{"async_task_type":"image_gen"},"content":{"parts":[{"asset_pointer":"file-service://generated_output"}]}}}}`)}
+	stream <- SSEEvent{Data: []byte(`[DONE]`)}
+	close(stream)
+
+	result := ParseChatSSE(stream)
+	if len(result.FileIDs) != 1 || result.FileIDs[0] != "generated_output" {
+		t.Fatalf("expected only generated file id, got %#v", result.FileIDs)
+	}
+}
+
 func TestParseImageSSEUntilConversationReadyReturnsAfterQuietPeriod(t *testing.T) {
 	stream := make(chan SSEEvent, 1)
 	stream <- SSEEvent{Data: []byte(`{"v":{"conversation_id":"conv-1"}}`)}

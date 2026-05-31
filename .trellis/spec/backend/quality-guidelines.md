@@ -1508,6 +1508,12 @@ Responses contract locally instead of returning "endpoint not supported".
   seconds unless product requirements explicitly accept longer final-stream
   latency. Full image generation endpoints use the separate `image_poll_ms`
   lifecycle and are not constrained by this chat-tail timeout.
+- ChatGPT Web chat stream parsing must collect generated image references from
+  non-user SSE messages before falling back to conversation mapping or polling.
+  Track `file-service://...` as file ids and `sediment://...` as `sed:<id>`
+  refs, filter refs that existed in the pre-request baseline, and skip
+  user-authored upload refs so reference images are not returned as generated
+  images.
 
 #### 4. Validation & Error Matrix
 
@@ -1529,6 +1535,9 @@ Responses contract locally instead of returning "endpoint not supported".
   history or final assistant output merely mentions image generation -> do not
   inject image-generation instructions and do not enable best-effort image
   polling unless the upstream stream reports an image-generation marker.
+- ChatGPT Web SSE includes generated image refs in a non-user message -> append
+  image Markdown from those refs directly and do not call the conversation
+  mapping/poll path just to rediscover the same refs.
 - Responses stream has no `response.output_text.delta` but does include a
   completed message item with `content[0].type="output_text"` -> Claude
   `/v1/messages` clients still receive a `content_block_delta` before
@@ -1558,6 +1567,9 @@ Responses contract locally instead of returning "endpoint not supported".
   ordinary explanations such as "I can help generate images" can otherwise
   trigger `allow_image_poll=true` and add roughly a minute of final-stream
   latency.
+- Bad: ignoring image refs already present in ChatGPT Web SSE events and always
+  waiting for conversation mapping polling; this adds avoidable tail latency and
+  extra upstream calls.
 
 #### 6. Tests Required
 
@@ -1574,6 +1586,10 @@ Responses contract locally instead of returning "endpoint not supported".
 - `relay/channel/chatgptimg`: regression tests proving assistant history/output
   that mentions image generation does not inject image-generation instructions
   or enable image polling for a normal latest-user text request.
+- `relay/channel/chatgptimg`: regression tests proving ChatGPT Web chat SSE
+  captures generated file/sediment refs from non-user messages, ignores
+  user-uploaded refs, filters baseline refs, and can render direct SSE refs
+  without hitting conversation mapping polling.
 - `relay/channel/openai`: regression test that a Claude stream converted from a
   Responses stream with only `response.output_item.done` message text emits
   `content_block_delta` and does not stop as an empty message.

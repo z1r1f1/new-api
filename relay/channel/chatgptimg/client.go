@@ -919,8 +919,8 @@ func (c *Client) PrepareFConversation(ctx context.Context, opt ImageConvOpts) (s
 					"parts":        []string{opt.Prompt},
 				},
 			},
-			"supports_buffering":    true,
-			"supported_encodings":   []string{"v1"},
+			"supports_buffering":  true,
+			"supported_encodings": []string{"v1"},
 			"client_contextual_info": map[string]any{
 				"app_name": "chatgpt.com",
 			},
@@ -1369,6 +1369,9 @@ type ChatSSEResult struct {
 	ConversationID               string
 	Content                      string
 	FinishType                   string
+	FileIDs                      []string
+	SedimentIDs                  []string
+	ImageGenTaskID               string
 	HasImageGeneration           bool
 	HasInlineImage               bool
 	HasDeepResearchInternalEvent bool
@@ -1380,6 +1383,9 @@ type ChatSSEState struct {
 	ConversationID                   string
 	Content                          string
 	FinishType                       string
+	FileIDs                          []string
+	SedimentIDs                      []string
+	ImageGenTaskID                   string
 	IsAppendingText                  bool
 	HasImageGeneration               bool
 	HasInlineImage                   bool
@@ -1387,6 +1393,8 @@ type ChatSSEState struct {
 	HasStreamHandoff                 bool
 	SuppressingDeepResearchInternal  bool
 	DeepResearchInternalContentToken string
+	seenImageFileIDs                 map[string]struct{}
+	seenImageSedimentIDs             map[string]struct{}
 }
 
 var (
@@ -1458,28 +1466,15 @@ func ParseChatSSE(stream <-chan SSEEvent) ChatSSEResult {
 	for ev := range stream {
 		_, done, err := CollectChatSSEEvent(ev, state)
 		if err != nil {
-			return ChatSSEResult{
-				ConversationID:               state.ConversationID,
-				Content:                      state.Content,
-				FinishType:                   state.FinishType,
-				HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-				HasStreamHandoff:             state.HasStreamHandoff,
-				Err:                          err,
-			}
+			result := chatSSEResultFromState(state)
+			result.Err = err
+			return result
 		}
 		if done {
 			break
 		}
 	}
-	return ChatSSEResult{
-		ConversationID:               state.ConversationID,
-		Content:                      state.Content,
-		FinishType:                   state.FinishType,
-		HasImageGeneration:           state.HasImageGeneration,
-		HasInlineImage:               state.HasInlineImage,
-		HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-		HasStreamHandoff:             state.HasStreamHandoff,
-	}
+	return chatSSEResultFromState(state)
 }
 
 func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duration) ChatSSEResult {
@@ -1489,65 +1484,44 @@ func ParseChatSSEUntilReady(stream <-chan SSEEvent, quietAfterReady time.Duratio
 		select {
 		case ev, ok := <-stream:
 			if !ok {
-				return ChatSSEResult{
-					ConversationID:               state.ConversationID,
-					Content:                      state.Content,
-					FinishType:                   state.FinishType,
-					HasImageGeneration:           state.HasImageGeneration,
-					HasInlineImage:               state.HasInlineImage,
-					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-					HasStreamHandoff:             state.HasStreamHandoff,
-				}
+				return chatSSEResultFromState(state)
 			}
 			_, done, err := CollectChatSSEEvent(ev, state)
 			if err != nil {
-				return ChatSSEResult{
-					ConversationID:               state.ConversationID,
-					Content:                      state.Content,
-					FinishType:                   state.FinishType,
-					HasImageGeneration:           state.HasImageGeneration,
-					HasInlineImage:               state.HasInlineImage,
-					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-					HasStreamHandoff:             state.HasStreamHandoff,
-					Err:                          err,
-				}
+				result := chatSSEResultFromState(state)
+				result.Err = err
+				return result
 			}
 			if done {
-				return ChatSSEResult{
-					ConversationID:               state.ConversationID,
-					Content:                      state.Content,
-					FinishType:                   state.FinishType,
-					HasImageGeneration:           state.HasImageGeneration,
-					HasInlineImage:               state.HasInlineImage,
-					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-					HasStreamHandoff:             state.HasStreamHandoff,
-				}
+				return chatSSEResultFromState(state)
 			}
 			if strings.TrimSpace(state.Content) != "" {
-				return ChatSSEResult{
-					ConversationID:               state.ConversationID,
-					Content:                      state.Content,
-					FinishType:                   state.FinishType,
-					HasImageGeneration:           state.HasImageGeneration,
-					HasInlineImage:               state.HasInlineImage,
-					HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-					HasStreamHandoff:             state.HasStreamHandoff,
-				}
+				return chatSSEResultFromState(state)
 			}
 			if state.ConversationID != "" && quietAfterReady > 0 {
 				quietTimer = time.After(quietAfterReady)
 			}
 		case <-quietTimer:
-			return ChatSSEResult{
-				ConversationID:               state.ConversationID,
-				Content:                      state.Content,
-				FinishType:                   state.FinishType,
-				HasImageGeneration:           state.HasImageGeneration,
-				HasInlineImage:               state.HasInlineImage,
-				HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
-				HasStreamHandoff:             state.HasStreamHandoff,
-			}
+			return chatSSEResultFromState(state)
 		}
+	}
+}
+
+func chatSSEResultFromState(state *ChatSSEState) ChatSSEResult {
+	if state == nil {
+		return ChatSSEResult{}
+	}
+	return ChatSSEResult{
+		ConversationID:               state.ConversationID,
+		Content:                      state.Content,
+		FinishType:                   state.FinishType,
+		FileIDs:                      append([]string(nil), state.FileIDs...),
+		SedimentIDs:                  append([]string(nil), state.SedimentIDs...),
+		ImageGenTaskID:               state.ImageGenTaskID,
+		HasImageGeneration:           state.HasImageGeneration,
+		HasInlineImage:               state.HasInlineImage,
+		HasDeepResearchInternalEvent: state.HasDeepResearchInternalEvent,
+		HasStreamHandoff:             state.HasStreamHandoff,
 	}
 }
 
@@ -1571,6 +1545,7 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 	if chatSSEEventHasImageGeneration(obj, ev.Data) {
 		state.HasImageGeneration = true
 	}
+	collectChatImageRefsFromEvent(obj, state)
 	if cid, ok := obj["conversation_id"].(string); ok && cid != "" && state.ConversationID == "" {
 		state.ConversationID = cid
 	}
@@ -1600,6 +1575,107 @@ func CollectChatSSEEvent(ev SSEEvent, state *ChatSSEState) (delta string, done b
 		return "", false, nil
 	}
 	return replaceChatContent(latest, state), false, nil
+}
+
+func collectChatImageRefsFromEvent(obj map[string]any, state *ChatSSEState) {
+	if obj == nil || state == nil {
+		return
+	}
+	if v, ok := obj["v"].(map[string]any); ok {
+		if msg, ok := v["message"].(map[string]any); ok {
+			collectChatImageRefsFromMessage(msg, state)
+		}
+	}
+	if msg, ok := obj["message"].(map[string]any); ok {
+		collectChatImageRefsFromMessage(msg, state)
+	}
+	path, _ := obj["p"].(string)
+	if strings.Contains(path, "/message/content/parts") || strings.Contains(path, "/message/metadata") {
+		collectChatImageRefsFromValue(obj["v"], state)
+	}
+	if patches, ok := obj["v"].([]any); ok {
+		for _, raw := range patches {
+			patch, _ := raw.(map[string]any)
+			if patch == nil {
+				continue
+			}
+			patchPath, _ := patch["p"].(string)
+			if strings.Contains(patchPath, "/message/content/parts") || strings.Contains(patchPath, "/message/metadata") {
+				collectChatImageRefsFromValue(patch["v"], state)
+			}
+		}
+	}
+}
+
+func collectChatImageRefsFromMessage(message map[string]any, state *ChatSSEState) {
+	if message == nil || state == nil || isUserAuthoredMessage(message) {
+		return
+	}
+	if meta, ok := message["metadata"].(map[string]any); ok {
+		if taskID, ok := meta["image_gen_task_id"].(string); ok && strings.TrimSpace(taskID) != "" {
+			state.ImageGenTaskID = strings.TrimSpace(taskID)
+		}
+	}
+	collectChatImageRefsFromValue(message, state)
+}
+
+func collectChatImageRefsFromValue(value any, state *ChatSSEState) {
+	if state == nil || value == nil {
+		return
+	}
+	data, err := common.Marshal(value)
+	if err != nil {
+		return
+	}
+	collectChatImageRefsFromBytes(data, state)
+}
+
+func collectChatImageRefsFromBytes(data []byte, state *ChatSSEState) {
+	if state == nil || len(data) == 0 {
+		return
+	}
+	for _, m := range reFileRef.FindAllSubmatch(data, -1) {
+		addChatImageFileID(state, string(m[1]))
+	}
+	for _, m := range reSedRef.FindAllSubmatch(data, -1) {
+		addChatImageSedimentID(state, string(m[1]))
+	}
+}
+
+func addChatImageFileID(state *ChatSSEState, fileID string) {
+	fileID = strings.TrimSpace(fileID)
+	if state == nil || fileID == "" {
+		return
+	}
+	if state.seenImageFileIDs == nil {
+		state.seenImageFileIDs = make(map[string]struct{}, len(state.FileIDs)+1)
+		for _, existing := range state.FileIDs {
+			state.seenImageFileIDs[existing] = struct{}{}
+		}
+	}
+	if _, ok := state.seenImageFileIDs[fileID]; ok {
+		return
+	}
+	state.seenImageFileIDs[fileID] = struct{}{}
+	state.FileIDs = append(state.FileIDs, fileID)
+}
+
+func addChatImageSedimentID(state *ChatSSEState, sedimentID string) {
+	sedimentID = strings.TrimSpace(sedimentID)
+	if state == nil || sedimentID == "" {
+		return
+	}
+	if state.seenImageSedimentIDs == nil {
+		state.seenImageSedimentIDs = make(map[string]struct{}, len(state.SedimentIDs)+1)
+		for _, existing := range state.SedimentIDs {
+			state.seenImageSedimentIDs[existing] = struct{}{}
+		}
+	}
+	if _, ok := state.seenImageSedimentIDs[sedimentID]; ok {
+		return
+	}
+	state.seenImageSedimentIDs[sedimentID] = struct{}{}
+	state.SedimentIDs = append(state.SedimentIDs, sedimentID)
 }
 
 func chatSSEEventHasImageGeneration(obj map[string]any, raw []byte) bool {
