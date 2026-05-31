@@ -21,6 +21,7 @@ import { useQuery } from '@tanstack/react-query'
 import {
   Bug,
   MessageSquare,
+  PanelLeftClose,
   Pencil,
   Plus,
   Settings2,
@@ -91,6 +92,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
   const storageUserId = props.storageUserId
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false)
   const [mobileDebugOpen, setMobileDebugOpen] = useState(false)
+  const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true)
   const {
     config,
     parameterEnabled,
@@ -120,6 +122,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     renameSession,
     deleteSession,
     replaceSessions,
+    switchSession,
   } = usePlaygroundState(storageUserId)
 
   const { sendChat, stopGeneration, isGenerating } = useChatHandler({
@@ -409,9 +412,81 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     renameSession(activeSession.id, currentSessionTitleDraft)
   }, [activeSession, currentSessionTitleDraft, renameSession])
 
+  const sessionSidebar = (
+    <aside
+      className={cn(
+        'bg-background flex shrink-0 flex-col border-r overflow-hidden transition-all duration-200',
+        sessionSidebarOpen ? 'w-56' : 'w-0 border-r-0'
+      )}
+    >
+      <div className='border-border flex h-12 shrink-0 items-center justify-between border-b px-3'>
+        <span className={cn(
+          'text-sm font-medium truncate',
+          !sessionSidebarOpen && 'hidden'
+        )}>
+          {t('Sessions')}
+        </span>
+        <Button
+          size='icon'
+          variant='ghost'
+          className='size-7 shrink-0'
+          onClick={() => setSessionSidebarOpen(false)}
+          aria-label={t('Close session sidebar')}
+        >
+          <PanelLeftClose className='size-4' />
+        </Button>
+      </div>
+      <div
+        className={cn(
+          'flex-1 overflow-y-auto',
+          !sessionSidebarOpen && 'hidden'
+        )}
+      >
+        {sessions.map((session) => (
+          <button
+            key={session.id}
+            type='button'
+            className={cn(
+              'hover:bg-accent w-full px-3 py-2 text-left text-sm transition-colors',
+              'flex items-center gap-2 border-b border-border/50',
+              session.id === activeSessionId && 'bg-accent font-medium'
+            )}
+            onClick={() => switchSession(session.id)}
+          >
+            <MessageSquare className='text-muted-foreground size-3.5 shrink-0' />
+            <span className='truncate'>{session.title || t('New session')}</span>
+          </button>
+        ))}
+      </div>
+      <div className={cn('border-t p-2', !sessionSidebarOpen && 'hidden')}>
+        <Button
+          type='button'
+          variant='outline'
+          size='sm'
+          className='w-full'
+          onClick={createSession}
+        >
+          <Plus className='mr-2 size-4' />
+          {t('New session')}
+        </Button>
+      </div>
+    </aside>
+  )
+
   const sessionManager = (
     <div className='border-border bg-background/95 flex shrink-0 flex-col gap-2 border-b px-3 py-2 sm:flex-row sm:items-center'>
       <div className='flex min-w-0 flex-1 items-center gap-2'>
+        {!sessionSidebarOpen && (
+          <Button
+            size='icon'
+            variant='ghost'
+            className='size-7 shrink-0'
+            onClick={() => setSessionSidebarOpen(true)}
+            aria-label={t('Open session sidebar')}
+          >
+            <PanelLeftClose className='size-4 rotate-180' />
+          </Button>
+        )}
         <MessageSquare className='text-muted-foreground size-4 shrink-0' />
         <Input
           className='min-w-0 flex-1'
@@ -497,6 +572,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
 
   return (
     <div className='relative flex size-full overflow-hidden'>
+      {sessionSidebar}
       <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
         <div className='border-border bg-background/80 flex h-12 shrink-0 items-center justify-between border-b px-3 backdrop-blur'>
           <div className='flex items-center gap-2'>

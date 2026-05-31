@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 
 const markdownImageReferenceRegex =
-  /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/(?:public\/)?images\/generations\/[^)\s]+|https?:\/\/[^)\s]+)\)/g
+  /!\[([^\]]*)]\((data:image\/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=\r\n]+|\/pg\/(?:public\/)?images\/generations\/[^)\s]+|blob:https?:\/\/[^)\s]+|https?:\/\/[^)\s]+)\)/g
 
 const rawPlaygroundImageReferenceRegex =
   /(https?:\/\/[^)\s]+\/pg\/(?:public\/)?images\/generations\/[^)\s.,;，。；]+|\/pg\/(?:public\/)?images\/generations\/[^)\s.,;，。；]+)/g
@@ -41,6 +41,23 @@ export function toAbsoluteImageReferenceUrl(url: string): string {
     return normalized
   }
   return `${window.location.origin}${normalized}`
+}
+
+
+export async function blobToDataUrl(blobUrl: string): Promise<string> {
+  if (!blobUrl.startsWith('blob:')) return blobUrl
+  try {
+    const response = await fetch(blobUrl)
+    const blob = await response.blob()
+    return await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => resolve(String(reader.result || blobUrl))
+      reader.onerror = () => reject(reader.error)
+      reader.readAsDataURL(blob)
+    })
+  } catch {
+    return blobUrl
+  }
 }
 
 export function dedupeImageReferenceUrls(urls: string[]): string[] {

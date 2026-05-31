@@ -54,6 +54,7 @@ import {
   type PromptInputMessage,
 } from '@/components/ai-elements/prompt-input'
 import { Suggestion, Suggestions } from '@/components/ai-elements/suggestion'
+import { blobToDataUrl } from '../lib/image-references'
 import { ModelGroupSelector } from '@/components/model-group-selector'
 import type { ModelOption, GroupOption } from '../types'
 
@@ -119,14 +120,16 @@ function decodeDataUrlText(url: string): string {
   return new TextDecoder().decode(bytes)
 }
 
-function buildAttachmentContent(text: string, files: FileUIPart[]): string {
+async function buildAttachmentContent(text: string, files: FileUIPart[]): Promise<string> {
   const contentParts = [text.trim()].filter(Boolean)
 
-  files.forEach((file, index) => {
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index]
     const filename = file.filename || `attachment-${index + 1}`
     if (isImageAttachment(file)) {
-      contentParts.push(`![${filename}](${file.url})`)
-      return
+      const url = await blobToDataUrl(file.url)
+      contentParts.push(`![${filename}](${url})`)
+      continue
     }
 
     if (file.url && isTextAttachment(file)) {
@@ -141,11 +144,11 @@ function buildAttachmentContent(text: string, files: FileUIPart[]): string {
       contentParts.push(
         `Attached file: ${filename}\n\n\`\`\`\n${decoded}${suffix}\n\`\`\``
       )
-      return
+      continue
     }
 
     contentParts.push(`Attached file: ${filename}`)
-  })
+  }
 
   return contentParts.join('\n\n')
 }
@@ -387,12 +390,12 @@ export function PlaygroundInput({
     disabled || isModelLoading || models.length === 0
   const isGroupSelectDisabled = disabled || groups.length === 0
 
-  const handleSubmit = (message: PromptInputMessage) => {
+  const handleSubmit = async (message: PromptInputMessage) => {
     if (disabled) return
 
     let content: string
     try {
-      content = buildAttachmentContent(message.text || '', message.files || [])
+      content = await buildAttachmentContent(message.text || '', message.files || [])
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : t('Failed to read attachment')
