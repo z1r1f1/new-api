@@ -141,8 +141,8 @@ When adding or modifying a channel:
 ### ChatGPT Web session reuse
 
 ChatGPT Web session reuse must be driven by an explicit prompt cache key or
-session identifier from the request body / headers, not by a heuristic that
-hashes the first user message.
+session identifier from the request JSON body, form/multipart fields, or
+headers, not by a heuristic that hashes the first user message.
 
 Why:
 
@@ -201,6 +201,11 @@ if sessionKey == "" {
 - The key source is the same explicit session extractor used by conversation
   reuse: `service.ExtractOpenAICompatPromptCacheKeyFromRawBody(rawBody, headers)`.
   Do not derive a channel-affinity key from message text.
+- Multipart `/v1/images/edits` requests must participate in the same explicit
+  session-key extraction when the client sends `prompt_cache_key`,
+  `openai_prompt_cache_key`, `session_id`, `conversation_id`, or another
+  supported explicit alias as a form field. Do not require image clients to move
+  the same key into headers.
 - Cached session-channel IDs must be validated before use: channel exists,
   channel type is ChatGPT Web, channel is enabled, and it is enabled for the
   requested group/model. Invalid stale entries are cleared and normal channel
@@ -209,6 +214,8 @@ if sessionKey == "" {
 4. Validation & Error Matrix
 
 - Missing explicit session key -> no ChatGPT Web session-channel affinity.
+- Multipart image edit form contains an explicit session key -> ChatGPT Web
+  session-channel affinity uses that key after configured affinity misses.
 - Configured channel affinity hit -> use configured affinity; do not override
   it with ChatGPT Web session affinity.
 - Cached channel missing/disabled/wrong type/not enabled for group+model ->
@@ -234,6 +241,8 @@ if sessionKey == "" {
 
 - `service`: regression tests that explicit `prompt_cache_key` records and
   later returns the ChatGPT Web channel ID.
+- `service`: regression test that multipart image edit `prompt_cache_key` form
+  fields record and later return the ChatGPT Web channel ID.
 - `service`: regression tests that missing explicit session key does not record
   or hit session-channel affinity.
 - `service` or `middleware`: regression tests that configured channel affinity
@@ -899,12 +908,27 @@ if c.Writer.Status() >= http.StatusOK &&
 #### 3. Contracts
 
 - Multipart `/v1/images/edits` must preserve `response_format` from form fields; do not drop it while parsing `prompt`, `model`, `n`, `quality`, `size`, `image`, or `watermark`.
+- Multipart `/v1/images/edits` must also preserve explicit unknown form fields
+  in `dto.ImageRequest.Extra` so ChatGPT Web image conversion can see
+  `conversation_id`, `fallback_prompt`, `fallback_reference_images`,
+  `reference_images`, `prompt_cache_key`, and related compatibility fields.
+- ChatGPT Web image generation/edit requests should reuse the same
+  session-route cache as chat requests when an explicit session key is present:
+  resolve the cached conversation for the selected channel/account before
+  calling `/backend-api/f/conversation`, and record the returned conversation id
+  after a successful image request.
 - ChatGPT Web image requests default to `response_format=b64_json` when the client does not specify a format. Image clients such as Cherry Studio expect `b64_json` to be pure base64 media data, not a gateway URL.
 - Explicit `response_format` values must be preserved for normal image models. Exception: ChatGPT Web `gpt-image-2` / `chatgpt-image-2` (including model aliases mapped upstream to those names) must force `b64_json`, because downstream image-edit clients reuse the generated image bytes and fail when the gateway returns only a URL.
 - The ChatGPT Web `gpt-image-2` / `chatgpt-image-2` force-to-base64 rule must be enforced at both request normalization and response construction. A stale or overridden `response_format=url` must not cause `url` to be emitted for these models.
 - OpenAI-compatible image JSON must omit empty image fields. A base64 image item should serialize as `b64_json` without an empty `url` key, so clients do not choose the wrong representation for follow-up image edits.
 - ChatGPT Web reference image uploads must complete the full web upload chain: `POST /backend-api/files`, blob `PUT`, `POST /backend-api/files/{file_id}/uploaded`, then `POST /backend-api/files/process_upload_stream`. The process step should store `extra.metadata_object_id` as the uploaded file's library id.
 - ChatGPT Web image polling must use the conversation mapping first and periodically fall back to `POST /backend-api/files/library`, filtering by `origination_thread_id`, ready image state/category, and excluding both uploaded `file_id` and uploaded library id so reference images are not returned as generated images.
+- ChatGPT Web image endpoints may use SSE `file-service://` / `sediment://`
+  refs as a low-latency hint, but must filter refs already present in the
+  pre-request conversation baseline and uploaded reference file ids before
+  accepting SSE results. The follow-up download-URL repoll must carry the same
+  baseline and uploaded-reference exclusions; otherwise a second edit can return
+  a previous output or the input reference image.
 - Playground async image tasks persist task ids client-side while the assistant message is loading/streaming, and resume polling after reload if the same session/message is still pending.
 - Playground wait text is user-facing UI and must go through frontend i18n; do not display provider progress percentages as real progress unless the backend can prove they are meaningful.
 
@@ -919,17 +943,35 @@ if c.Writer.Status() >= http.StatusOK &&
 #### 5. Good/Base/Bad Cases
 
 - Good: multipart edit form contains `response_format=b64_json`; parser stores it and ChatGPT Web response omits `url`.
+- Good: multipart edit form contains `conversation_id`, `fallback_prompt`,
+  `fallback_reference_images`, or `prompt_cache_key`; parser preserves those
+  fields in `ImageRequest.Extra`, and ChatGPT Web image conversion can continue
+  or recover the intended conversation.
+- Good: second `gpt-image-2` edit with the same explicit session key lands on
+  the same ChatGPT Web channel, resolves the cached conversation for that
+  channel/account, filters prior baseline image refs from SSE, and returns only
+  newly generated refs.
 - Good: `gpt-image-2` request, or a mapped alias whose upstream model is `gpt-image-2`, contains `response_format=url`; ChatGPT Web overrides it to `b64_json` so follow-up image-to-image clients receive base64 media.
 - Good: `gpt-image-2` response payload contains `data[].b64_json` and no `data[].url` field, even if a stale request body or override tried to force `url`.
 - Good: uploaded reference images record both `file_id` and `library_file_id`; polling excludes both values and can still find generated images from `/backend-api/files/library` when the conversation mapping has not exposed a final file id yet.
 - Base: image form/body omits `response_format`; ChatGPT Web image conversion defaults to `b64_json`.
 - Bad: edit response returns only a gateway URL to an image-model client expecting base64; clients can throw `Invalid data content. Content string is not a base64-encoded media.`
+- Bad: accepting the first SSE `sediment://` or `file-service://` ref without
+  baseline filtering; follow-up edits can return the previous generated image.
+- Bad: download-URL repoll without baseline/upload exclusions; when a preview
+  ref is not yet downloadable, the repoll can append stale mapping/library refs.
 
 #### 6. Tests Required
 
 - `relay/helper`: regression test that multipart image edits preserve `response_format`.
+- `relay/helper`: regression test that multipart image edits preserve
+  compatibility extra fields such as `conversation_id`,
+  `fallback_reference_images`, and `prompt_cache_key`.
 - `relay/channel/chatgptimg`: regression tests that image generations/edits default to `b64_json` and explicit formats are preserved.
 - `relay/channel/chatgptimg`: regression tests that reference uploads call `process_upload_stream`, parse `metadata_object_id`, exclude uploaded library ids, and use `/backend-api/files/library` as a generated-image fallback.
+- `relay/channel/chatgptimg`: regression test that an image generation/edit
+  continuation filters baseline file and sediment refs from SSE before falling
+  back to polling for the new result.
 - `web/default`: run `bun run typecheck` and `bun run lint` after changing playground state, i18n, or image markdown helpers.
 
 #### 7. Wrong vs Correct

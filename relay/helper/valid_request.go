@@ -1,9 +1,12 @@
 package helper
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
+	"reflect"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -144,11 +147,12 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	switch relayMode {
 	case relayconstant.RelayModeImagesEdits:
 		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
-			_, err := c.MultipartForm()
+			form, err := common.ParseMultipartFormReusable(c)
 			if err != nil {
 				return nil, fmt.Errorf("failed to parse image edit form request: %w", err)
 			}
-			formData := c.Request.PostForm
+			defer form.RemoveAll()
+			formData := url.Values(form.Value)
 			imageRequest.Prompt = formData.Get("prompt")
 			imageRequest.Model = formData.Get("model")
 			imageRequest.N = common.GetPointer(uint(common.String2Int(formData.Get("n"))))
@@ -173,6 +177,7 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 				watermark := formData.Get("watermark") == "true"
 				imageRequest.Watermark = &watermark
 			}
+			imageRequest.Extra = imageRequestExtraFromFormValues(formData)
 			break
 		}
 		fallthrough
@@ -225,6 +230,66 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 	}
 
 	return imageRequest, nil
+}
+
+func imageRequestExtraFromFormValues(values url.Values) map[string]json.RawMessage {
+	if len(values) == 0 {
+		return nil
+	}
+	knownFields := dto.GetJSONFieldNames(reflect.TypeOf(dto.ImageRequest{}))
+	extra := make(map[string]json.RawMessage)
+	for key, vals := range values {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, known := knownFields[key]; known {
+			continue
+		}
+		raw, ok := imageRequestRawMessageFromFormValues(vals)
+		if ok {
+			extra[key] = raw
+		}
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	return extra
+}
+
+func imageRequestRawMessageFromFormValues(values []string) (json.RawMessage, bool) {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			cleaned = append(cleaned, value)
+		}
+	}
+	if len(cleaned) == 0 {
+		return nil, false
+	}
+	if len(cleaned) == 1 {
+		value := cleaned[0]
+		if raw := imageRequestRawJSONValueFromString(value); len(raw) > 0 {
+			return raw, true
+		}
+		raw, err := common.Marshal(value)
+		return raw, err == nil
+	}
+	raw, err := common.Marshal(cleaned)
+	return raw, err == nil
+}
+
+func imageRequestRawJSONValueFromString(value string) json.RawMessage {
+	value = strings.TrimSpace(value)
+	if value == "" || (!strings.HasPrefix(value, "{") && !strings.HasPrefix(value, "[")) {
+		return nil
+	}
+	var decoded any
+	if err := common.Unmarshal([]byte(value), &decoded); err != nil {
+		return nil
+	}
+	return json.RawMessage([]byte(value))
 }
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {

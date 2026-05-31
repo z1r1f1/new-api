@@ -967,6 +967,28 @@ func applyChatGPTWebSessionRoute(req *chatRequest, route *chatGPTWebSessionRoute
 	return strings.TrimSpace(latestPrompt)
 }
 
+func applyChatGPTWebImageSessionRoute(req *generationRequest, route *chatGPTWebSessionRoute, timings ...*service.ChatGPTWebTiming) {
+	timing := firstChatGPTWebTiming(timings...)
+	if req == nil || route == nil || !route.Reused || strings.TrimSpace(route.CachedConversationID) == "" {
+		if timing != nil {
+			timing.Set("session_route_incremental", false)
+		}
+		return
+	}
+	if strings.TrimSpace(req.ConversationID) != "" {
+		if timing != nil {
+			timing.Set("session_route_incremental", false)
+		}
+		return
+	}
+	req.ConversationID = route.CachedConversationID
+	route.Incremental = true
+	if timing != nil {
+		timing.Set("session_route_incremental", true)
+		timing.Set("session_route_image_conversation_reused", true)
+	}
+}
+
 func recordChatGPTWebSessionRoute(route chatGPTWebSessionRoute, conversationID string, timings ...*service.ChatGPTWebTiming) {
 	timing := firstChatGPTWebTiming(timings...)
 	conversationID = normalizeChatGPTWebConversationID(conversationID)
@@ -1330,6 +1352,12 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 	if strings.TrimSpace(req.Prompt) == "" {
 		return nil, errors.New("chatgpt web channel: prompt is required")
 	}
+	rawBody := rawRequestBodyBytes(c)
+	if len(rawBody) == 0 {
+		rawBody = body
+	}
+	route := resolveChatGPTWebSessionRoute(info, chatRequest{ConversationID: req.ConversationID}, rawBody, timing)
+	applyChatGPTWebImageSessionRoute(&req, &route, timing)
 
 	testMode := info != nil && info.IsChannelTest
 	requestCtx := context.Background()
@@ -1354,6 +1382,7 @@ func (a *Adaptor) doImageRequest(c *gin.Context, info *relaycommon.RelayInfo, bo
 	if err != nil {
 		return nil, err
 	}
+	recordChatGPTWebSessionRoute(route, res.ConversationID, timing)
 	if info != nil {
 		actualCount := len(res.SignedURLs)
 		if actualCount == 0 {
@@ -4635,6 +4664,7 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	var fileRefs []string
 	var fallbackRefs []*UploadedFile
 	var fallbackRefsLoaded bool
+	var activeExcludedFileIDs map[string]struct{}
 
 attemptLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -4779,8 +4809,10 @@ attemptLoop:
 			if testMode && convID != "" {
 				return result, nil
 			}
-			excludedFileIDs := uploadedFileIDSet(activeRefs)
-			sseResult.FileIDs = filterExcludedFileIDs(sseResult.FileIDs, excludedFileIDs)
+			uploadedExcludedFileIDs := uploadedFileIDSet(activeRefs)
+			activeExcludedFileIDs = uploadedExcludedFileIDs
+			sseResult.FileIDs = filterExcludedFileIDs(sseResult.FileIDs, mergeStringSets(baseline.FileIDs, uploadedExcludedFileIDs))
+			sseResult.SedimentIDs = filterExcludedFileIDs(sseResult.SedimentIDs, baseline.SedimentIDs)
 			textOnlyErr := imageSSETextWithoutImageError(sseResult)
 			if textOnlyErr != nil {
 				if !shouldPollTextOnlyImageSSE(sseResult) {
@@ -4812,7 +4844,7 @@ attemptLoop:
 				BaselineToolIDs:     baseline.ToolIDs,
 				BaselineFileIDs:     baseline.FileIDs,
 				BaselineSedimentIDs: baseline.SedimentIDs,
-				ExcludedFileIDs:     excludedFileIDs,
+				ExcludedFileIDs:     uploadedExcludedFileIDs,
 			})
 			if timing != nil {
 				timing.ObserveSince("image_poll_ms", pollStart)
@@ -4908,10 +4940,14 @@ attemptLoop:
 	if len(result.SignedURLs) == 0 && ctx.Err() == nil && convID != "" {
 		repollStart := time.Now()
 		pollStatus, fids, sids := client.PollConversationForImages(ctx, convID, PollOpts{
-			MaxWait:      chatGPTWebImageDownloadURLMaxWait(testMode),
-			Interval:     2 * time.Second,
-			StableRounds: 1,
-			PreviewWait:  15 * time.Second,
+			MaxWait:             chatGPTWebImageDownloadURLMaxWait(testMode),
+			Interval:            2 * time.Second,
+			StableRounds:        1,
+			PreviewWait:         15 * time.Second,
+			BaselineToolIDs:     baseline.ToolIDs,
+			BaselineFileIDs:     baseline.FileIDs,
+			BaselineSedimentIDs: baseline.SedimentIDs,
+			ExcludedFileIDs:     activeExcludedFileIDs,
 		})
 		if timing != nil {
 			timing.ObserveSince("image_download_repoll_ms", repollStart)

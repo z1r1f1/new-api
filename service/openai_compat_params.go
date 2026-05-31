@@ -1,7 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/url"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -128,9 +133,16 @@ func ApplyOpenAIResponsesCompatRequestParamsFromRawBody(req *dto.OpenAIResponses
 func ExtractOpenAICompatPromptCacheKeyFromRawBody(body []byte, headers map[string]string) string {
 	var data map[string]json.RawMessage
 	if len(body) > 0 {
-		_ = common.Unmarshal(body, &data)
+		if err := common.Unmarshal(body, &data); err == nil {
+			if key := extractOpenAICompatPromptCacheKey(data, headers); key != "" {
+				return key
+			}
+		}
+		if key := extractOpenAICompatPromptCacheKeyFromFormBody(body, headers); key != "" {
+			return key
+		}
 	}
-	return extractOpenAICompatPromptCacheKey(data, headers)
+	return extractOpenAICompatPromptCacheKey(nil, headers)
 }
 
 func setGeneralRequestServiceTier(req *dto.GeneralOpenAIRequest, serviceTier string) {
@@ -314,6 +326,124 @@ func deriveSessionKeyFromMetadataUserID(userID string) string {
 	return ""
 }
 
+func extractOpenAICompatPromptCacheKeyFromFormBody(body []byte, headers map[string]string) string {
+	values := openAICompatFormValuesFromRawBody(body, headerValue(headers, "Content-Type"))
+	if len(values) == 0 {
+		return ""
+	}
+	return extractOpenAICompatPromptCacheKey(openAICompatRawMapFromFormValues(values), headers)
+}
+
+func openAICompatFormValuesFromRawBody(body []byte, contentType string) url.Values {
+	if len(body) == 0 {
+		return nil
+	}
+	mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(contentType))
+	if err != nil {
+		return nil
+	}
+	switch strings.ToLower(mediaType) {
+	case "application/x-www-form-urlencoded":
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			return nil
+		}
+		return values
+	case "multipart/form-data":
+		boundary := strings.TrimSpace(params["boundary"])
+		if boundary == "" {
+			return nil
+		}
+		reader := multipart.NewReader(bytes.NewReader(body), boundary)
+		values := url.Values{}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil
+			}
+			name := strings.TrimSpace(part.FormName())
+			if name == "" || strings.TrimSpace(part.FileName()) != "" {
+				_ = part.Close()
+				continue
+			}
+			data, readErr := io.ReadAll(io.LimitReader(part, 64*1024+1))
+			_ = part.Close()
+			if readErr != nil || len(data) > 64*1024 {
+				continue
+			}
+			values.Add(name, string(data))
+		}
+		if len(values) == 0 {
+			return nil
+		}
+		return values
+	default:
+		return nil
+	}
+}
+
+func openAICompatRawMapFromFormValues(values url.Values) map[string]json.RawMessage {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]json.RawMessage, len(values))
+	for key, vals := range values {
+		key = strings.TrimSpace(key)
+		if key == "" || len(vals) == 0 {
+			continue
+		}
+		raw, ok := openAICompatRawMessageFromFormValues(vals)
+		if ok {
+			out[key] = raw
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func openAICompatRawMessageFromFormValues(values []string) (json.RawMessage, bool) {
+	cleaned := make([]string, 0, len(values))
+	for _, value := range values {
+		cleaned = append(cleaned, strings.TrimSpace(value))
+	}
+	if len(cleaned) == 0 {
+		return nil, false
+	}
+	if len(cleaned) == 1 {
+		value := cleaned[0]
+		if value == "" {
+			return nil, false
+		}
+		if raw := openAICompatRawJSONValueFromString(value); len(raw) > 0 {
+			return raw, true
+		}
+		raw, err := common.Marshal(value)
+		return raw, err == nil
+	}
+	raw, err := common.Marshal(cleaned)
+	return raw, err == nil
+}
+
+func openAICompatRawJSONValueFromString(value string) json.RawMessage {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if !strings.HasPrefix(value, "{") && !strings.HasPrefix(value, "[") {
+		return nil
+	}
+	var decoded any
+	if err := common.Unmarshal([]byte(value), &decoded); err != nil {
+		return nil
+	}
+	return json.RawMessage([]byte(value))
+}
+
 func objectFieldFromRawMap(data map[string]json.RawMessage, key string) map[string]json.RawMessage {
 	if data == nil {
 		return nil
@@ -324,7 +454,17 @@ func objectFieldFromRawMap(data map[string]json.RawMessage, key string) map[stri
 	}
 	var result map[string]json.RawMessage
 	if err := common.Unmarshal(raw, &result); err != nil {
-		return nil
+		var encoded string
+		if stringErr := common.Unmarshal(raw, &encoded); stringErr != nil {
+			return nil
+		}
+		encoded = strings.TrimSpace(encoded)
+		if encoded == "" || !strings.HasPrefix(encoded, "{") {
+			return nil
+		}
+		if err := common.Unmarshal([]byte(encoded), &result); err != nil {
+			return nil
+		}
 	}
 	return result
 }

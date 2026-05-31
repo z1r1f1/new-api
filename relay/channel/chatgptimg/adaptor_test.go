@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -242,6 +243,100 @@ func TestResolveImageDownloadURLsRetriesUntilReady(t *testing.T) {
 	snapshot := timing.Snapshot()
 	if snapshot["image_download_url_attempts"] != attempts {
 		t.Fatalf("expected attempt count in timing, got %#v", snapshot)
+	}
+}
+
+func TestRunImageGenerationFiltersBaselineRefsFromSSE(t *testing.T) {
+	var mappingCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/sentinel/chat-requirements/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"persona":"chatgpt","prepare_token":"prepare-token","turnstile":{"required":false},"proofofwork":{"required":false}}`))
+		case "/backend-api/sentinel/chat-requirements/finalize":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"requirements-token","persona":"chatgpt"}`))
+		case "/backend-api/conversation/conv-1":
+			mappingCalls++
+			w.Header().Set("Content-Type", "application/json")
+			if mappingCalls == 1 {
+				_, _ = w.Write([]byte(`{
+					"current_node":"old-node",
+					"mapping":{
+						"old-node":{"message":{"author":{"role":"assistant"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://old-file"},{"asset_pointer":"sediment://old-sed"}]}}}
+					}
+				}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{
+				"current_node":"new-tool",
+				"mapping":{
+					"old-node":{"message":{"author":{"role":"assistant"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://old-file"},{"asset_pointer":"sediment://old-sed"}]}}},
+					"new-tool":{"message":{"author":{"role":"tool","name":"dalle.text2im"},"recipient":"assistant","metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://new-file"}]}}}
+				}
+			}`))
+		case "/backend-api/f/conversation/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-test"}`))
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(`data: {"v":{"conversation_id":"conv-1","message":{"author":{"role":"assistant"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://old-file"},{"asset_pointer":"sediment://old-sed"}]}}}}` + "\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		case "/backend-api/files/old-file/download", "/backend-api/files/download/old-file":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/old.png"}`))
+		case "/backend-api/conversation/conv-1/attachment/old-sed/download":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/old-sed.png"}`))
+		case "/backend-api/files/new-file/download", "/backend-api/files/download/new-file":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/new.png"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+
+	result, err := runImageGeneration(context.Background(), client, generationRequest{
+		Model:          "gpt-image-2",
+		Prompt:         "edit this image",
+		ConversationID: "conv-1",
+		N:              1,
+	}, nil, false, nil)
+	if err != nil {
+		t.Fatalf("runImageGeneration returned error: %v", err)
+	}
+
+	var hasOld, hasNew bool
+	for _, ref := range result.FileRefs {
+		switch ref {
+		case "old-file", "sed:old-sed":
+			hasOld = true
+		case "new-file":
+			hasNew = true
+		}
+	}
+	if hasOld {
+		t.Fatalf("SSE baseline refs must not be returned as the new image result: %#v", result.FileRefs)
+	}
+	if !hasNew {
+		t.Fatalf("expected poll fallback to return new-file after filtering SSE baseline refs, got %#v", result.FileRefs)
+	}
+	if len(result.SignedURLs) != 1 || result.SignedURLs[0] != "https://example.test/new.png" {
+		t.Fatalf("expected only new image download URL, got %#v", result.SignedURLs)
 	}
 }
 
@@ -523,6 +618,48 @@ func TestResolveChatGPTWebSessionRouteUsesCachedConversation(t *testing.T) {
 	route := resolveChatGPTWebSessionRoute(info, chatRequest{Model: "claude-test"}, raw, nil)
 	if !route.Enabled || !route.Reused || route.CachedConversationID != "conv-123" {
 		t.Fatalf("expected cached conversation route, got %#v", route)
+	}
+}
+
+func TestResolveChatGPTWebSessionRouteUsesMultipartPromptCacheKey(t *testing.T) {
+	resetChatGPTWebSessionRouteCacheForTest()
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() {
+		common.RedisEnabled = oldRedisEnabled
+		resetChatGPTWebSessionRouteCacheForTest()
+	})
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("model", "gpt-image-2")
+	_ = writer.WriteField("prompt", "edit this image")
+	_ = writer.WriteField("prompt_cache_key", "multipart-client-session")
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+
+	info := &relaycommon.RelayInfo{
+		UserId:  100,
+		TokenId: 200,
+		RequestHeaders: map[string]string{
+			"Content-Type": writer.FormDataContentType(),
+		},
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ChannelId:            10,
+			ChannelMultiKeyIndex: 0,
+			ApiKey:               "account-a",
+		},
+	}
+	routeKey := chatGPTWebSessionRouteKey(info, "multipart-client-session")
+	recordChatGPTWebSessionRoute(chatGPTWebSessionRoute{
+		Enabled: true,
+		Key:     routeKey,
+	}, "conv-multipart", nil)
+
+	route := resolveChatGPTWebSessionRoute(info, chatRequest{Model: "gpt-image-2"}, body.Bytes(), nil)
+	if !route.Enabled || !route.Reused || route.CachedConversationID != "conv-multipart" {
+		t.Fatalf("expected cached multipart conversation route, got %#v", route)
 	}
 }
 

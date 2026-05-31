@@ -1,7 +1,9 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -24,6 +26,24 @@ func newChatGPTWebSessionChannelAffinityTestContext(target string, body string) 
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "vip")
 	ctx.Set("original_model", "gpt-5.5-thinking")
+	return ctx
+}
+
+func newChatGPTWebSessionChannelAffinityMultipartTestContext(target string, fields map[string]string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range fields {
+		_ = writer.WriteField(key, value)
+	}
+	_ = writer.Close()
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, target, bytes.NewReader(body.Bytes()))
+	ctx.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "vip")
+	ctx.Set("original_model", fields["model"])
 	return ctx
 }
 
@@ -51,6 +71,36 @@ func TestChatGPTWebSessionChannelAffinityUsesExplicitPromptCacheKey(t *testing.T
 	preferred, found = GetPreferredChatGPTWebSessionChannelByAffinity(second, "gpt-5.5-thinking", "vip")
 	require.True(t, found)
 	require.Equal(t, 2468, preferred)
+}
+
+func TestChatGPTWebSessionChannelAffinityReadsMultipartPromptCacheKey(t *testing.T) {
+	oldRedisEnabled := common.RedisEnabled
+	common.RedisEnabled = false
+	t.Cleanup(func() { common.RedisEnabled = oldRedisEnabled })
+
+	sessionKey := fmt.Sprintf("session-channel-affinity-multipart-%d", time.Now().UnixNano())
+	fields := map[string]string{
+		"model":            "gpt-image-2",
+		"prompt":           "edit this image",
+		"prompt_cache_key": sessionKey,
+	}
+	first := newChatGPTWebSessionChannelAffinityMultipartTestContext("/v1/images/edits", fields)
+
+	preferred, found := GetPreferredChatGPTWebSessionChannelByAffinity(first, "gpt-image-2", "vip")
+	require.False(t, found)
+	require.Zero(t, preferred)
+
+	RecordChatGPTWebSessionChannelAffinity(first, &model.Channel{
+		Id:     3471,
+		Type:   constant.ChannelTypeChatGPTImage,
+		Status: common.ChannelStatusEnabled,
+	})
+	t.Cleanup(func() { ClearCurrentChatGPTWebSessionChannelAffinity(first) })
+
+	second := newChatGPTWebSessionChannelAffinityMultipartTestContext("/v1/images/edits", fields)
+	preferred, found = GetPreferredChatGPTWebSessionChannelByAffinity(second, "gpt-image-2", "vip")
+	require.True(t, found)
+	require.Equal(t, 3471, preferred)
 }
 
 func TestChatGPTWebSessionChannelAffinityRequiresExplicitSessionKey(t *testing.T) {
