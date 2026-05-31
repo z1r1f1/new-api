@@ -4795,6 +4795,15 @@
     "No conversations yet": "Бесед пока нет",
     "Read": "Прочитано",
     "Search conversations": "Поиск бесед",
-    "Unread": "Не прочитано"
+    "Unread": "Не прочитано",
+    "Recall": "Отозвать",
+    "Message recalled": "Сообщение отозвано",
+    "This message was recalled": "Это сообщение было отозвано",
+    "Failed to recall message": "Не удалось отозвать сообщение",
+    "Read {{count}}": "Прочитали {{count}}",
+    "Unread {{count}}": "Не прочитали {{count}}",
+    "Read by": "Прочитали",
+    "Unread by": "Не прочитали",
+    "No users": "Нет пользователей"
   }
 }

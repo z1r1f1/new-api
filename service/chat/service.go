@@ -142,6 +142,41 @@ func (service *Service) SendMessage(ctx context.Context, currentUserID int, conv
 	return response, nil
 }
 
+func (service *Service) RevokeMessage(ctx context.Context, currentUserID int, conversationID int, messageID int) (*MessageResponse, error) {
+	if currentUserID <= 0 || conversationID <= 0 || messageID <= 0 {
+		return nil, ErrInvalidRequest
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return nil, err
+	}
+	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
+		return nil, err
+	}
+	message, err := model.GetChatMessageByID(conversationID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if message.SenderId != currentUserID {
+		return nil, ErrForbidden
+	}
+	revoked, err := model.RevokeChatMessage(conversationID, messageID, currentUserID)
+	if err != nil {
+		return nil, err
+	}
+	response, err := service.decorateMessage(revoked)
+	if err != nil {
+		return nil, err
+	}
+	service.publishBestEffort(ctx, ConversationChannel(conversationID), Event{
+		Type:           EventTypeMessageRevoked,
+		ConversationID: conversationID,
+		Message:        response,
+		UserID:         currentUserID,
+		CreatedAt:      response.UpdatedAt,
+	})
+	return response, nil
+}
+
 func (service *Service) ListMessages(ctx context.Context, currentUserID int, conversationID int, limit int, beforeMessageID int) ([]*MessageResponse, error) {
 	if currentUserID <= 0 || conversationID <= 0 {
 		return nil, ErrInvalidRequest

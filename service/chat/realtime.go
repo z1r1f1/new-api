@@ -13,6 +13,7 @@ const (
 	EventTypeConversationUpdated = "conversation.updated"
 	EventTypeMessageCreated      = "message.created"
 	EventTypeMessageRead         = "message.read"
+	EventTypeMessageRevoked      = "message.revoked"
 	EventTypeMemberAdded         = "member.added"
 	EventTypeMemberRemoved       = "member.removed"
 	EventTypePresenceUpdated     = "presence.updated"

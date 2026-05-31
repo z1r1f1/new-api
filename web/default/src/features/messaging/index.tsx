@@ -34,6 +34,7 @@ import {
   listChatUsers,
   markChatRead,
   messagingQueryKeys,
+  revokeChatMessage,
   sendChatMessage,
 } from './api'
 import { ChatSidebar } from './components/chat-sidebar'
@@ -77,6 +78,9 @@ export function Messaging() {
   const [messageBody, setMessageBody] = useState('')
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
+  const [recallingMessageId, setRecallingMessageId] = useState<number | null>(
+    null
+  )
   const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
     useState<Record<number, boolean>>({})
 
@@ -230,6 +234,25 @@ export function Messaging() {
     },
   })
 
+  const revokeMutation = useMutation({
+    mutationFn: (message: ChatMessage) =>
+      revokeChatMessage(message.conversation_id, message.id),
+    onMutate: (message) => {
+      setRecallingMessageId(message.id)
+    },
+    onSuccess: (response) => {
+      if (response.data) appendMessage(response.data)
+      toast.success(t('Message recalled'))
+      invalidateConversations()
+    },
+    onError: () => {
+      toast.error(t('Failed to recall message'))
+    },
+    onSettled: () => {
+      setRecallingMessageId(null)
+    },
+  })
+
   const loadOlderMutation = useMutation({
     mutationFn: () => {
       if (!activeConversationId || messages.length === 0) {
@@ -263,6 +286,11 @@ export function Messaging() {
   const handleRealtimeEvent = useCallback(
     (event: ChatEvent) => {
       if (event.type === 'message.created' && event.message) {
+        appendMessage(event.message)
+        invalidateConversations()
+        return
+      }
+      if (event.type === 'message.revoked' && event.message) {
         appendMessage(event.message)
         invalidateConversations()
         return
@@ -393,7 +421,9 @@ export function Messaging() {
                   searchText={messageSearch}
                   canLoadOlder={canLoadOlder}
                   loadingOlder={loadOlderMutation.isPending}
+                  recallingMessageId={recallingMessageId}
                   onLoadOlder={() => loadOlderMutation.mutate()}
+                  onRecallMessage={(message) => revokeMutation.mutate(message)}
                 />
                 <MessageComposer
                   value={messageBody}

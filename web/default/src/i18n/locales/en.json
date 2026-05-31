@@ -4795,6 +4795,15 @@
     "No conversations yet": "No conversations yet",
     "Read": "Read",
     "Search conversations": "Search conversations",
-    "Unread": "Unread"
+    "Unread": "Unread",
+    "Recall": "Recall",
+    "Message recalled": "Message recalled",
+    "This message was recalled": "This message was recalled",
+    "Failed to recall message": "Failed to recall message",
+    "Read {{count}}": "Read {{count}}",
+    "Unread {{count}}": "Unread {{count}}",
+    "Read by": "Read by",
+    "Unread by": "Unread by",
+    "No users": "No users"
   }
 }

@@ -3,6 +3,7 @@ package model
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -55,4 +56,46 @@ func TestChatReadStateIncrementInitializesMissingUnreadFromHistory(t *testing.T)
 
 	require.NotNil(t, stateByUserID[3])
 	assert.Equal(t, 2, stateByUserID[3].UnreadCount)
+}
+
+func TestChatUnreadCountIncrementSQLQualifiesPostgreSQLTable(t *testing.T) {
+	previousUsingPostgreSQL := common.UsingPostgreSQL
+	t.Cleanup(func() {
+		common.UsingPostgreSQL = previousUsingPostgreSQL
+	})
+
+	common.UsingPostgreSQL = true
+	assert.Equal(t, `"chat_read_states"."unread_count" + ?`, chatUnreadCountIncrementSQL())
+
+	common.UsingPostgreSQL = false
+	assert.Equal(t, "unread_count + ?", chatUnreadCountIncrementSQL())
+}
+
+func TestChatReadStateIncrementUnreadStatesBatchesLargeGroups(t *testing.T) {
+	setupChatTestDB(t)
+	truncateChatTables(t)
+
+	recipientIDs := make([]int, 0, chatReadStateBatchSize*2+5)
+	for userID := 2; userID < chatReadStateBatchSize*2+7; userID++ {
+		recipientIDs = append(recipientIDs, userID)
+	}
+
+	conv, err := CreateGroupConversation(1, "large team", recipientIDs)
+	require.NoError(t, err)
+
+	_, err = InsertChatMessage(conv.Id, 1, ChatMessageTypeText, "hello large group", "client-large-group")
+	require.NoError(t, err)
+
+	require.NoError(t, IncrementChatUnreadStates(conv.Id, recipientIDs))
+
+	var stateCount int64
+	require.NoError(t, DB.Model(&ChatReadState{}).
+		Where("conversation_id = ? AND user_id IN ?", conv.Id, recipientIDs).
+		Count(&stateCount).Error)
+	assert.Equal(t, int64(len(recipientIDs)), stateCount)
+
+	state, err := GetChatReadState(conv.Id, recipientIDs[len(recipientIDs)-1])
+	require.NoError(t, err)
+	require.NotNil(t, state)
+	assert.Equal(t, 1, state.UnreadCount)
 }

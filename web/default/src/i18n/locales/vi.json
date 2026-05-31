@@ -4795,6 +4795,15 @@
     "No conversations yet": "Chưa có cuộc trò chuyện",
     "Read": "Đã đọc",
     "Search conversations": "Tìm kiếm cuộc trò chuyện",
-    "Unread": "Chưa đọc"
+    "Unread": "Chưa đọc",
+    "Recall": "Thu hồi",
+    "Message recalled": "Đã thu hồi tin nhắn",
+    "This message was recalled": "Tin nhắn này đã được thu hồi",
+    "Failed to recall message": "Không thể thu hồi tin nhắn",
+    "Read {{count}}": "Đã đọc {{count}}",
+    "Unread {{count}}": "Chưa đọc {{count}}",
+    "Read by": "Đã đọc bởi",
+    "Unread by": "Chưa đọc bởi",
+    "No users": "Không có người dùng"
   }
 }

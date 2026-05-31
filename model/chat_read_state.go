@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const chatReadStateBatchSize = 200
+
 type ChatReadState struct {
 	Id                int   `json:"id"`
 	ConversationId    int   `json:"conversation_id" gorm:"uniqueIndex:idx_chat_read_state,priority:1;index;not null"`
@@ -130,13 +132,31 @@ func IncrementChatUnreadStates(conversationID int, userIDs []int) error {
 			UpdatedAt:         now,
 		})
 	}
-	return DB.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "conversation_id"}, {Name: "user_id"}},
-		DoUpdates: clause.Assignments(map[string]interface{}{
-			"unread_count": gorm.Expr("unread_count + ?", 1),
-			"updated_at":   now,
-		}),
-	}).Create(&states).Error
+	return DB.Transaction(func(tx *gorm.DB) error {
+		for start := 0; start < len(states); start += chatReadStateBatchSize {
+			end := start + chatReadStateBatchSize
+			if end > len(states) {
+				end = len(states)
+			}
+			if err := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "conversation_id"}, {Name: "user_id"}},
+				DoUpdates: clause.Assignments(map[string]interface{}{
+					"unread_count": gorm.Expr(chatUnreadCountIncrementSQL(), 1),
+					"updated_at":   now,
+				}),
+			}).Create(states[start:end]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func chatUnreadCountIncrementSQL() string {
+	if common.UsingPostgreSQL {
+		return `"chat_read_states"."unread_count" + ?`
+	}
+	return "unread_count + ?"
 }
 
 func initialUnreadCountsForUsers(conversationID int, userIDs []int) (map[int]int, error) {

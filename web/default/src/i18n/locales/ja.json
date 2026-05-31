@@ -4795,6 +4795,15 @@
     "No conversations yet": "まだ会話がありません",
     "Read": "既読",
     "Search conversations": "会話を検索",
-    "Unread": "未読"
+    "Unread": "未読",
+    "Recall": "取り消す",
+    "Message recalled": "メッセージを取り消しました",
+    "This message was recalled": "このメッセージは取り消されました",
+    "Failed to recall message": "メッセージの取り消しに失敗しました",
+    "Read {{count}}": "既読 {{count}}",
+    "Unread {{count}}": "未読 {{count}}",
+    "Read by": "既読メンバー",
+    "Unread by": "未読メンバー",
+    "No users": "ユーザーはいません"
   }
 }

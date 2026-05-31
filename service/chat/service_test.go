@@ -368,6 +368,45 @@ func TestServiceGroupReadReceiptsAndUnreadIncrement(t *testing.T) {
 	assert.Equal(t, 2, carolConversations[0].UnreadCount)
 }
 
+func TestServiceRevokeMessageRequiresSenderAndPublishes(t *testing.T) {
+	setupChatServiceTestDB(t)
+	seedChatServiceUser(t, 1, "admin", "Admin", common.RoleAdminUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 2, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+
+	publisher := &fakePublisher{}
+	svc := NewService(publisher)
+	conv, err := svc.CreateDirectConversation(context.Background(), 1, 2)
+	require.NoError(t, err)
+	message, err := svc.SendMessage(context.Background(), 1, conv.Id, "recall me", "client-recall")
+	require.NoError(t, err)
+	publisher.reset()
+
+	_, err = svc.RevokeMessage(context.Background(), 2, conv.Id, message.Id)
+	require.ErrorIs(t, err, ErrForbidden)
+	assert.Empty(t, publisher.items)
+
+	revoked, err := svc.RevokeMessage(context.Background(), 1, conv.Id, message.Id)
+	require.NoError(t, err)
+	require.NotNil(t, revoked)
+	assert.Empty(t, revoked.Body)
+	assert.Greater(t, revoked.RevokedAt, int64(0))
+	assert.Equal(t, 1, revoked.RevokedBy)
+
+	require.Len(t, publisher.items, 1)
+	assert.Equal(t, ConversationChannel(conv.Id), publisher.items[0].Channel)
+	assert.Equal(t, EventTypeMessageRevoked, publisher.items[0].Event.Type)
+	require.NotNil(t, publisher.items[0].Event.Message)
+	assert.Equal(t, message.Id, publisher.items[0].Event.Message.Id)
+	assert.Empty(t, publisher.items[0].Event.Message.Body)
+
+	messages, err := svc.ListMessages(context.Background(), 2, conv.Id, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, messages, 1)
+	assert.Empty(t, messages[0].Body)
+	assert.Equal(t, revoked.RevokedAt, messages[0].RevokedAt)
+	assert.Equal(t, 1, messages[0].RevokedBy)
+}
+
 func TestServiceGroupMemberManagementRequiresOwner(t *testing.T) {
 	setupChatServiceTestDB(t)
 

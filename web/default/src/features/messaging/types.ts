@@ -53,6 +53,8 @@ export interface ChatMessage {
   body: string
   created_at: number
   updated_at: number
+  revoked_at: number
+  revoked_by: number
   read_by: ChatUser[]
 }
 

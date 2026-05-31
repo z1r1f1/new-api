@@ -22,8 +22,11 @@ import {
   CheckCheck,
   Clock3,
   Copy,
+  Eye,
+  EyeOff,
   Loader2,
   MessageCircle,
+  Undo2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -31,16 +34,24 @@ import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTitle,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import {
   buildMessageRows,
   formatChatDate,
   formatChatTime,
   getChatUserInitial,
+  getChatUserDisplayName,
   getMessageReadLabel,
+  getMessageReceiptSummary,
   getMessageSenderName,
 } from '../lib/format'
-import type { ChatConversation, ChatMessage } from '../types'
+import type { ChatConversation, ChatMessage, ChatUser } from '../types'
 
 interface MessageListProps {
   conversation: ChatConversation | null
@@ -52,7 +63,9 @@ interface MessageListProps {
   searchText: string
   canLoadOlder: boolean
   loadingOlder: boolean
+  recallingMessageId: number | null
   onLoadOlder: () => void
+  onRecallMessage: (message: ChatMessage) => void
 }
 
 export function MessageList(props: MessageListProps) {
@@ -154,6 +167,8 @@ export function MessageList(props: MessageListProps) {
               mine={row.message.sender_id === props.currentUserId}
               conversation={props.conversation}
               currentUserId={props.currentUserId}
+              recallingMessageId={props.recallingMessageId}
+              onRecallMessage={props.onRecallMessage}
             />
           )
         })}
@@ -186,10 +201,22 @@ interface MessageBubbleProps {
   mine: boolean
   conversation: ChatConversation | null
   currentUserId: number | null
+  recallingMessageId: number | null
+  onRecallMessage: (message: ChatMessage) => void
 }
 
 function MessageBubble(props: MessageBubbleProps) {
   const { t } = useTranslation()
+  const revoked = props.message.revoked_at > 0
+  const canRecall = props.mine && !revoked
+  const recalling = props.recallingMessageId === props.message.id
+  const receiptSummary = getMessageReceiptSummary(
+    props.message,
+    props.conversation
+  )
+  const showGroupReceipts = Boolean(
+    props.conversation?.type === 'group' && receiptSummary.totalRecipients > 0
+  )
   const readLabel = getMessageReadLabel(
     props.message,
     props.conversation,
@@ -202,6 +229,10 @@ function MessageBubble(props: MessageBubbleProps) {
     void navigator.clipboard.writeText(props.message.body).then(() => {
       toast.success(t('Message copied'))
     })
+  }
+
+  const handleRecall = (): void => {
+    props.onRecallMessage(props.message)
   }
 
   return (
@@ -244,8 +275,16 @@ function MessageBubble(props: MessageBubbleProps) {
               : 'bg-card text-card-foreground rounded-tl-md border'
           )}
         >
-          <div className='leading-relaxed break-words whitespace-pre-wrap'>
-            {props.message.body}
+          <div
+            className={cn(
+              'leading-relaxed break-words whitespace-pre-wrap',
+              revoked &&
+                (props.mine
+                  ? 'text-primary-foreground/75 italic'
+                  : 'text-muted-foreground italic')
+            )}
+          >
+            {revoked ? t('This message was recalled') : props.message.body}
           </div>
         </div>
         <div
@@ -254,33 +293,160 @@ function MessageBubble(props: MessageBubbleProps) {
             props.mine ? 'justify-end' : 'justify-start'
           )}
         >
-          <span
+          {showGroupReceipts ? (
+            <MessageReceiptBadges summary={receiptSummary} />
+          ) : (
+            <span
+              className={cn(
+                'flex items-center gap-1',
+                readLabel === 'read'
+                  ? 'text-emerald-600 dark:text-emerald-400'
+                  : 'text-muted-foreground'
+              )}
+            >
+              {readLabel === 'read' ? (
+                <CheckCheck className='h-3.5 w-3.5' />
+              ) : (
+                <Check className='h-3.5 w-3.5' />
+              )}
+              {readLabelText}
+            </span>
+          )}
+          {!revoked && (
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 gap-1 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100'
+              onClick={handleCopy}
+            >
+              <Copy className='h-3.5 w-3.5' />
+              {t('Copy')}
+            </Button>
+          )}
+          {canRecall && (
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 gap-1 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100'
+              onClick={handleRecall}
+              disabled={recalling}
+            >
+              {recalling ? (
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+              ) : (
+                <Undo2 className='h-3.5 w-3.5' />
+              )}
+              {t('Recall')}
+            </Button>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+interface MessageReceiptBadgesProps {
+  summary: {
+    readUsers: ChatUser[]
+    unreadUsers: ChatUser[]
+  }
+}
+
+function MessageReceiptBadges(props: MessageReceiptBadgesProps) {
+  const { t } = useTranslation()
+
+  return (
+    <div className='flex items-center gap-1.5'>
+      <ReceiptPopover
+        icon='read'
+        title={t('Read by')}
+        users={props.summary.readUsers}
+        label={t('Read {{count}}', { count: props.summary.readUsers.length })}
+      />
+      <ReceiptPopover
+        icon='unread'
+        title={t('Unread by')}
+        users={props.summary.unreadUsers}
+        label={t('Unread {{count}}', {
+          count: props.summary.unreadUsers.length,
+        })}
+      />
+    </div>
+  )
+}
+
+interface ReceiptPopoverProps {
+  icon: 'read' | 'unread'
+  title: string
+  users: ChatUser[]
+  label: string
+}
+
+function ReceiptPopover(props: ReceiptPopoverProps) {
+  const Icon = props.icon === 'read' ? Eye : EyeOff
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        render={
+          <button
+            type='button'
             className={cn(
-              'flex items-center gap-1',
-              readLabel === 'read'
+              'hover:bg-muted flex items-center gap-1 rounded-full px-2 py-1 transition-colors',
+              props.icon === 'read'
                 ? 'text-emerald-600 dark:text-emerald-400'
                 : 'text-muted-foreground'
             )}
-          >
-            {readLabel === 'read' ? (
-              <CheckCheck className='h-3.5 w-3.5' />
-            ) : (
-              <Check className='h-3.5 w-3.5' />
-            )}
-            {readLabelText}
-          </span>
-          <Button
-            type='button'
-            variant='ghost'
-            size='sm'
-            className='h-7 gap-1 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100'
-            onClick={handleCopy}
-          >
-            <Copy className='h-3.5 w-3.5' />
-            {t('Copy')}
-          </Button>
-        </div>
+          />
+        }
+      >
+        <Icon className='h-3.5 w-3.5' />
+        {props.label}
+      </PopoverTrigger>
+      <PopoverContent align='start' className='w-64'>
+        <PopoverTitle className='text-sm'>{props.title}</PopoverTitle>
+        <ReceiptUserList users={props.users} />
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+interface ReceiptUserListProps {
+  users: ChatUser[]
+}
+
+function ReceiptUserList(props: ReceiptUserListProps) {
+  const { t } = useTranslation()
+
+  if (props.users.length === 0) {
+    return (
+      <div className='text-muted-foreground rounded-lg border border-dashed p-3 text-center text-xs'>
+        {t('No users')}
       </div>
+    )
+  }
+
+  return (
+    <div className='max-h-60 space-y-1 overflow-y-auto'>
+      {props.users.map((user) => (
+        <div key={user.id} className='flex items-center gap-2 rounded-lg p-1.5'>
+          <Avatar size='sm' className='shrink-0'>
+            <AvatarFallback className='bg-muted text-[10px]'>
+              {getChatUserInitial(user)}
+            </AvatarFallback>
+          </Avatar>
+          <div className='min-w-0'>
+            <div className='truncate text-xs font-medium'>
+              {getChatUserDisplayName(user)}
+            </div>
+            <div className='text-muted-foreground truncate text-[11px]'>
+              @{user.username}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

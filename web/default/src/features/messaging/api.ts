@@ -87,6 +87,16 @@ export async function sendChatMessage(
   return res.data
 }
 
+export async function revokeChatMessage(
+  conversationId: number,
+  messageId: number
+): Promise<ApiResponse<ChatMessage>> {
+  const res = await api.post(
+    `/api/chat/conversations/${conversationId}/messages/${messageId}/revoke`
+  )
+  return res.data
+}
+
 export async function markChatRead(
   conversationId: number,
   payload: MarkReadPayload

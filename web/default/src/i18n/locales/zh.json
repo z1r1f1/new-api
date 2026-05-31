@@ -4795,6 +4795,15 @@
     "No conversations yet": "暂无会话",
     "Read": "已读",
     "Search conversations": "搜索会话",
-    "Unread": "未读"
+    "Unread": "未读",
+    "Recall": "撤回",
+    "Message recalled": "消息已撤回",
+    "This message was recalled": "此消息已撤回",
+    "Failed to recall message": "撤回消息失败",
+    "Read {{count}}": "已读 {{count}}",
+    "Unread {{count}}": "未读 {{count}}",
+    "Read by": "已读成员",
+    "Unread by": "未读成员",
+    "No users": "无用户"
   }
 }

@@ -170,6 +170,34 @@ func SendChatMessage(c *gin.Context) {
 	chatJSON(c, http.StatusOK, true, "", message)
 }
 
+func RevokeChatMessage(c *gin.Context) {
+	service, ok := getChatService(c)
+	if !ok {
+		return
+	}
+	userId, ok := currentChatUserID(c)
+	if !ok {
+		chatJSON(c, http.StatusUnauthorized, false, "not logged in", nil)
+		return
+	}
+	conversationId, ok := parseChatPathInt(c, "id")
+	if !ok {
+		chatJSON(c, http.StatusBadRequest, false, "invalid conversation id", nil)
+		return
+	}
+	messageId, ok := parseChatPathInt(c, "message_id")
+	if !ok {
+		chatJSON(c, http.StatusBadRequest, false, "invalid message id", nil)
+		return
+	}
+	message, err := service.RevokeMessage(c.Request.Context(), userId, conversationId, messageId)
+	if err != nil {
+		writeChatError(c, err)
+		return
+	}
+	chatJSON(c, http.StatusOK, true, "", message)
+}
+
 func MarkChatRead(c *gin.Context) {
 	service, ok := getChatService(c)
 	if !ok {

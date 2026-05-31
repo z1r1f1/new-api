@@ -4795,6 +4795,15 @@
     "No conversations yet": "Aucune conversation pour le moment",
     "Read": "Lu",
     "Search conversations": "Rechercher des conversations",
-    "Unread": "Non lu"
+    "Unread": "Non lu",
+    "Recall": "Rappeler",
+    "Message recalled": "Message rappelé",
+    "This message was recalled": "Ce message a été rappelé",
+    "Failed to recall message": "Échec du rappel du message",
+    "Read {{count}}": "Lu {{count}}",
+    "Unread {{count}}": "Non lu {{count}}",
+    "Read by": "Lu par",
+    "Unread by": "Non lu par",
+    "No users": "Aucun utilisateur"
   }
 }

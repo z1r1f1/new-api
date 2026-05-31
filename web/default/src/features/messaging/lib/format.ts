@@ -27,6 +27,12 @@ export type MessageRow =
   | { kind: 'divider'; key: string; timestamp: number }
   | { kind: 'message'; key: string; message: ChatMessage }
 
+export interface MessageReceiptSummary {
+  readUsers: ChatUser[]
+  unreadUsers: ChatUser[]
+  totalRecipients: number
+}
+
 export function formatChatTime(timestamp: number): string {
   if (!timestamp) return '—'
   return new Intl.DateTimeFormat(undefined, {
@@ -170,6 +176,24 @@ export function getMessageReadLabel(
   return otherMembers.every((member) => readByIds.has(member.id))
     ? 'read'
     : 'unread'
+}
+
+export function getMessageReceiptSummary(
+  message: ChatMessage,
+  conversation: ChatConversation | null
+): MessageReceiptSummary {
+  if (!conversation) {
+    return { readUsers: [], unreadUsers: [], totalRecipients: 0 }
+  }
+  const readByIds = new Set(message.read_by.map((user) => user.id))
+  const recipients = conversation.members.filter(
+    (member) => member.id !== message.sender_id
+  )
+  return {
+    readUsers: recipients.filter((member) => readByIds.has(member.id)),
+    unreadUsers: recipients.filter((member) => !readByIds.has(member.id)),
+    totalRecipients: recipients.length,
+  }
 }
 
 export function getTotalUnreadCount(conversations: ChatConversation[]): number {

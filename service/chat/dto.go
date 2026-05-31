@@ -37,6 +37,8 @@ type MessageResponse struct {
 	Body              string         `json:"body"`
 	CreatedAt         int64          `json:"created_at"`
 	UpdatedAt         int64          `json:"updated_at"`
+	RevokedAt         int64          `json:"revoked_at"`
+	RevokedBy         int            `json:"revoked_by"`
 	ReadBy            []*UserSummary `json:"read_by"`
 }
 

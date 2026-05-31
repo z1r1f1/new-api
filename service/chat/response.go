@@ -177,6 +177,8 @@ func decorateMessageWithContext(message *model.ChatMessage, decoration *messageD
 		Body:              message.Body,
 		CreatedAt:         message.CreatedAt,
 		UpdatedAt:         message.UpdatedAt,
+		RevokedAt:         message.RevokedAt,
+		RevokedBy:         message.RevokedBy,
 		ReadBy:            readBy,
 	}
 }

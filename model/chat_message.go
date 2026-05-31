@@ -17,6 +17,8 @@ type ChatMessage struct {
 	Body            string `json:"body" gorm:"type:text;not null"`
 	CreatedAt       int64  `json:"created_at" gorm:"bigint;not null;index"`
 	UpdatedAt       int64  `json:"updated_at" gorm:"bigint;not null"`
+	RevokedAt       int64  `json:"revoked_at" gorm:"bigint;default:0;index"`
+	RevokedBy       int    `json:"revoked_by" gorm:"default:0"`
 }
 
 func (ChatMessage) TableName() string {
@@ -77,6 +79,43 @@ func InsertChatMessage(conversationID int, senderID int, messageType string, bod
 		return nil, err
 	}
 	return message, nil
+}
+
+func GetChatMessageByID(conversationID int, messageID int) (*ChatMessage, error) {
+	if conversationID <= 0 || messageID <= 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var message ChatMessage
+	if err := DB.Where("conversation_id = ? AND id = ?", conversationID, messageID).First(&message).Error; err != nil {
+		return nil, err
+	}
+	return &message, nil
+}
+
+func RevokeChatMessage(conversationID int, messageID int, revokedBy int) (*ChatMessage, error) {
+	if conversationID <= 0 || messageID <= 0 || revokedBy <= 0 {
+		return nil, errors.New("conversation, message, and user ids are required")
+	}
+	message, err := GetChatMessageByID(conversationID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	if message.RevokedAt > 0 {
+		return message, nil
+	}
+
+	now := common.GetTimestamp()
+	if err := DB.Model(&ChatMessage{}).
+		Where("conversation_id = ? AND id = ? AND revoked_at = ?", conversationID, messageID, 0).
+		Updates(map[string]any{
+			"body":       "",
+			"revoked_at": now,
+			"revoked_by": revokedBy,
+			"updated_at": now,
+		}).Error; err != nil {
+		return nil, err
+	}
+	return GetChatMessageByID(conversationID, messageID)
 }
 
 func ListConversationMessages(conversationID int, limit int, beforeMessageID int) ([]*ChatMessage, error) {

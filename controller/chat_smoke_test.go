@@ -306,6 +306,24 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.NotNil(t, messageCreated.Message)
 	require.Equal(t, message.Id, messageCreated.Message.Id)
 	require.Equal(t, message.Body, messageCreated.Message.Body)
+
+	revoked := revokeChatMessageViaHTTP(t, httpClient, server.URL, cookies, conversation.Id, message.Id)
+	require.Equal(t, message.Id, revoked.Id)
+	require.Empty(t, revoked.Body)
+	require.Greater(t, revoked.RevokedAt, int64(0))
+	require.Equal(t, 1, revoked.RevokedBy)
+
+	revokedPublication := readChatWSReply(t, wsConn)
+	require.NotNil(t, revokedPublication.Push)
+	require.Equal(t, chatservice.ConversationChannel(conversation.Id), revokedPublication.Push.Channel)
+	require.NotNil(t, revokedPublication.Push.Pub)
+
+	var messageRevoked chatservice.Event
+	require.NoError(t, common.Unmarshal(revokedPublication.Push.Pub.Data, &messageRevoked))
+	require.Equal(t, chatservice.EventTypeMessageRevoked, messageRevoked.Type)
+	require.NotNil(t, messageRevoked.Message)
+	require.Equal(t, message.Id, messageRevoked.Message.Id)
+	require.Empty(t, messageRevoked.Message.Body)
 }
 
 func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, peerUserID int) *chatservice.ConversationResponse {
@@ -348,6 +366,30 @@ func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, c
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages", bytes.NewReader(payload))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("New-Api-User", "1")
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	defer func() { _ = resp.Body.Close() }()
+
+	var apiResp chatAPIResponse
+	require.NoError(t, common.DecodeJson(resp.Body, &apiResp))
+	require.True(t, apiResp.Success, apiResp.Message)
+
+	var message chatservice.MessageResponse
+	require.NoError(t, common.Unmarshal(apiResp.Data, &message))
+	return &message
+}
+
+func revokeChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, messageID int) *chatservice.MessageResponse {
+	t.Helper()
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages/"+strconv.Itoa(messageID)+"/revoke", nil)
+	require.NoError(t, err)
 	req.Header.Set("New-Api-User", "1")
 	for _, cookie := range cookies {
 		req.AddCookie(cookie)
