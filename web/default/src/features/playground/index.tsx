@@ -93,6 +93,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
   const [mobileSettingsOpen, setMobileSettingsOpen] = useState(false)
   const [mobileDebugOpen, setMobileDebugOpen] = useState(false)
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(true)
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null)
   const {
     config,
     parameterEnabled,
@@ -442,21 +443,89 @@ function PlaygroundContent(props: PlaygroundContentProps) {
           !sessionSidebarOpen && 'hidden'
         )}
       >
-        {sessions.map((session) => (
-          <button
-            key={session.id}
-            type='button'
-            className={cn(
-              'hover:bg-accent w-full px-3 py-2 text-left text-sm transition-colors',
-              'flex items-center gap-2 border-b border-border/50',
-              session.id === activeSessionId && 'bg-accent font-medium'
-            )}
-            onClick={() => switchSession(session.id)}
-          >
-            <MessageSquare className='text-muted-foreground size-3.5 shrink-0' />
-            <span className='truncate'>{session.title || t('New session')}</span>
-          </button>
-        ))}
+        {sessions.map((session) => {
+          const isActive = session.id === activeSessionId
+          const isEditing = editingSessionId === session.id
+          return (
+            <div
+              key={session.id}
+              className={cn(
+                'group flex items-center gap-1 border-b border-border/50 px-2 py-1.5 transition-colors',
+                isActive && 'bg-accent'
+              )}
+            >
+              {isEditing ? (
+                <Input
+                  autoFocus
+                  className='h-7 flex-1 text-xs'
+                  defaultValue={session.title || t('New session')}
+                  onBlur={(e) => {
+                    const newTitle = e.currentTarget.value.trim()
+                    if (newTitle && newTitle !== session.title) {
+                      renameSession(session.id, newTitle)
+                    }
+                    setEditingSessionId(null)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      const newTitle = e.currentTarget.value.trim()
+                      if (newTitle && newTitle !== session.title) {
+                        renameSession(session.id, newTitle)
+                      }
+                      setEditingSessionId(null)
+                    }
+                    if (e.key === 'Escape') {
+                      setEditingSessionId(null)
+                    }
+                  }}
+                />
+              ) : (
+                <button
+                  type='button'
+                  className={cn(
+                    'flex min-w-0 flex-1 items-center gap-2 truncate py-0.5 text-left text-sm',
+                    isActive && 'font-medium'
+                  )}
+                  onClick={() => switchSession(session.id)}
+                >
+                  <MessageSquare className='text-muted-foreground size-3.5 shrink-0' />
+                  <span className='truncate'>{session.title || t('New session')}</span>
+                </button>
+              )}
+              {!isEditing && (
+                <div className='flex shrink-0 opacity-0 transition-opacity group-hover:opacity-100'>
+                  <Button
+                    size='icon'
+                    variant='ghost'
+                    className='size-6'
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setEditingSessionId(session.id)
+                      // Seed the draft in case the user clicks rename
+                      const title = session.title || ''
+                      setSessionTitleDraft({ sessionId: session.id, title })
+                    }}
+                    aria-label={t('Rename session')}
+                  >
+                    <Pencil className='size-3' />
+                  </Button>
+                  <Button
+                    size='icon'
+                    variant='ghost'
+                    className='size-6 text-destructive hover:text-destructive'
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      deleteSession(session.id)
+                    }}
+                    aria-label={t('Delete session')}
+                  >
+                    <Trash2 className='size-3' />
+                  </Button>
+                </div>
+              )}
+            </div>
+          )
+        })}
       </div>
       <div className={cn('border-t p-2', !sessionSidebarOpen && 'hidden')}>
         <Button
@@ -473,75 +542,26 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     </aside>
   )
 
-  const sessionManager = (
-    <div className='border-border bg-background/95 flex shrink-0 flex-col gap-2 border-b px-3 py-2 sm:flex-row sm:items-center'>
-      <div className='flex min-w-0 flex-1 items-center gap-2'>
-        {!sessionSidebarOpen && (
-          <Button
-            size='icon'
-            variant='ghost'
-            className='size-7 shrink-0'
-            onClick={() => setSessionSidebarOpen(true)}
-            aria-label={t('Open session sidebar')}
-          >
-            <PanelLeftClose className='size-4 rotate-180' />
-          </Button>
-        )}
-        <MessageSquare className='text-muted-foreground size-4 shrink-0' />
-        <Input
-          className='min-w-0 flex-1'
-          value={currentSessionTitleDraft}
-          placeholder={t('Session name')}
-          onChange={(event) =>
-            setSessionTitleDraft({
-              sessionId: activeSessionId,
-              title: event.target.value,
-            })
-          }
-          onBlur={commitSessionRename}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              commitSessionRename()
-              event.currentTarget.blur()
-            }
-          }}
-        />
-      </div>
-      <div className='flex items-center gap-2'>
+  const sessionHeader = (
+    <div className='border-border bg-background/95 flex shrink-0 items-center border-b px-3 py-2'>
+      {!sessionSidebarOpen && (
         <Button
-          type='button'
-          variant='outline'
-          size='sm'
-          onClick={createSession}
+          size='icon'
+          variant='ghost'
+          className='size-7 shrink-0'
+          onClick={() => setSessionSidebarOpen(true)}
+          aria-label={t('Open session sidebar')}
         >
-          <Plus className='mr-2 size-4' />
-          {t('New session')}
+          <PanelLeftClose className='size-4 rotate-180' />
         </Button>
-        <Button
-          type='button'
-          variant='outline'
-          size='icon-sm'
-          disabled={!activeSession}
-          onClick={commitSessionRename}
-          aria-label={t('Rename session')}
-        >
-          <Pencil className='size-4' />
-        </Button>
-        <Button
-          type='button'
-          variant='outline'
-          size='icon-sm'
-          disabled={!activeSession}
-          onClick={() => {
-            if (activeSession) deleteSession(activeSession.id)
-          }}
-          aria-label={t('Delete')}
-        >
-          <Trash2 className='size-4' />
-        </Button>
-      </div>
+      )}
+      <span className='ml-2 truncate text-sm font-medium'>
+        {activeSession?.title || t('New session')}
+      </span>
     </div>
   )
+
+  // session controls moved to sidebar
 
   const settingsPanel = (
     <PlaygroundSettingsPanel
@@ -605,7 +625,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
           </Button>
         </div>
 
-        {sessionManager}
+        {sessionHeader}
 
         {/* Full-width scroll container: scrolling works even over side whitespace */}
         <div className='flex flex-1 flex-col overflow-hidden'>
