@@ -74,6 +74,56 @@ func setupChatServiceTestDB(t *testing.T) {
 	})
 }
 
+func setupChatServiceTestDBWithoutChatTables(t *testing.T) {
+	t.Helper()
+
+	previousDB := model.DB
+	previousLogDB := model.LOG_DB
+	previousUsingSQLite := common.UsingSQLite
+	previousUsingMySQL := common.UsingMySQL
+	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousRedisEnabled := common.RedisEnabled
+
+	common.UsingSQLite = true
+	common.UsingMySQL = false
+	common.UsingPostgreSQL = false
+	common.RedisEnabled = false
+
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+
+	model.DB = db
+	model.LOG_DB = db
+
+	t.Cleanup(func() {
+		sqlDB, err := db.DB()
+		if err == nil {
+			_ = sqlDB.Close()
+		}
+		model.DB = previousDB
+		model.LOG_DB = previousLogDB
+		common.UsingSQLite = previousUsingSQLite
+		common.UsingMySQL = previousUsingMySQL
+		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.RedisEnabled = previousRedisEnabled
+	})
+}
+
+func TestServiceListConversationsCreatesMissingChatTables(t *testing.T) {
+	setupChatServiceTestDBWithoutChatTables(t)
+
+	svc := NewService(&fakePublisher{})
+
+	conversations, err := svc.ListConversations(context.Background(), 1)
+	require.NoError(t, err)
+	assert.Empty(t, conversations)
+	assert.True(t, model.DB.Migrator().HasTable(&model.ChatConversation{}))
+	assert.True(t, model.DB.Migrator().HasTable(&model.ChatConversationMember{}))
+	assert.True(t, model.DB.Migrator().HasTable(&model.ChatMessage{}))
+	assert.True(t, model.DB.Migrator().HasTable(&model.ChatReadState{}))
+}
+
 func TestServiceRejectsNonMemberSend(t *testing.T) {
 	setupChatServiceTestDB(t)
 

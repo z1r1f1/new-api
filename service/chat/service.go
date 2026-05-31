@@ -30,12 +30,18 @@ func (service *Service) ListConversations(ctx context.Context, userID int) ([]*m
 	if userID <= 0 {
 		return nil, ErrInvalidRequest
 	}
+	if err := model.EnsureChatTables(); err != nil {
+		return nil, err
+	}
 	return model.ListUserConversations(userID)
 }
 
 func (service *Service) CreateDirectConversation(ctx context.Context, currentUserID int, peerUserID int) (*model.ChatConversation, error) {
 	if currentUserID <= 0 || peerUserID <= 0 {
 		return nil, ErrInvalidRequest
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return nil, err
 	}
 	conversation, err := model.GetOrCreateDirectConversation(currentUserID, peerUserID)
 	if err != nil {
@@ -54,6 +60,9 @@ func (service *Service) CreateDirectConversation(ctx context.Context, currentUse
 func (service *Service) CreateGroupConversation(ctx context.Context, ownerID int, title string, memberIDs []int) (*model.ChatConversation, error) {
 	if ownerID <= 0 {
 		return nil, ErrInvalidRequest
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return nil, err
 	}
 	conversation, err := model.CreateGroupConversation(ownerID, title, memberIDs)
 	if err != nil {
@@ -81,6 +90,9 @@ func (service *Service) SendMessage(ctx context.Context, currentUserID int, conv
 	if currentUserID <= 0 || conversationID <= 0 || body == "" {
 		return nil, ErrInvalidRequest
 	}
+	if err := model.EnsureChatTables(); err != nil {
+		return nil, err
+	}
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return nil, err
 	}
@@ -105,6 +117,9 @@ func (service *Service) ListMessages(ctx context.Context, currentUserID int, con
 	if currentUserID <= 0 || conversationID <= 0 {
 		return nil, ErrInvalidRequest
 	}
+	if err := model.EnsureChatTables(); err != nil {
+		return nil, err
+	}
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return nil, err
 	}
@@ -114,6 +129,9 @@ func (service *Service) ListMessages(ctx context.Context, currentUserID int, con
 func (service *Service) MarkRead(ctx context.Context, currentUserID int, conversationID int, lastReadMessageID int) error {
 	if currentUserID <= 0 || conversationID <= 0 {
 		return ErrInvalidRequest
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return err
 	}
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return err
@@ -134,6 +152,9 @@ func (service *Service) MarkRead(ctx context.Context, currentUserID int, convers
 func (service *Service) AddMember(ctx context.Context, currentUserID int, conversationID int, targetUserID int) error {
 	if currentUserID <= 0 || conversationID <= 0 || targetUserID <= 0 {
 		return ErrInvalidRequest
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return err
 	}
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return err
@@ -162,6 +183,9 @@ func (service *Service) AddMember(ctx context.Context, currentUserID int, conver
 func (service *Service) RemoveMember(ctx context.Context, currentUserID int, conversationID int, targetUserID int) error {
 	if currentUserID <= 0 || conversationID <= 0 || targetUserID <= 0 {
 		return ErrInvalidRequest
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return err
 	}
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return err

@@ -32,6 +32,14 @@ type chatAPIResponse struct {
 }
 
 func setupChatSmokeTestDB(t *testing.T) *gorm.DB {
+	return setupChatSmokeTestDBWithMigration(t, true)
+}
+
+func setupChatSmokeTestDBWithoutChatTables(t *testing.T) *gorm.DB {
+	return setupChatSmokeTestDBWithMigration(t, false)
+}
+
+func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *gorm.DB {
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
@@ -56,12 +64,14 @@ func setupChatSmokeTestDB(t *testing.T) *gorm.DB {
 
 	model.DB = db
 	model.LOG_DB = db
-	require.NoError(t, db.AutoMigrate(
-		&model.ChatConversation{},
-		&model.ChatConversationMember{},
-		&model.ChatMessage{},
-		&model.ChatReadState{},
-	))
+	if migrateChatTables {
+		require.NoError(t, db.AutoMigrate(
+			&model.ChatConversation{},
+			&model.ChatConversationMember{},
+			&model.ChatMessage{},
+			&model.ChatReadState{},
+		))
+	}
 
 	t.Cleanup(func() {
 		sqlDB, err := db.DB()
@@ -78,6 +88,44 @@ func setupChatSmokeTestDB(t *testing.T) *gorm.DB {
 	})
 
 	return db
+}
+
+func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
+	db := setupChatSmokeTestDBWithoutChatTables(t)
+
+	gin.SetMode(gin.TestMode)
+	root := gin.New()
+	root.Use(sessions.Sessions("session", cookie.NewStore([]byte("chat-missing-table-test"))))
+	root.Use(func(c *gin.Context) {
+		session := sessions.Default(c)
+		session.Set("username", "smoke-user-1")
+		session.Set("role", common.RoleCommonUser)
+		session.Set("id", 1)
+		session.Set("status", common.UserStatusEnabled)
+		session.Set("group", "default")
+		require.NoError(t, session.Save())
+		c.Next()
+	})
+
+	apiRouter := root.Group("/api")
+	router.SetChatRouter(root, apiRouter)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/chat/conversations", nil)
+	req.Header.Set("New-Api-User", "1")
+	recorder := httptest.NewRecorder()
+
+	root.ServeHTTP(recorder, req)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+
+	var apiResp chatAPIResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &apiResp))
+	require.True(t, apiResp.Success, apiResp.Message)
+	require.JSONEq(t, "[]", string(apiResp.Data))
+	require.True(t, db.Migrator().HasTable(&model.ChatConversation{}))
+	require.True(t, db.Migrator().HasTable(&model.ChatConversationMember{}))
+	require.True(t, db.Migrator().HasTable(&model.ChatMessage{}))
+	require.True(t, db.Migrator().HasTable(&model.ChatReadState{}))
 }
 
 func initializeChatSmokeTestRuntime(t *testing.T) *chatservice.RealtimeServer {
