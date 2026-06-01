@@ -23,7 +23,10 @@ import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { getChatUserDisplayName } from '../lib/format'
-import type { ChatImageAttachment } from '../lib/message-content'
+import {
+  isChatMessageSendable,
+  type ChatImageAttachment,
+} from '../lib/message-content'
 import type { ChatUser } from '../types'
 
 interface MessageComposerProps {
@@ -38,6 +41,7 @@ interface MessageComposerProps {
   onSend: () => void
   onPasteImages: (files: File[]) => void
   onRemoveAttachment: (id: string) => void
+  onPreviewAttachment: (attachment: ChatImageAttachment) => void
 }
 
 export function MessageComposer(props: MessageComposerProps) {
@@ -51,7 +55,7 @@ export function MessageComposer(props: MessageComposerProps) {
   const showMentionCandidates = Boolean(
     props.active && !props.sending && mentionQuery !== null
   )
-  const hasContent = Boolean(props.value.trim() || props.attachments.length > 0)
+  const hasContent = isChatMessageSendable(props.value, props.attachments)
 
   const handleMention = (user: ChatUser): void => {
     const mention = `@${user.username} `
@@ -103,27 +107,36 @@ export function MessageComposer(props: MessageComposerProps) {
           </div>
         )}
         {props.attachments.length > 0 && (
-          <div className='mb-2 flex flex-wrap gap-2 border-b pb-2'>
-            {props.attachments.map((attachment) => (
-              <div
-                key={attachment.id}
-                className='group/attachment bg-muted relative h-20 w-20 overflow-hidden rounded-xl border'
-              >
-                <img
-                  src={attachment.dataUrl}
-                  alt={attachment.name}
-                  className='size-full object-cover'
-                />
-                <button
-                  type='button'
-                  className='bg-background/90 text-foreground absolute top-1 right-1 flex size-6 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/attachment:opacity-100 focus:opacity-100'
-                  onClick={() => props.onRemoveAttachment(attachment.id)}
-                  aria-label={t('Remove image')}
+          <div className='mb-1 max-w-full overflow-x-auto border-b pb-1.5'>
+            <div className='flex w-max items-center gap-1.5'>
+              {props.attachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className='group/attachment bg-muted relative size-12 shrink-0 overflow-hidden rounded-lg border'
                 >
-                  <X className='h-3.5 w-3.5' />
-                </button>
-              </div>
-            ))}
+                  <button
+                    type='button'
+                    className='focus-visible:ring-ring block size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-inset'
+                    onClick={() => props.onPreviewAttachment(attachment)}
+                    aria-label={t('Image Preview')}
+                  >
+                    <img
+                      src={attachment.dataUrl}
+                      alt={attachment.name}
+                      className='size-full object-cover'
+                    />
+                  </button>
+                  <button
+                    type='button'
+                    className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/attachment:opacity-100 focus:opacity-100'
+                    onClick={() => props.onRemoveAttachment(attachment.id)}
+                    aria-label={t('Remove image')}
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         <Textarea
@@ -131,7 +144,7 @@ export function MessageComposer(props: MessageComposerProps) {
           onChange={(event) => props.onChange(event.target.value)}
           onPaste={handlePaste}
           placeholder={t('Paste images or type a message...')}
-          disabled={!props.active || props.sending || props.processingImages}
+          disabled={!props.active || props.sending}
           className='min-h-20 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0'
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -171,12 +184,11 @@ export function MessageComposer(props: MessageComposerProps) {
             disabled={
               !props.active ||
               props.sending ||
-              props.processingImages ||
-              !hasContent
+              (!hasContent && !props.processingImages)
             }
             className='gap-2'
           >
-            {props.sending ? (
+            {props.sending || props.processingImages ? (
               <Loader2 className='h-4 w-4 animate-spin' />
             ) : (
               <Send className='h-4 w-4' />

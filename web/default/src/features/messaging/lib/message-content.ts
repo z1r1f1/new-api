@@ -35,12 +35,24 @@ export interface ChatImageAttachment {
   dataUrl: string
 }
 
+export interface ChatImagePreview {
+  src: string
+  alt: string
+}
+
 export type MessageContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; alt: string; src: string }
 
 export function isSafeChatImageDataUrl(value: string): boolean {
   return SAFE_IMAGE_DATA_URL_PATTERN.test(value)
+}
+
+export function isChatMessageSendable(
+  text: string,
+  attachments: ChatImageAttachment[]
+): boolean {
+  return Boolean(text.trim() || attachments.length > 0)
 }
 
 export function extractMessageContentParts(body: string): MessageContentPart[] {

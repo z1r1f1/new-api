@@ -3,6 +3,7 @@ import { describe, test } from 'node:test'
 import {
   buildChatImageMarkdown,
   extractMessageContentParts,
+  isChatMessageSendable,
   isSafeChatImageDataUrl,
 } from './message-content'
 
@@ -46,6 +47,22 @@ describe('message content image parsing', () => {
       false
     )
     assert.equal(isSafeChatImageDataUrl('data:image/png;base64,<svg>'), false)
+  })
+
+  test('allows sending an image-only message', () => {
+    assert.equal(
+      isChatMessageSendable('', [
+        {
+          id: '1',
+          name: 'pasted.png',
+          mimeType: 'image/png',
+          size: 4,
+          dataUrl: 'data:image/png;base64,AAAA',
+        },
+      ]),
+      true
+    )
+    assert.equal(isChatMessageSendable('   ', []), false)
   })
 
   test('escapes attachment names when building image markdown', () => {

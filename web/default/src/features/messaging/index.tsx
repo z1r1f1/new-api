@@ -39,6 +39,7 @@ import {
   revokeChatMessage,
   sendChatMessage,
 } from './api'
+import { ChatImagePreviewDialog } from './components/chat-image-preview-dialog'
 import { ChatSidebar } from './components/chat-sidebar'
 import { ChatUserProfileDialog } from './components/chat-user-profile-dialog'
 import { MessageComposer } from './components/message-composer'
@@ -66,7 +67,9 @@ import {
   CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH,
   CHAT_PASTED_IMAGE_MAX_COUNT,
   createChatImageAttachment,
+  isChatMessageSendable,
   type ChatImageAttachment,
+  type ChatImagePreview,
 } from './lib/message-content'
 import type {
   ApiResponse,
@@ -75,6 +78,16 @@ import type {
   ChatMessage,
   ChatUser,
 } from './types'
+
+interface PendingImageSend {
+  conversationId: number | null
+  text: string
+}
+
+interface SendChatMessageVariables {
+  conversationId: number
+  body: string
+}
 
 export function Messaging() {
   const { t } = useTranslation()
@@ -91,6 +104,9 @@ export function Messaging() {
   const [messageBody, setMessageBody] = useState('')
   const [pastedImages, setPastedImages] = useState<ChatImageAttachment[]>([])
   const [processingPastedImages, setProcessingPastedImages] = useState(false)
+  const [previewImage, setPreviewImage] = useState<ChatImagePreview | null>(
+    null
+  )
   const [profileUser, setProfileUser] = useState<ChatUser | null>(null)
   const [profileDialogOpen, setProfileDialogOpen] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
@@ -101,6 +117,10 @@ export function Messaging() {
   const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
     useState<Record<number, boolean>>({})
   const initializedConversationRef = useRef(false)
+  const activeConversationIdRef = useRef<number | null>(activeConversationId)
+  const pendingSendAfterImageProcessingRef = useRef<PendingImageSend | null>(
+    null
+  )
 
   const usersQuery = useQuery({
     queryKey: messagingQueryKeys.users,
@@ -145,6 +165,9 @@ export function Messaging() {
     [activeConversationId, conversations]
   )
   useEffect(() => {
+    activeConversationIdRef.current = activeConversationId
+  }, [activeConversationId])
+  useEffect(() => {
     if (initializedConversationRef.current) return
     if (!conversationsQuery.isSuccess) return
     if (activeConversationId || selectedUserId || openingUserId) {
@@ -154,6 +177,7 @@ export function Messaging() {
     const initialConversation = getInitialConversation(conversations)
     if (!initialConversation) return
     initializedConversationRef.current = true
+    activeConversationIdRef.current = initialConversation.id
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveConversationId(initialConversation.id)
     setSelectedUserId(initialConversation.peer?.id ?? null)
@@ -239,6 +263,7 @@ export function Messaging() {
     },
     onSuccess: (response) => {
       if (response.data) {
+        activeConversationIdRef.current = response.data.id
         setActiveConversationId(response.data.id)
         setSelectedUserId(response.data.peer?.id ?? null)
         void queryClient.invalidateQueries({
@@ -255,27 +280,54 @@ export function Messaging() {
     },
   })
 
-  const sendMutation = useMutation({
-    mutationFn: (body: string) => {
-      if (!activeConversationId) {
-        throw new Error(t('Select a conversation first'))
+  const { mutate: sendChatMessageMutation, isPending: sendingMessage } =
+    useMutation({
+      mutationFn: (variables: SendChatMessageVariables) => {
+        return sendChatMessage(variables.conversationId, {
+          body: variables.body,
+          client_message_id: nanoid(),
+        })
+      },
+      onSuccess: (response, variables) => {
+        if (response.data) appendMessage(response.data)
+        if (variables.conversationId === activeConversationIdRef.current) {
+          setMessageBody('')
+          setPastedImages([])
+          setMessageSearch('')
+        }
+        invalidateConversations()
+      },
+      onError: () => {
+        toast.error(t('Failed to send message'))
+      },
+    })
+
+  const sendMessageWithAttachments = useCallback(
+    (
+      text: string,
+      attachments: ChatImageAttachment[],
+      conversationId: number | null
+    ): boolean => {
+      if (!isChatMessageSendable(text, attachments)) return false
+      if (!conversationId) {
+        toast.error(t('Select a conversation first'))
+        return false
       }
-      return sendChatMessage(activeConversationId, {
-        body,
-        client_message_id: nanoid(),
-      })
+      const textBody = text.trim()
+      if (textBody.length > MAX_MESSAGE_LENGTH) {
+        toast.error(t('Message is too long'))
+        return false
+      }
+      const body = buildOutgoingMessageBody(text, attachments)
+      if (body.length > CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH) {
+        toast.error(t('Message is too long'))
+        return false
+      }
+      sendChatMessageMutation({ conversationId, body })
+      return true
     },
-    onSuccess: (response) => {
-      if (response.data) appendMessage(response.data)
-      setMessageBody('')
-      setPastedImages([])
-      setMessageSearch('')
-      invalidateConversations()
-    },
-    onError: () => {
-      toast.error(t('Failed to send message'))
-    },
-  })
+    [sendChatMessageMutation, t]
+  )
 
   const revokeMutation = useMutation({
     mutationFn: (message: ChatMessage) =>
@@ -372,10 +424,26 @@ export function Messaging() {
     }).then(() => invalidateConversations())
   }, [activeConversationId, invalidateConversations, lastMessageId])
 
+  useEffect(() => {
+    if (processingPastedImages) return
+    const pendingSend = pendingSendAfterImageProcessingRef.current
+    if (!pendingSend) return
+    pendingSendAfterImageProcessingRef.current = null
+    if (pendingSend.conversationId !== activeConversationIdRef.current) return
+    sendMessageWithAttachments(
+      pendingSend.text,
+      pastedImages,
+      pendingSend.conversationId
+    )
+  }, [pastedImages, processingPastedImages, sendMessageWithAttachments])
+
   const handleSelectUser = (user: ChatUser): void => {
+    pendingSendAfterImageProcessingRef.current = null
+    activeConversationIdRef.current = null
     setSelectedUserId(user.id)
     setMessageBody('')
     setPastedImages([])
+    setPreviewImage(null)
     setMessageSearch('')
     setActiveConversationId(null)
     if (openDirectConversation(user, conversations)) return
@@ -383,10 +451,13 @@ export function Messaging() {
   }
 
   const handleSelectConversation = (conversation: ChatConversation): void => {
+    pendingSendAfterImageProcessingRef.current = null
+    activeConversationIdRef.current = conversation.id
     setActiveConversationId(conversation.id)
     setSelectedUserId(conversation.peer?.id ?? null)
     setMessageBody('')
     setPastedImages([])
+    setPreviewImage(null)
     setMessageSearch('')
   }
 
@@ -401,6 +472,7 @@ export function Messaging() {
   }
 
   const handlePasteImages = (files: File[]): void => {
+    const pasteConversationId = activeConversationIdRef.current
     if (pastedImages.length >= CHAT_PASTED_IMAGE_MAX_COUNT) {
       toast.error(
         t('You can attach up to {{count}} images', {
@@ -424,9 +496,14 @@ export function Messaging() {
       filesToProcess.map((file) => createChatImageAttachment(file, nanoid()))
     )
       .then((attachments) => {
+        if (pasteConversationId !== activeConversationIdRef.current) {
+          pendingSendAfterImageProcessingRef.current = null
+          return
+        }
         setPastedImages((current) => [...current, ...attachments])
       })
       .catch((error: unknown) => {
+        pendingSendAfterImageProcessingRef.current = null
         const message = error instanceof Error ? error.message : ''
         toast.error(t(message || 'Failed to read pasted image'))
       })
@@ -438,22 +515,14 @@ export function Messaging() {
   }
 
   const handleSendMessage = (): void => {
-    const textBody = messageBody.trim()
-    if (!textBody && pastedImages.length === 0) return
     if (processingPastedImages) {
-      toast.error(t('Processing image...'))
+      pendingSendAfterImageProcessingRef.current = {
+        conversationId: activeConversationId,
+        text: messageBody,
+      }
       return
     }
-    if (textBody.length > MAX_MESSAGE_LENGTH) {
-      toast.error(t('Message is too long'))
-      return
-    }
-    const body = buildOutgoingMessageBody(messageBody, pastedImages)
-    if (body.length > CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH) {
-      toast.error(t('Message is too long'))
-      return
-    }
-    sendMutation.mutate(body)
+    sendMessageWithAttachments(messageBody, pastedImages, activeConversationId)
   }
 
   const handleRefresh = (): void => {
@@ -531,7 +600,7 @@ export function Messaging() {
                 <MessageComposer
                   value={messageBody}
                   active={Boolean(activeConversationId)}
-                  sending={sendMutation.isPending}
+                  sending={sendingMessage}
                   processingImages={processingPastedImages}
                   maxLength={MAX_MESSAGE_LENGTH}
                   mentionUsers={mentionUsers}
@@ -540,6 +609,12 @@ export function Messaging() {
                   onSend={handleSendMessage}
                   onPasteImages={handlePasteImages}
                   onRemoveAttachment={handleRemovePastedImage}
+                  onPreviewAttachment={(attachment) =>
+                    setPreviewImage({
+                      src: attachment.dataUrl,
+                      alt: attachment.name,
+                    })
+                  }
                 />
               </CardContent>
             </div>
@@ -554,6 +629,13 @@ export function Messaging() {
         openingDirect={Boolean(profileUser && openingUserId === profileUser.id)}
         onOpenChange={setProfileDialogOpen}
         onStartDirectChat={handleStartDirectChat}
+      />
+      <ChatImagePreviewDialog
+        image={previewImage}
+        open={Boolean(previewImage)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewImage(null)
+        }}
       />
     </div>
   )

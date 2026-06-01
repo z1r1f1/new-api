@@ -16,8 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { useState } from 'react'
+import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
-import { extractMessageContentParts } from '../lib/message-content'
+import {
+  extractMessageContentParts,
+  type ChatImagePreview,
+} from '../lib/message-content'
+import { ChatImagePreviewDialog } from './chat-image-preview-dialog'
 
 interface MessageContentProps {
   body: string
@@ -25,39 +31,53 @@ interface MessageContentProps {
 }
 
 export function MessageContent(props: MessageContentProps) {
+  const { t } = useTranslation()
+  const [previewImage, setPreviewImage] = useState<ChatImagePreview | null>(
+    null
+  )
   const parts = extractMessageContentParts(props.body)
 
   return (
-    <div className='flex flex-col gap-2'>
-      {parts.map((part, index) => {
-        if (part.type === 'text') {
-          if (!part.text) return null
+    <>
+      <div className='flex flex-col gap-2'>
+        {parts.map((part, index) => {
+          if (part.type === 'text') {
+            if (!part.text) return null
+            return (
+              <span key={`text-${index}`} className='whitespace-pre-wrap'>
+                {part.text}
+              </span>
+            )
+          }
+          const alt = part.alt || t('Image Preview')
           return (
-            <span key={`text-${index}`} className='whitespace-pre-wrap'>
-              {part.text}
-            </span>
+            <button
+              key={`image-${index}`}
+              type='button'
+              onClick={() => setPreviewImage({ src: part.src, alt })}
+              className='focus-visible:ring-ring block max-w-full cursor-zoom-in rounded-2xl text-left transition-transform outline-none hover:scale-[1.01] focus-visible:ring-2 focus-visible:ring-offset-2'
+              aria-label={t('Image Preview')}
+            >
+              <img
+                src={part.src}
+                alt={alt}
+                loading='lazy'
+                className={cn(
+                  'max-h-80 max-w-full rounded-2xl border object-contain shadow-sm',
+                  props.mine ? 'border-primary-foreground/25' : 'border-border'
+                )}
+              />
+            </button>
           )
-        }
-        return (
-          <a
-            key={`image-${index}`}
-            href={part.src}
-            target='_blank'
-            rel='noreferrer'
-            className='block max-w-full'
-          >
-            <img
-              src={part.src}
-              alt={part.alt || 'pasted-image'}
-              loading='lazy'
-              className={cn(
-                'max-h-80 max-w-full rounded-2xl border object-contain shadow-sm',
-                props.mine ? 'border-primary-foreground/25' : 'border-border'
-              )}
-            />
-          </a>
-        )
-      })}
-    </div>
+        })}
+      </div>
+      <ChatImagePreviewDialog
+        image={previewImage}
+        open={Boolean(previewImage)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewImage(null)
+        }}
+      />
+    </>
   )
 }
