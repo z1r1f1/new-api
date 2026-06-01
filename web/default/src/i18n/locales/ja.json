@@ -4845,6 +4845,20 @@
     "Fire": "最高",
     "Ship it": "進めよう",
     "Watching": "見ています",
-    "You can select up to {{count}} stickers": "スタンプは最大 {{count}} 個まで選択できます"
+    "You can select up to {{count}} stickers": "スタンプは最大 {{count}} 個まで選択できます",
+    "Linux DO Credit": "Linux DO Credit",
+    "Linux DO Credit Gateway": "Linux DO Credit ゲートウェイ",
+    "Dedicated Linux DO Credit settings using the EasyPay-compatible API": "EasyPay 互換 API を使用する専用 Linux DO Credit 設定",
+    "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.": "Linux DO Credit の Client ID と Client Secret を使用します。上流の支払いタイプは自動的に epay として送信されます。",
+    "Linux DO Credit Client ID": "Linux DO Credit Client ID",
+    "Merchant Client ID from Linux DO Credit": "Linux DO Credit で発行された加盟店 Client ID",
+    "Enter new secret to update": "更新する新しいシークレットを入力",
+    "Payment endpoint": "支払いエンドポイント",
+    "Default: https://credit.linux.do/epay/pay": "デフォルト: https://credit.linux.do/epay/pay",
+    "Unit price (LDC / USD)": "単価 (LDC / USD)",
+    "How many Linux DO Credit points to charge for each US dollar of balance": "残高 1 米ドルあたりに請求する Linux DO Credit ポイント数",
+    "Smallest USD amount users can recharge": "ユーザーがチャージできる最小 USD 金額",
+    "Exchange Rate": "交換レート",
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
   }
 }

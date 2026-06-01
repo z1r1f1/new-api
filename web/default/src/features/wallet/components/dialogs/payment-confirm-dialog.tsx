@@ -31,7 +31,11 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DEFAULT_DISCOUNT_RATE } from '../../constants'
-import { formatCurrency, getPaymentIcon } from '../../lib'
+import {
+  formatCurrency,
+  getPaymentIcon,
+  isLinuxDoCreditPayment,
+} from '../../lib'
 import type { PaymentMethod } from '../../types'
 
 interface PaymentConfirmDialogProps {
@@ -63,6 +67,18 @@ export function PaymentConfirmDialog({
   const hasDiscount = discountRate > 0 && discountRate < 1 && paymentAmount > 0
   const originalAmount = hasDiscount ? paymentAmount / discountRate : 0
   const discountAmount = hasDiscount ? originalAmount - paymentAmount : 0
+  const usesLinuxDoCredit = isLinuxDoCreditPayment(paymentMethod?.type ?? '')
+  const formatPayAmount = (amount: number) => {
+    if (usesLinuxDoCredit) {
+      return `${formatCurrency(amount)} LDC`
+    }
+
+    return formatLocalCurrencyAmount(amount, {
+      digitsLarge: 2,
+      digitsSmall: 2,
+      abbreviate: false,
+    })
+  }
 
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
@@ -99,11 +115,11 @@ export function PaymentConfirmDialog({
             ) : (
               <div className='flex items-baseline gap-2'>
                 <span className='text-2xl font-semibold'>
-                  {formatCurrency(paymentAmount)}
+                  {formatPayAmount(paymentAmount)}
                 </span>
                 {hasDiscount && (
                   <span className='text-muted-foreground text-sm line-through'>
-                    {formatCurrency(originalAmount)}
+                    {formatPayAmount(originalAmount)}
                   </span>
                 )}
               </div>
@@ -115,7 +131,7 @@ export function PaymentConfirmDialog({
               <div className='flex items-center justify-between text-sm'>
                 <span className='text-muted-foreground'>{t('You save')}</span>
                 <span className='font-semibold text-green-600'>
-                  {formatCurrency(discountAmount)}
+                  {formatPayAmount(discountAmount)}
                 </span>
               </div>
             </div>

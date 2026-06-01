@@ -167,3 +167,50 @@ func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	operation_setting.PayMethods = nil
 	require.False(t, isEpayWebhookEnabled())
 }
+
+func TestLinuxDoCreditWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalClientID := setting.LinuxDoCreditClientID
+	originalClientSecret := setting.LinuxDoCreditClientSecret
+	originalBaseURL := setting.LinuxDoCreditBaseURL
+	t.Cleanup(func() {
+		setting.LinuxDoCreditClientID = originalClientID
+		setting.LinuxDoCreditClientSecret = originalClientSecret
+		setting.LinuxDoCreditBaseURL = originalBaseURL
+	})
+
+	setting.LinuxDoCreditClientID = "ldc_client_id"
+	setting.LinuxDoCreditClientSecret = ""
+	setting.LinuxDoCreditBaseURL = "https://credit.linux.do/epay/pay"
+	require.False(t, isLinuxDoCreditWebhookEnabled())
+
+	setting.LinuxDoCreditClientSecret = "ldc_client_secret"
+	require.True(t, isLinuxDoCreditWebhookEnabled())
+
+	setting.LinuxDoCreditBaseURL = ""
+	require.False(t, isLinuxDoCreditWebhookEnabled())
+}
+
+func TestLinuxDoCreditWebhookDisabledWithoutComplianceConfirmation(t *testing.T) {
+	paymentSetting := operation_setting.GetPaymentSetting()
+	originalConfirmed := paymentSetting.ComplianceConfirmed
+	originalTermsVersion := paymentSetting.ComplianceTermsVersion
+	originalClientID := setting.LinuxDoCreditClientID
+	originalClientSecret := setting.LinuxDoCreditClientSecret
+	originalBaseURL := setting.LinuxDoCreditBaseURL
+	t.Cleanup(func() {
+		paymentSetting.ComplianceConfirmed = originalConfirmed
+		paymentSetting.ComplianceTermsVersion = originalTermsVersion
+		setting.LinuxDoCreditClientID = originalClientID
+		setting.LinuxDoCreditClientSecret = originalClientSecret
+		setting.LinuxDoCreditBaseURL = originalBaseURL
+	})
+
+	paymentSetting.ComplianceConfirmed = false
+	paymentSetting.ComplianceTermsVersion = operation_setting.CurrentComplianceTermsVersion
+	setting.LinuxDoCreditClientID = "ldc_client_id"
+	setting.LinuxDoCreditClientSecret = "ldc_client_secret"
+	setting.LinuxDoCreditBaseURL = "https://credit.linux.do/epay/pay"
+
+	require.False(t, isLinuxDoCreditWebhookEnabled())
+}

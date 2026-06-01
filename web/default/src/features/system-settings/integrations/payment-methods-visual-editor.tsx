@@ -40,47 +40,12 @@ import {
   PaymentMethodDialog,
   type PaymentMethodData,
 } from './payment-method-dialog'
+import { PAYMENT_METHOD_TEMPLATES } from './payment-method-options'
 
 type PaymentMethodsVisualEditorProps = {
   value: string
   onChange: (value: string) => void
 }
-
-const PAYMENT_TEMPLATES = [
-  {
-    name: 'Alipay',
-    template: {
-      color: 'rgba(var(--semi-blue-5), 1)',
-      name: '支付宝',
-      type: 'alipay',
-    },
-  },
-  {
-    name: 'WeChat Pay',
-    template: {
-      color: 'rgba(var(--semi-green-5), 1)',
-      name: '微信',
-      type: 'wxpay',
-    },
-  },
-  {
-    name: 'Stripe',
-    template: {
-      color: 'rgba(var(--semi-green-5), 1)',
-      name: 'Stripe',
-      type: 'stripe',
-    },
-  },
-  {
-    name: 'Custom',
-    template: {
-      color: 'black',
-      min_topup: '50',
-      name: '自定义1',
-      type: 'custom1',
-    },
-  },
-]
 
 export function PaymentMethodsVisualEditor({
   value,
@@ -245,7 +210,7 @@ export function PaymentMethodsVisualEditor({
                   {t('Quick insert common payment methods')}
                 </p>
                 <div className='space-y-1'>
-                  {PAYMENT_TEMPLATES.map((item) => (
+                  {PAYMENT_METHOD_TEMPLATES.map((item) => (
                     <Button
                       key={item.name}
                       type='button'
@@ -258,7 +223,7 @@ export function PaymentMethodsVisualEditor({
                       }}
                     >
                       <Plus className='mr-2 h-3 w-3' />
-                      {item.name}
+                      {t(item.name)}
                     </Button>
                   ))}
                 </div>

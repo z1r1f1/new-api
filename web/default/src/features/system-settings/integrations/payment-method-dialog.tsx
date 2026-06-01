@@ -41,6 +41,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { PAYMENT_METHOD_TYPE_OPTIONS } from './payment-method-options'
 
 const createPaymentMethodDialogSchema = (t: (key: string) => string) =>
   z.object({
@@ -67,12 +68,6 @@ type PaymentMethodDialogProps = {
   onSave: (data: PaymentMethodData) => void
   editData?: PaymentMethodData | null
 }
-
-const PAYMENT_TYPES = [
-  { value: 'alipay', label: 'Alipay' },
-  { value: 'wxpay', label: 'WeChat Pay' },
-  { value: 'stripe', label: 'Stripe' },
-]
 
 const getColorPreview = (color: string) => {
   if (color.includes('var(--')) {
@@ -126,6 +121,15 @@ export function PaymentMethodDialog({
   })
 
   const colorValue = form.watch('color')
+
+  const paymentTypeOptions = useMemo(
+    () =>
+      PAYMENT_METHOD_TYPE_OPTIONS.map((option) => ({
+        ...option,
+        label: t(option.label),
+      })),
+    [t]
+  )
 
   const colorPreview = useMemo(() => {
     if (!colorValue) return null
@@ -210,7 +214,7 @@ export function PaymentMethodDialog({
                   <FormLabel>{t('Type')}</FormLabel>
                   <FormControl>
                     <Combobox
-                      options={PAYMENT_TYPES}
+                      options={paymentTypeOptions}
                       value={field.value}
                       onValueChange={field.onChange}
                       placeholder={t('Select or enter payment type')}

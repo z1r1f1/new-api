@@ -142,6 +142,15 @@ const paymentSchema = z.object({
       })
     }
   }),
+  LinuxDoCreditClientID: z.string(),
+  LinuxDoCreditClientSecret: z.string(),
+  LinuxDoCreditBaseURL: z.string().refine((value) => {
+    const trimmed = value.trim()
+    if (!trimmed) return true
+    return /^https?:\/\//.test(trimmed)
+  }, 'Provide a valid URL starting with http:// or https://'),
+  LinuxDoCreditUnitPrice: z.coerce.number().min(0),
+  LinuxDoCreditMinTopUp: z.coerce.number().min(1),
   WaffoEnabled: z.boolean(),
   WaffoApiKey: z.string(),
   WaffoPrivateKey: z.string(),
@@ -419,6 +428,13 @@ export function PaymentSettingsSection({
       CreemWebhookSecret: values.CreemWebhookSecret.trim(),
       CreemTestMode: values.CreemTestMode,
       CreemProducts: values.CreemProducts.trim(),
+      LinuxDoCreditClientID: values.LinuxDoCreditClientID.trim(),
+      LinuxDoCreditClientSecret: values.LinuxDoCreditClientSecret.trim(),
+      LinuxDoCreditBaseURL: removeTrailingSlash(
+        values.LinuxDoCreditBaseURL.trim()
+      ),
+      LinuxDoCreditUnitPrice: values.LinuxDoCreditUnitPrice,
+      LinuxDoCreditMinTopUp: values.LinuxDoCreditMinTopUp,
       WaffoEnabled: values.WaffoEnabled,
       WaffoSandbox: values.WaffoSandbox,
       WaffoMerchantId: values.WaffoMerchantId.trim(),
@@ -464,6 +480,14 @@ export function PaymentSettingsSection({
       CreemWebhookSecret: initialRef.current.CreemWebhookSecret.trim(),
       CreemTestMode: initialRef.current.CreemTestMode,
       CreemProducts: initialRef.current.CreemProducts.trim(),
+      LinuxDoCreditClientID: initialRef.current.LinuxDoCreditClientID.trim(),
+      LinuxDoCreditClientSecret:
+        initialRef.current.LinuxDoCreditClientSecret.trim(),
+      LinuxDoCreditBaseURL: removeTrailingSlash(
+        initialRef.current.LinuxDoCreditBaseURL.trim()
+      ),
+      LinuxDoCreditUnitPrice: initialRef.current.LinuxDoCreditUnitPrice,
+      LinuxDoCreditMinTopUp: initialRef.current.LinuxDoCreditMinTopUp,
       WaffoEnabled: initialRef.current.WaffoEnabled,
       WaffoSandbox: initialRef.current.WaffoSandbox,
       WaffoMerchantId: initialRef.current.WaffoMerchantId.trim(),
@@ -609,6 +633,44 @@ export function PaymentSettingsSection({
       normalizeJsonForComparison(initial.CreemProducts)
     ) {
       updates.push({ key: 'CreemProducts', value: sanitized.CreemProducts })
+    }
+
+    if (sanitized.LinuxDoCreditClientID !== initial.LinuxDoCreditClientID) {
+      updates.push({
+        key: 'LinuxDoCreditClientID',
+        value: sanitized.LinuxDoCreditClientID,
+      })
+    }
+
+    if (
+      sanitized.LinuxDoCreditClientSecret &&
+      sanitized.LinuxDoCreditClientSecret !== initial.LinuxDoCreditClientSecret
+    ) {
+      updates.push({
+        key: 'LinuxDoCreditClientSecret',
+        value: sanitized.LinuxDoCreditClientSecret,
+      })
+    }
+
+    if (sanitized.LinuxDoCreditBaseURL !== initial.LinuxDoCreditBaseURL) {
+      updates.push({
+        key: 'LinuxDoCreditBaseURL',
+        value: sanitized.LinuxDoCreditBaseURL,
+      })
+    }
+
+    if (sanitized.LinuxDoCreditUnitPrice !== initial.LinuxDoCreditUnitPrice) {
+      updates.push({
+        key: 'LinuxDoCreditUnitPrice',
+        value: sanitized.LinuxDoCreditUnitPrice,
+      })
+    }
+
+    if (sanitized.LinuxDoCreditMinTopUp !== initial.LinuxDoCreditMinTopUp) {
+      updates.push({
+        key: 'LinuxDoCreditMinTopUp',
+        value: sanitized.LinuxDoCreditMinTopUp,
+      })
     }
 
     if (sanitized.WaffoEnabled !== initial.WaffoEnabled) {
@@ -1173,6 +1235,154 @@ export function PaymentSettingsSection({
                     </FormControl>
                     <FormDescription>
                       {t('Leave blank unless rotating the secret')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+          </div>
+
+          <Separator />
+
+          <div className='space-y-4'>
+            <div>
+              <h3 className='text-lg font-medium'>
+                {t('Linux DO Credit Gateway')}
+              </h3>
+              <p className='text-muted-foreground text-sm'>
+                {t(
+                  'Dedicated Linux DO Credit settings using the EasyPay-compatible API'
+                )}
+              </p>
+            </div>
+
+            <div className='rounded-md bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-100'>
+              <p className='mb-2 font-medium'>{t('Webhook Configuration:')}</p>
+              <ul className='list-inside list-disc space-y-1'>
+                <li>
+                  {t('Webhook URL:')}{' '}
+                  <code className='rounded bg-blue-100 px-1 py-0.5 text-xs dark:bg-blue-900'>
+                    {'<ServerAddress>/api/user/linuxdo-credit/notify'}
+                  </code>
+                </li>
+                <li>
+                  {t(
+                    'Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.'
+                  )}
+                </li>
+              </ul>
+            </div>
+
+            <div className='grid gap-6 md:grid-cols-3'>
+              <FormField
+                control={form.control}
+                name='LinuxDoCreditClientID'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Client ID')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder={t('Linux DO Credit Client ID')}
+                        autoComplete='off'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Merchant Client ID from Linux DO Credit')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='LinuxDoCreditClientSecret'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Client Secret')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='password'
+                        placeholder={t('Enter new secret to update')}
+                        autoComplete='new-password'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Leave blank unless rotating the secret')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='LinuxDoCreditBaseURL'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Payment endpoint')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        placeholder='https://credit.linux.do/epay/pay'
+                        {...field}
+                        onChange={(event) => field.onChange(event.target.value)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Default: https://credit.linux.do/epay/pay')}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <div className='grid gap-6 md:grid-cols-2'>
+              <FormField
+                control={form.control}
+                name='LinuxDoCreditUnitPrice'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Unit price (LDC / USD)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        step='0.01'
+                        min={0}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'How many Linux DO Credit points to charge for each US dollar of balance'
+                      )}
+                    </FormDescription>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name='LinuxDoCreditMinTopUp'
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t('Minimum top-up (USD)')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='number'
+                        step='1'
+                        min={1}
+                        {...safeNumberFieldProps(field)}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t('Smallest USD amount users can recharge')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

@@ -16,10 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useEffect } from 'react'
 import { Gift, ExternalLink, Loader2, Receipt, WalletCards } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { formatNumber } from '@/lib/format'
+import { getCurrencyLabel } from '@/lib/currency'
 import { cn } from '@/lib/utils'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
@@ -40,6 +39,8 @@ import {
   getPaymentIcon,
   getMinTopupAmount,
   calculatePresetPricing,
+  formatLinuxDoCreditExchangeRatio,
+  isLinuxDoCreditPayment,
 } from '../lib'
 import type {
   PaymentMethod,
@@ -60,6 +61,8 @@ interface RechargeFormCardProps {
   paymentAmount: number
   calculating: boolean
   onPaymentMethodSelect: (method: PaymentMethod) => void
+  onPaymentSubmit: () => void
+  selectedPaymentMethodType?: string
   paymentLoading: string | null
   redemptionCode: string
   onRedemptionCodeChange: (code: string) => void
@@ -90,6 +93,8 @@ export function RechargeFormCard({
   paymentAmount,
   calculating,
   onPaymentMethodSelect,
+  onPaymentSubmit,
+  selectedPaymentMethodType,
   paymentLoading,
   redemptionCode,
   onRedemptionCodeChange,
@@ -110,14 +115,8 @@ export function RechargeFormCard({
   enableWaffoPancakeTopup,
 }: RechargeFormCardProps) {
   const { t } = useTranslation()
-  const [localAmount, setLocalAmount] = useState(topupAmount.toString())
-
-  useEffect(() => {
-    setLocalAmount(topupAmount.toString())
-  }, [topupAmount])
 
   const handleAmountChange = (value: string) => {
-    setLocalAmount(value)
     const numValue = parseInt(value) || 0
     if (numValue >= 0) {
       onTopupAmountChange(numValue)
@@ -128,7 +127,8 @@ export function RechargeFormCard({
     topupInfo?.enable_online_topup ||
     topupInfo?.enable_stripe_topup ||
     enableWaffoTopup ||
-    enableWaffoPancakeTopup
+    enableWaffoPancakeTopup ||
+    topupInfo?.enable_linuxdo_credit_topup
   const hasAnyTopup = hasConfigurableTopup || enableCreemTopup
   const hasStandardPaymentMethods =
     Array.isArray(topupInfo?.pay_methods) && topupInfo.pay_methods.length > 0
@@ -136,6 +136,29 @@ export function RechargeFormCard({
     Array.isArray(waffoPayMethods) && waffoPayMethods.length > 0
   const minTopup = getMinTopupAmount(topupInfo)
   const redemptionEnabled = topupInfo?.enable_redemption !== false
+  const linuxDoCreditExchangeRatio = formatLinuxDoCreditExchangeRatio(
+    topupInfo?.linuxdo_credit_unit_price
+  )
+  const currencyLabel = getCurrencyLabel()
+  const configuredCurrencyUnit = t(currencyLabel)
+  const amountDisplayUnit = configuredCurrencyUnit
+  const billingCurrencyUnit =
+    currencyLabel === 'Tokens' ? t('USD') : configuredCurrencyUnit
+  const linuxDoCreditUnit = 'LDC'
+  const linuxDoCreditUnitPrice = topupInfo?.linuxdo_credit_unit_price
+  const useLinuxDoCreditPresetPricing =
+    !!selectedPaymentMethodType &&
+    isLinuxDoCreditPayment(selectedPaymentMethodType) &&
+    typeof linuxDoCreditUnitPrice === 'number' &&
+    Number.isFinite(linuxDoCreditUnitPrice) &&
+    linuxDoCreditUnitPrice > 0
+  const selectedPaymentAmountUnit =
+    selectedPaymentMethodType &&
+    isLinuxDoCreditPayment(selectedPaymentMethodType)
+      ? linuxDoCreditUnit
+      : billingCurrencyUnit
+  const formatAmountWithUnit = (amount: number, unit: string) =>
+    `${formatCurrency(amount)} ${unit}`
 
   if (loading) {
     return (
@@ -213,9 +236,14 @@ export function RechargeFormCard({
             <>
               {presetAmounts.length > 0 && (
                 <div className='space-y-2.5 sm:space-y-3'>
-                  <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-                    {t('Amount')}
-                  </Label>
+                  <div className='flex items-center justify-between gap-2'>
+                    <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
+                      {t('Amount')}
+                    </Label>
+                    <span className='text-muted-foreground text-xs font-medium'>
+                      {amountDisplayUnit}
+                    </span>
+                  </div>
                   <div className='grid grid-cols-2 gap-1.5 sm:gap-3 md:grid-cols-4'>
                     {presetAmounts.map((preset, index) => {
                       const discount =
@@ -233,6 +261,17 @@ export function RechargeFormCard({
                         discount,
                         usdExchangeRate
                       )
+                      const presetPayAmount = useLinuxDoCreditPresetPricing
+                        ? preset.value * linuxDoCreditUnitPrice * discount
+                        : actualPrice
+                      const presetSavedAmount = useLinuxDoCreditPresetPricing
+                        ? preset.value * linuxDoCreditUnitPrice -
+                          presetPayAmount
+                        : savedAmount
+                      const presetPayUnit = useLinuxDoCreditPresetPricing
+                        ? linuxDoCreditUnit
+                        : billingCurrencyUnit
+
                       return (
                         <Button
                           key={index}
@@ -247,7 +286,10 @@ export function RechargeFormCard({
                         >
                           <div className='flex w-full items-center justify-between'>
                             <div className='text-base font-semibold sm:text-lg'>
-                              {formatNumber(displayValue)}
+                              {formatAmountWithUnit(
+                                displayValue,
+                                amountDisplayUnit
+                              )}
                             </div>
                             {hasDiscount && (
                               <div className='text-xs font-medium text-green-600'>
@@ -256,11 +298,19 @@ export function RechargeFormCard({
                             )}
                           </div>
                           <div className='text-muted-foreground mt-1.5 w-full text-xs sm:mt-2'>
-                            Pay {formatCurrency(actualPrice)}
-                            {hasDiscount && savedAmount > 0 && (
+                            {t('Pay')}{' '}
+                            {formatAmountWithUnit(
+                              presetPayAmount,
+                              presetPayUnit
+                            )}
+                            {hasDiscount && presetSavedAmount > 0 && (
                               <span className='text-green-600'>
                                 {' '}
-                                • Save {formatCurrency(savedAmount)}
+                                • {t('Save')}{' '}
+                                {formatAmountWithUnit(
+                                  presetSavedAmount,
+                                  presetPayUnit
+                                )}
                               </span>
                             )}
                           </div>
@@ -272,22 +322,37 @@ export function RechargeFormCard({
               )}
 
               <div className='space-y-2.5 sm:space-y-3'>
-                <Label
-                  htmlFor='topup-amount'
-                  className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
-                >
-                  {t('Custom Amount')}
-                </Label>
+                <div className='flex items-center justify-between gap-2'>
+                  <Label
+                    htmlFor='topup-amount'
+                    className='text-muted-foreground text-xs font-medium tracking-wider uppercase'
+                  >
+                    {t('Custom Amount')}
+                  </Label>
+                  <span className='text-muted-foreground text-xs font-medium'>
+                    {amountDisplayUnit}
+                  </span>
+                </div>
                 <div className='grid grid-cols-[minmax(0,1fr)_minmax(110px,0.55fr)] gap-2 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center'>
-                  <Input
-                    id='topup-amount'
-                    type='number'
-                    value={localAmount}
-                    onChange={(e) => handleAmountChange(e.target.value)}
-                    min={minTopup}
-                    placeholder={`Minimum ${minTopup}`}
-                    className='h-9 text-base sm:h-10 sm:text-lg'
-                  />
+                  <div className='relative'>
+                    <Input
+                      id='topup-amount'
+                      type='number'
+                      value={topupAmount > 0 ? topupAmount.toString() : ''}
+                      onChange={(e) => handleAmountChange(e.target.value)}
+                      min={minTopup}
+                      placeholder={t('Minimum topup amount: {{amount}}', {
+                        amount: formatAmountWithUnit(
+                          minTopup,
+                          amountDisplayUnit
+                        ),
+                      })}
+                      className='h-9 pr-14 text-base sm:h-10 sm:text-lg'
+                    />
+                    <span className='text-muted-foreground pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 text-xs font-medium'>
+                      {amountDisplayUnit}
+                    </span>
+                  </div>
                   <div className='bg-muted/30 flex min-h-9 items-center justify-between gap-2 rounded-md border px-3 lg:min-w-52'>
                     <span className='text-muted-foreground truncate text-xs'>
                       {t('Amount to pay:')}
@@ -296,7 +361,10 @@ export function RechargeFormCard({
                       <Skeleton className='h-5 w-16' />
                     ) : (
                       <span className='text-sm font-semibold'>
-                        {formatCurrency(paymentAmount)}
+                        {formatAmountWithUnit(
+                          paymentAmount,
+                          selectedPaymentAmountUnit
+                        )}
                       </span>
                     )}
                   </div>
@@ -304,52 +372,87 @@ export function RechargeFormCard({
               </div>
 
               <div className='space-y-2.5 sm:space-y-3'>
-                <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
-                  {t('Payment Method')}
-                </Label>
+                <div className='flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between'>
+                  <Label className='text-muted-foreground text-xs font-medium tracking-wider uppercase'>
+                    {t('Payment Method')}
+                  </Label>
+                  {topupInfo?.enable_linuxdo_credit_topup &&
+                    linuxDoCreditExchangeRatio && (
+                      <div className='bg-muted/30 text-muted-foreground inline-flex w-fit items-center gap-2 rounded-md border px-2.5 py-1 text-xs'>
+                        <span>{t('Exchange Rate')}</span>
+                        <span className='text-foreground font-mono font-medium'>
+                          {t('LDC:USD = {{ratio}}', {
+                            ratio: linuxDoCreditExchangeRatio,
+                          })}
+                        </span>
+                      </div>
+                    )}
+                </div>
                 {hasStandardPaymentMethods ? (
-                  <div className='grid grid-cols-2 gap-1.5 sm:gap-3 lg:grid-cols-3'>
-                    {topupInfo?.pay_methods?.map((method) => {
-                      const minTopup = method.min_topup || 0
-                      const disabled = minTopup > topupAmount
+                  <div className='grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2 sm:gap-3'>
+                    <div className='grid min-w-0 grid-cols-1 gap-1.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3'>
+                      {topupInfo?.pay_methods?.map((method) => {
+                        const minTopup = method.min_topup || 0
+                        const disabled = minTopup > topupAmount
+                        const selected =
+                          selectedPaymentMethodType === method.type
 
-                      const button = (
-                        <Button
-                          key={method.type}
-                          variant='outline'
-                          onClick={() => onPaymentMethodSelect(method)}
-                          disabled={disabled || !!paymentLoading}
-                          className='h-9 min-w-0 justify-start gap-2 rounded-lg px-3'
-                        >
-                          {paymentLoading === method.type ? (
-                            <Loader2 className='h-4 w-4 animate-spin' />
-                          ) : (
-                            getPaymentIcon(
+                        const button = (
+                          <Button
+                            key={method.type}
+                            variant='outline'
+                            onClick={() => onPaymentMethodSelect(method)}
+                            disabled={disabled || !!paymentLoading}
+                            className={cn(
+                              'h-9 min-w-0 justify-start gap-2 rounded-lg px-3',
+                              selected &&
+                                'border-foreground bg-foreground/5 dark:bg-foreground/10'
+                            )}
+                          >
+                            {getPaymentIcon(
                               method.type,
                               'h-4 w-4',
                               method.icon,
                               method.name
-                            )
-                          )}
-                          <span className='truncate'>{method.name}</span>
-                        </Button>
-                      )
+                            )}
+                            <span className='truncate'>{method.name}</span>
+                          </Button>
+                        )
 
-                      return disabled ? (
-                        <TooltipProvider key={method.type}>
-                          <Tooltip>
-                            <TooltipTrigger render={button}></TooltipTrigger>
-                            <TooltipContent>
-                              {t('Minimum topup amount: {{amount}}', {
-                                amount: minTopup,
-                              })}
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      ) : (
-                        button
-                      )
-                    })}
+                        return disabled ? (
+                          <TooltipProvider key={method.type}>
+                            <Tooltip>
+                              <TooltipTrigger render={button}></TooltipTrigger>
+                              <TooltipContent>
+                                {t('Minimum topup amount: {{amount}}', {
+                                  amount: formatAmountWithUnit(
+                                    minTopup,
+                                    amountDisplayUnit
+                                  ),
+                                })}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        ) : (
+                          button
+                        )
+                      })}
+                    </div>
+                    <Button
+                      type='button'
+                      onClick={onPaymentSubmit}
+                      disabled={
+                        calculating ||
+                        !!paymentLoading ||
+                        !selectedPaymentMethodType
+                      }
+                      className='h-9 min-w-20 gap-2 px-4 sm:min-w-24'
+                    >
+                      {paymentLoading && (
+                        <Loader2 className='h-4 w-4 animate-spin' />
+                      )}
+                      {t('Pay')}
+                    </Button>
                   </div>
                 ) : hasWaffoPaymentMethods ? null : (
                   <Alert>
@@ -404,7 +507,10 @@ export function RechargeFormCard({
                               <TooltipTrigger render={button}></TooltipTrigger>
                               <TooltipContent>
                                 {t('Minimum topup amount: {{amount}}', {
-                                  amount: waffoMin,
+                                  amount: formatAmountWithUnit(
+                                    waffoMin,
+                                    amountDisplayUnit
+                                  ),
                                 })}
                               </TooltipContent>
                             </Tooltip>

@@ -4845,6 +4845,20 @@
     "Fire": "Fire",
     "Ship it": "Ship it",
     "Watching": "Watching",
-    "You can select up to {{count}} stickers": "You can select up to {{count}} stickers"
+    "You can select up to {{count}} stickers": "You can select up to {{count}} stickers",
+    "Linux DO Credit": "Linux DO Credit",
+    "Linux DO Credit Gateway": "Linux DO Credit Gateway",
+    "Dedicated Linux DO Credit settings using the EasyPay-compatible API": "Dedicated Linux DO Credit settings using the EasyPay-compatible API",
+    "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.": "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.",
+    "Linux DO Credit Client ID": "Linux DO Credit Client ID",
+    "Merchant Client ID from Linux DO Credit": "Merchant Client ID from Linux DO Credit",
+    "Enter new secret to update": "Enter new secret to update",
+    "Payment endpoint": "Payment endpoint",
+    "Default: https://credit.linux.do/epay/pay": "Default: https://credit.linux.do/epay/pay",
+    "Unit price (LDC / USD)": "Unit price (LDC / USD)",
+    "How many Linux DO Credit points to charge for each US dollar of balance": "How many Linux DO Credit points to charge for each US dollar of balance",
+    "Smallest USD amount users can recharge": "Smallest USD amount users can recharge",
+    "Exchange Rate": "Exchange Rate",
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
   }
 }

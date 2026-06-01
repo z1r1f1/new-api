@@ -21,8 +21,9 @@ import {
   DEFAULT_PRESET_MULTIPLIERS,
   DEFAULT_PAYMENT_TYPE,
   DEFAULT_MIN_TOPUP,
+  PAYMENT_ICON_COLORS,
 } from '../constants'
-import type { PresetAmount, TopupInfo } from '../types'
+import type { PaymentMethod, PresetAmount, TopupInfo } from '../types'
 
 // ============================================================================
 // Payment Processing Functions
@@ -87,6 +88,13 @@ export function isWaffoPancakePayment(paymentType: string): boolean {
 }
 
 /**
+ * Check if payment method is Linux DO Credit
+ */
+export function isLinuxDoCreditPayment(paymentType: string): boolean {
+  return paymentType === PAYMENT_TYPES.LINUXDO_CREDIT
+}
+
+/**
  * Get default payment type from topup info
  */
 export function getDefaultPaymentType(topupInfo: TopupInfo | null): string {
@@ -111,7 +119,68 @@ export function getDefaultPaymentType(topupInfo: TopupInfo | null): string {
     return PAYMENT_TYPES.WAFFO_PANCAKE
   }
 
+  if (topupInfo.enable_linuxdo_credit_topup) {
+    return PAYMENT_TYPES.LINUXDO_CREDIT
+  }
+
   return DEFAULT_PAYMENT_TYPE
+}
+
+/**
+ * Get the default selectable payment method from topup info.
+ */
+export function getDefaultPaymentMethod(
+  topupInfo: TopupInfo | null
+): PaymentMethod | undefined {
+  const paymentType = getDefaultPaymentType(topupInfo)
+  const configuredMethod = topupInfo?.pay_methods?.find(
+    (method) => method.type === paymentType
+  )
+
+  if (configuredMethod) {
+    return configuredMethod
+  }
+
+  if (paymentType === PAYMENT_TYPES.STRIPE && topupInfo?.enable_stripe_topup) {
+    return {
+      color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.STRIPE],
+      min_topup: topupInfo.stripe_min_topup,
+      name: 'Stripe',
+      type: PAYMENT_TYPES.STRIPE,
+    }
+  }
+
+  if (
+    paymentType === PAYMENT_TYPES.LINUXDO_CREDIT &&
+    topupInfo?.enable_linuxdo_credit_topup
+  ) {
+    return {
+      color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.LINUXDO_CREDIT],
+      min_topup: topupInfo.linuxdo_credit_min_topup,
+      name: 'Linux DO Credit',
+      type: PAYMENT_TYPES.LINUXDO_CREDIT,
+    }
+  }
+
+  return undefined
+}
+
+/**
+ * Format Linux DO Credit exchange ratio for display.
+ */
+export function formatLinuxDoCreditExchangeRatio(
+  unitPrice?: number | null
+): string | null {
+  if (typeof unitPrice !== 'number' || !Number.isFinite(unitPrice)) {
+    return null
+  }
+
+  if (unitPrice <= 0) {
+    return null
+  }
+
+  const normalized = Number.parseFloat(unitPrice.toFixed(6))
+  return `${normalized}:1`
 }
 
 /**
@@ -136,6 +205,10 @@ export function getMinTopupAmount(topupInfo: TopupInfo | null): number {
 
   if (topupInfo.enable_waffo_pancake_topup) {
     return topupInfo.waffo_pancake_min_topup || DEFAULT_MIN_TOPUP
+  }
+
+  if (topupInfo.enable_linuxdo_credit_topup) {
+    return topupInfo.linuxdo_credit_min_topup || DEFAULT_MIN_TOPUP
   }
 
   return DEFAULT_MIN_TOPUP

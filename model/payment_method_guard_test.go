@@ -102,6 +102,64 @@ func TestRechargeWaffoPancake_RejectsMismatchedPaymentMethod(t *testing.T) {
 	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, 101))
 }
 
+func TestRechargeLinuxDoCredit_CompletesMatchingPendingOrderOnce(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 111, 0)
+	topUp := &TopUp{
+		UserId:          111,
+		Amount:          3,
+		Money:           12.3,
+		TradeNo:         "linuxdo-credit-ok",
+		PaymentMethod:   PaymentMethodLinuxDoCredit,
+		PaymentProvider: PaymentProviderLinuxDoCredit,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	require.NoError(t, RechargeLinuxDoCredit("linuxdo-credit-ok", "12.30", "127.0.0.1"))
+	assert.Equal(t, common.TopUpStatusSuccess, getTopUpStatusForPaymentGuardTest(t, "linuxdo-credit-ok"))
+	assert.Equal(t, int(3*common.QuotaPerUnit), getUserQuotaForPaymentGuardTest(t, 111))
+
+	require.NoError(t, RechargeLinuxDoCredit("linuxdo-credit-ok", "12.30", "127.0.0.1"))
+	assert.Equal(t, int(3*common.QuotaPerUnit), getUserQuotaForPaymentGuardTest(t, 111))
+}
+
+func TestRechargeLinuxDoCredit_RejectsMismatchedPaymentProvider(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 112, 0)
+	insertTopUpForPaymentGuardTest(t, "linuxdo-credit-provider-mismatch", 112, PaymentProviderEpay)
+
+	err := RechargeLinuxDoCredit("linuxdo-credit-provider-mismatch", "9.99", "127.0.0.1")
+	require.ErrorIs(t, err, ErrPaymentMethodMismatch)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "linuxdo-credit-provider-mismatch"))
+	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, 112))
+}
+
+func TestRechargeLinuxDoCredit_RejectsMismatchedCallbackMoney(t *testing.T) {
+	truncateTables(t)
+
+	insertUserForPaymentGuardTest(t, 113, 0)
+	topUp := &TopUp{
+		UserId:          113,
+		Amount:          2,
+		Money:           8.88,
+		TradeNo:         "linuxdo-credit-money-mismatch",
+		PaymentMethod:   PaymentMethodLinuxDoCredit,
+		PaymentProvider: PaymentProviderLinuxDoCredit,
+		Status:          common.TopUpStatusPending,
+		CreateTime:      time.Now().Unix(),
+	}
+	require.NoError(t, topUp.Insert())
+
+	err := RechargeLinuxDoCredit("linuxdo-credit-money-mismatch", "8.87", "127.0.0.1")
+	require.ErrorIs(t, err, ErrPaymentAmountMismatch)
+	assert.Equal(t, common.TopUpStatusPending, getTopUpStatusForPaymentGuardTest(t, "linuxdo-credit-money-mismatch"))
+	assert.Equal(t, 0, getUserQuotaForPaymentGuardTest(t, 113))
+}
+
 func TestUpdatePendingTopUpStatus_RejectsMismatchedPaymentProvider(t *testing.T) {
 	testCases := []struct {
 		name                    string

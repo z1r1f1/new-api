@@ -76,6 +76,8 @@ func SetApiRouter(router *gin.Engine) {
 			userRoute.GET("/logout", controller.Logout)
 			userRoute.POST("/epay/notify", controller.EpayNotify)
 			userRoute.GET("/epay/notify", controller.EpayNotify)
+			userRoute.POST("/linuxdo-credit/notify", controller.LinuxDoCreditNotify)
+			userRoute.GET("/linuxdo-credit/notify", controller.LinuxDoCreditNotify)
 			userRoute.GET("/groups", controller.GetUserGroups)
 
 			selfRoute := userRoute.Group("/")
@@ -99,6 +101,8 @@ func SetApiRouter(router *gin.Engine) {
 				selfRoute.POST("/topup", middleware.CriticalRateLimit(), controller.TopUp)
 				selfRoute.POST("/pay", middleware.CriticalRateLimit(), controller.RequestEpay)
 				selfRoute.POST("/amount", controller.RequestAmount)
+				selfRoute.POST("/linuxdo-credit/amount", controller.RequestLinuxDoCreditAmount)
+				selfRoute.POST("/linuxdo-credit/pay", middleware.CriticalRateLimit(), controller.RequestLinuxDoCreditPay)
 				selfRoute.POST("/stripe/pay", middleware.CriticalRateLimit(), controller.RequestStripePay)
 				selfRoute.POST("/stripe/amount", controller.RequestStripeAmount)
 				selfRoute.POST("/creem/pay", middleware.CriticalRateLimit(), controller.RequestCreemPay)

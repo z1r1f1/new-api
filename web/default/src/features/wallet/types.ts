@@ -59,6 +59,7 @@ export type WaffoPancakePaymentResponse = ApiResponse<
     }
   | string
 >
+export type LinuxDoCreditPaymentResponse = PaymentResponse
 
 /**
  * Creem product configuration
@@ -150,6 +151,12 @@ export interface TopupInfo {
   enable_waffo_pancake_topup?: boolean
   /** Minimum topup amount for Waffo Pancake */
   waffo_pancake_min_topup?: number
+  /** Whether Linux DO Credit topup is enabled */
+  enable_linuxdo_credit_topup?: boolean
+  /** Minimum topup amount for Linux DO Credit */
+  linuxdo_credit_min_topup?: number
+  /** Linux DO Credit points charged per USD */
+  linuxdo_credit_unit_price?: number
   /** Whether redemption code usage is enabled */
   enable_redemption?: boolean
   /** Whether compliance confirmation has been completed */

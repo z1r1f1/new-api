@@ -4845,6 +4845,20 @@
     "Fire": "Excellent",
     "Ship it": "On y va",
     "Watching": "Je regarde",
-    "You can select up to {{count}} stickers": "Vous pouvez sélectionner jusqu’à {{count}} autocollants"
+    "You can select up to {{count}} stickers": "Vous pouvez sélectionner jusqu’à {{count}} autocollants",
+    "Linux DO Credit": "Linux DO Credit",
+    "Linux DO Credit Gateway": "Passerelle Linux DO Credit",
+    "Dedicated Linux DO Credit settings using the EasyPay-compatible API": "Paramètres Linux DO Credit dédiés utilisant l’API compatible EasyPay",
+    "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.": "Utilisez votre Client ID et votre Client Secret Linux DO Credit ; le type de paiement amont est envoyé automatiquement comme epay.",
+    "Linux DO Credit Client ID": "Client ID Linux DO Credit",
+    "Merchant Client ID from Linux DO Credit": "Client ID marchand fourni par Linux DO Credit",
+    "Enter new secret to update": "Saisissez un nouveau secret pour le mettre à jour",
+    "Payment endpoint": "Point de terminaison de paiement",
+    "Default: https://credit.linux.do/epay/pay": "Par défaut : https://credit.linux.do/epay/pay",
+    "Unit price (LDC / USD)": "Prix unitaire (LDC / USD)",
+    "How many Linux DO Credit points to charge for each US dollar of balance": "Nombre de points Linux DO Credit à facturer pour chaque dollar US de solde",
+    "Smallest USD amount users can recharge": "Montant minimal en USD que les utilisateurs peuvent recharger",
+    "Exchange Rate": "Taux de change",
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
   }
 }

@@ -108,3 +108,20 @@ func isEpayWebhookConfigured() bool {
 func isEpayWebhookEnabled() bool {
 	return isEpayTopUpEnabled()
 }
+
+func isLinuxDoCreditTopUpEnabled() bool {
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	return isLinuxDoCreditWebhookConfigured()
+}
+
+func isLinuxDoCreditWebhookConfigured() bool {
+	return strings.TrimSpace(setting.LinuxDoCreditClientID) != "" &&
+		strings.TrimSpace(setting.LinuxDoCreditClientSecret) != "" &&
+		strings.TrimSpace(setting.LinuxDoCreditBaseURL) != ""
+}
+
+func isLinuxDoCreditWebhookEnabled() bool {
+	return isLinuxDoCreditTopUpEnabled()
+}
