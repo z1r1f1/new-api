@@ -16,23 +16,41 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo } from 'react'
-import { AtSign, Loader2, Send } from 'lucide-react'
+import { useMemo, type ClipboardEvent } from 'react'
+import { AtSign, ImagePlus, Loader2, Reply, Send, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { getChatUserDisplayName } from '../lib/format'
+import {
+  isChatMessageSendable,
+  type ChatImageAttachment,
+  type ChatReplyReference,
+  type ChatSticker,
+} from '../lib/message-content'
 import type { ChatUser } from '../types'
+import { ChatStickerPicker } from './chat-sticker-picker'
 
 interface MessageComposerProps {
   value: string
   active: boolean
   sending: boolean
+  processingImages: boolean
   maxLength: number
   mentionUsers: ChatUser[]
+  attachments: ChatImageAttachment[]
+  stickers: ChatSticker[]
+  availableStickers: ChatSticker[]
+  replyTo: ChatReplyReference | null
   onChange: (value: string) => void
   onSend: () => void
+  onPasteImages: (files: File[]) => void
+  onRemoveAttachment: (id: string) => void
+  onPreviewAttachment: (attachment: ChatImageAttachment) => void
+  onSelectSticker: (sticker: ChatSticker) => void
+  onRemoveSticker: (index: number) => void
+  onCancelReply: () => void
 }
 
 export function MessageComposer(props: MessageComposerProps) {
@@ -45,6 +63,11 @@ export function MessageComposer(props: MessageComposerProps) {
   )
   const showMentionCandidates = Boolean(
     props.active && !props.sending && mentionQuery !== null
+  )
+  const hasContent = isChatMessageSendable(
+    props.value,
+    props.attachments,
+    props.stickers
   )
 
   const handleMention = (user: ChatUser): void => {
@@ -59,6 +82,13 @@ export function MessageComposer(props: MessageComposerProps) {
       return
     }
     props.onChange(`${props.value.slice(0, atIndex)}${mention}`)
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const files = getImageFilesFromClipboard(event)
+    if (files.length === 0) return
+    event.preventDefault()
+    props.onPasteImages(files)
   }
 
   return (
@@ -89,10 +119,84 @@ export function MessageComposer(props: MessageComposerProps) {
             </div>
           </div>
         )}
+        {(props.attachments.length > 0 || props.stickers.length > 0) && (
+          <div className='mb-1 max-w-full overflow-x-auto border-b pb-1.5'>
+            <div className='flex w-max items-center gap-1.5'>
+              {props.attachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className='group/attachment bg-muted relative size-12 shrink-0 overflow-hidden rounded-lg border'
+                >
+                  <button
+                    type='button'
+                    className='focus-visible:ring-ring block size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-inset'
+                    onClick={() => props.onPreviewAttachment(attachment)}
+                    aria-label={t('Image Preview')}
+                  >
+                    <img
+                      src={attachment.dataUrl}
+                      alt={attachment.name}
+                      className='size-full object-cover'
+                    />
+                  </button>
+                  <button
+                    type='button'
+                    className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/attachment:opacity-100 focus:opacity-100'
+                    onClick={() => props.onRemoveAttachment(attachment.id)}
+                    aria-label={t('Remove image')}
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </div>
+              ))}
+              {props.stickers.map((sticker, index) => (
+                <div
+                  key={`${sticker.id}-${index}`}
+                  className={cn(
+                    'group/sticker relative flex size-12 shrink-0 items-center justify-center rounded-lg border bg-gradient-to-br',
+                    sticker.accent
+                  )}
+                >
+                  <span className='text-2xl leading-none'>{sticker.emoji}</span>
+                  <button
+                    type='button'
+                    className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/sticker:opacity-100 focus:opacity-100'
+                    onClick={() => props.onRemoveSticker(index)}
+                    aria-label={t('Remove sticker')}
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {props.replyTo && (
+          <div className='bg-muted/60 border-primary/50 mb-2 flex items-start gap-2 rounded-xl border-l-4 px-3 py-2'>
+            <Reply className='text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0' />
+            <div className='min-w-0 flex-1'>
+              <div className='text-xs font-medium'>
+                {t('Replying to {{name}}', { name: props.replyTo.senderName })}
+              </div>
+              <div className='text-muted-foreground mt-0.5 line-clamp-2 text-xs'>
+                {props.replyTo.preview || t('Message')}
+              </div>
+            </div>
+            <button
+              type='button'
+              className='text-muted-foreground hover:text-foreground rounded-full p-0.5'
+              onClick={props.onCancelReply}
+              aria-label={t('Cancel reply')}
+            >
+              <X className='h-3.5 w-3.5' />
+            </button>
+          </div>
+        )}
         <Textarea
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
-          placeholder={t('Type a message...')}
+          onPaste={handlePaste}
+          placeholder={t('Paste images or type a message...')}
           disabled={!props.active || props.sending}
           className='min-h-20 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0'
           onKeyDown={(event) => {
@@ -103,27 +207,63 @@ export function MessageComposer(props: MessageComposerProps) {
           }}
         />
         <div className='flex items-center justify-between gap-3 border-t pt-2'>
-          <span
-            className={cn(
-              'text-muted-foreground px-1 text-xs tabular-nums',
-              remaining < 0 && 'text-destructive'
+          <div className='flex min-w-0 flex-wrap items-center gap-2'>
+            <span
+              className={cn(
+                'text-muted-foreground px-1 text-xs tabular-nums',
+                remaining < 0 && 'text-destructive'
+              )}
+            >
+              {t('{{count}} characters left', { count: remaining })}
+            </span>
+            {props.processingImages && (
+              <span className='text-muted-foreground flex items-center gap-1 text-xs'>
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                {t('Processing image...')}
+              </span>
             )}
-          >
-            {t('{{count}} characters left', { count: remaining })}
-          </span>
-          <Button
-            type='button'
-            onClick={props.onSend}
-            disabled={!props.active || props.sending || !props.value.trim()}
-            className='gap-2'
-          >
-            {props.sending ? (
-              <Loader2 className='h-4 w-4 animate-spin' />
-            ) : (
-              <Send className='h-4 w-4' />
+            {props.attachments.length > 0 && !props.processingImages && (
+              <span className='text-muted-foreground flex items-center gap-1 text-xs'>
+                <ImagePlus className='h-3.5 w-3.5' />
+                {t('{{count}} images attached', {
+                  count: props.attachments.length,
+                })}
+              </span>
             )}
-            {t('Send')}
-          </Button>
+            {props.stickers.length > 0 && !props.processingImages && (
+              <span className='text-muted-foreground flex items-center gap-1 text-xs'>
+                {t('{{count}} stickers selected', {
+                  count: props.stickers.length,
+                })}
+              </span>
+            )}
+          </div>
+          <div className='flex shrink-0 items-center gap-1'>
+            <ChatStickerPicker
+              stickers={props.availableStickers}
+              disabled={
+                !props.active || props.sending || props.processingImages
+              }
+              onSelectSticker={props.onSelectSticker}
+            />
+            <Button
+              type='button'
+              onClick={props.onSend}
+              disabled={
+                !props.active ||
+                props.sending ||
+                (!hasContent && !props.processingImages)
+              }
+              className='gap-2'
+            >
+              {props.sending || props.processingImages ? (
+                <Loader2 className='h-4 w-4 animate-spin' />
+              ) : (
+                <Send className='h-4 w-4' />
+              )}
+              {t('Send')}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
@@ -150,4 +290,17 @@ function filterMentionCandidates(
       )
     })
     .slice(0, 8)
+}
+
+function getImageFilesFromClipboard(
+  event: ClipboardEvent<HTMLTextAreaElement>
+): File[] {
+  const files: File[] = []
+  for (const item of Array.from(event.clipboardData.items)) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (!file?.type.startsWith('image/')) continue
+    files.push(file)
+  }
+  return files
 }

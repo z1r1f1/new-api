@@ -27,6 +27,7 @@ import {
   GlobeIcon,
   SendIcon,
   SquareIcon,
+  Trash2Icon,
   BarChartIcon,
   BoxIcon,
   NotepadTextIcon,
@@ -35,6 +36,7 @@ import {
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -73,6 +75,8 @@ interface PlaygroundInputProps {
   showModelControls?: boolean
   searchEnabled?: boolean
   onSearchEnabledChange?: (value: boolean) => void
+  hasMessages?: boolean
+  onClearMessages?: () => void
 }
 
 const suggestions = [
@@ -382,9 +386,12 @@ export function PlaygroundInput({
   showModelControls = true,
   searchEnabled = false,
   onSearchEnabledChange,
+  hasMessages = false,
+  onClearMessages,
 }: PlaygroundInputProps) {
   const { t } = useTranslation()
   const [text, setText] = useState('')
+  const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
 
   const isModelSelectDisabled =
     disabled || isModelLoading || models.length === 0
@@ -418,6 +425,39 @@ export function PlaygroundInput({
     toast.success(t(nextValue ? 'Web search enabled' : 'Web search disabled'))
   }
 
+  const handleClearMessages = () => {
+    onClearMessages?.()
+    setClearConfirmOpen(false)
+    toast.success(t('Conversation cleared'))
+  }
+
+  const renderSelector = () => {
+    if (!showModelControls) {
+      return null
+    }
+
+    return (
+      <ModelGroupSelector
+        selectedModel={modelValue}
+        models={models}
+        onModelChange={onModelChange}
+        selectedGroup={groupValue}
+        groups={groups}
+        onGroupChange={onGroupChange}
+        disabled={isModelSelectDisabled || isGroupSelectDisabled}
+      />
+    )
+  }
+
+  const renderSubmitButton = () => (
+    <PlaygroundSubmitButton
+      disabled={disabled}
+      isGenerating={isGenerating}
+      onStop={onStop}
+      text={text}
+    />
+  )
+
   return (
     <div className='grid shrink-0 gap-4 px-1 md:pb-4'>
       <PromptInput
@@ -441,58 +481,69 @@ export function PlaygroundInput({
           value={text}
         />
 
-        <PromptInputFooter className='p-2.5'>
-          <PromptInputTools>
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <PromptInputButton
-                    className='border font-medium'
-                    disabled={disabled}
-                    variant='outline'
-                  />
-                }
+        <PromptInputFooter className='flex flex-col gap-2 p-2.5'>
+          {showModelControls && (
+            <div className='flex min-w-0 justify-end md:hidden'>
+              {renderSelector()}
+            </div>
+          )}
+
+          <div className='flex items-center justify-between gap-2'>
+            <PromptInputTools>
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <PromptInputButton
+                      className='border font-medium'
+                      disabled={disabled}
+                      variant='outline'
+                    />
+                  }
+                >
+                  <PaperclipIcon size={16} />
+                  <span className='hidden sm:inline'>{t('Attach')}</span>
+                  <span className='sr-only sm:hidden'>{t('Attach')}</span>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align='start'>
+                  <HiddenAttachmentInputs />
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <PromptInputButton
+                className='border font-medium'
+                disabled={disabled}
+                onClick={handleSearchToggle}
+                variant={searchEnabled ? 'secondary' : 'outline'}
               >
-                <PaperclipIcon size={16} />
-                <span className='hidden sm:inline'>{t('Attach')}</span>
-                <span className='sr-only sm:hidden'>{t('Attach')}</span>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align='start'>
-                <HiddenAttachmentInputs />
-              </DropdownMenuContent>
-            </DropdownMenu>
+                <GlobeIcon size={16} />
+                <span className='hidden sm:inline'>{t('Search')}</span>
+                <span className='sr-only sm:hidden'>{t('Search')}</span>
+              </PromptInputButton>
 
-            <PromptInputButton
-              className='border font-medium'
-              disabled={disabled}
-              onClick={handleSearchToggle}
-              variant={searchEnabled ? 'secondary' : 'outline'}
-            >
-              <GlobeIcon size={16} />
-              <span className='hidden sm:inline'>{t('Search')}</span>
-              <span className='sr-only sm:hidden'>{t('Search')}</span>
-            </PromptInputButton>
-          </PromptInputTools>
+              <PromptInputButton
+                className='text-muted-foreground hover:text-destructive border font-medium'
+                disabled={disabled || !hasMessages || !onClearMessages}
+                onClick={() => setClearConfirmOpen(true)}
+                variant='outline'
+              >
+                <Trash2Icon size={16} />
+                <span className='hidden sm:inline'>
+                  {t('Clear chat history')}
+                </span>
+                <span className='sr-only sm:hidden'>
+                  {t('Clear chat history')}
+                </span>
+              </PromptInputButton>
+            </PromptInputTools>
 
-          <div className='flex items-center gap-1.5 md:gap-2'>
-            {showModelControls && (
-              <ModelGroupSelector
-                selectedModel={modelValue}
-                models={models}
-                onModelChange={onModelChange}
-                selectedGroup={groupValue}
-                groups={groups}
-                onGroupChange={onGroupChange}
-                disabled={isModelSelectDisabled || isGroupSelectDisabled}
-              />
-            )}
+            <div className='flex items-center gap-1.5 md:hidden'>
+              {renderSubmitButton()}
+            </div>
 
-            <PlaygroundSubmitButton
-              disabled={disabled}
-              isGenerating={isGenerating}
-              onStop={onStop}
-              text={text}
-            />
+            <div className='hidden items-center gap-2 md:flex'>
+              {renderSelector()}
+              {renderSubmitButton()}
+            </div>
           </div>
         </PromptInputFooter>
       </PromptInput>
@@ -512,6 +563,18 @@ export function PlaygroundInput({
           </Suggestion>
         ))}
       </Suggestions>
+
+      <ConfirmDialog
+        destructive
+        desc={t(
+          'All playground messages saved in this browser will be removed. This cannot be undone.'
+        )}
+        confirmText={t('Clear')}
+        handleConfirm={handleClearMessages}
+        open={clearConfirmOpen}
+        onOpenChange={setClearConfirmOpen}
+        title={t('Clear chat history?')}
+      />
     </div>
   )
 }

@@ -26,10 +26,12 @@ import {
   EyeOff,
   Loader2,
   MessageCircle,
+  Reply,
   Undo2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import { getUserAvatarStyle } from '@/lib/avatar'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -52,6 +54,7 @@ import {
   getMessageSenderName,
 } from '../lib/format'
 import type { ChatConversation, ChatMessage, ChatUser } from '../types'
+import { MessageContent } from './message-content'
 
 interface MessageListProps {
   conversation: ChatConversation | null
@@ -66,6 +69,8 @@ interface MessageListProps {
   recallingMessageId: number | null
   onLoadOlder: () => void
   onRecallMessage: (message: ChatMessage) => void
+  onReplyMessage: (message: ChatMessage) => void
+  onViewUser: (user: ChatUser) => void
 }
 
 export function MessageList(props: MessageListProps) {
@@ -169,6 +174,8 @@ export function MessageList(props: MessageListProps) {
               currentUserId={props.currentUserId}
               recallingMessageId={props.recallingMessageId}
               onRecallMessage={props.onRecallMessage}
+              onReplyMessage={props.onReplyMessage}
+              onViewUser={props.onViewUser}
             />
           )
         })}
@@ -203,6 +210,8 @@ interface MessageBubbleProps {
   currentUserId: number | null
   recallingMessageId: number | null
   onRecallMessage: (message: ChatMessage) => void
+  onReplyMessage: (message: ChatMessage) => void
+  onViewUser: (user: ChatUser) => void
 }
 
 function MessageBubble(props: MessageBubbleProps) {
@@ -223,6 +232,8 @@ function MessageBubble(props: MessageBubbleProps) {
     props.currentUserId
   )
   const readLabelText = readLabel === 'read' ? t('Read') : t('Unread')
+  const senderUser = getMessageSenderUser(props.message)
+  const senderName = getChatUserDisplayName(senderUser)
 
   const handleCopy = (): void => {
     if (typeof navigator === 'undefined' || !navigator.clipboard) return
@@ -235,6 +246,14 @@ function MessageBubble(props: MessageBubbleProps) {
     props.onRecallMessage(props.message)
   }
 
+  const handleReply = (): void => {
+    props.onReplyMessage(props.message)
+  }
+
+  const handleViewSender = (): void => {
+    props.onViewUser(senderUser)
+  }
+
   return (
     <div
       className={cn(
@@ -243,16 +262,21 @@ function MessageBubble(props: MessageBubbleProps) {
       )}
     >
       {!props.mine && (
-        <Avatar size='sm' className='mt-1'>
-          <AvatarFallback className='bg-muted text-[10px]'>
-            {getChatUserInitial({
-              id: props.message.sender_id,
-              username: props.message.sender_username,
-              display_name: props.message.sender_display_name,
-              role: 0,
-            })}
-          </AvatarFallback>
-        </Avatar>
+        <button
+          type='button'
+          onClick={handleViewSender}
+          className='focus-visible:ring-ring mt-1 rounded-full transition-transform outline-none hover:scale-105 focus-visible:ring-2 focus-visible:ring-offset-2'
+          aria-label={t('View user profile')}
+        >
+          <Avatar size='sm'>
+            <AvatarFallback
+              className='text-[10px] font-semibold'
+              style={getUserAvatarStyle(senderName)}
+            >
+              {getChatUserInitial(senderUser)}
+            </AvatarFallback>
+          </Avatar>
+        </button>
       )}
       <div
         className={cn(
@@ -284,7 +308,11 @@ function MessageBubble(props: MessageBubbleProps) {
                   : 'text-muted-foreground italic')
             )}
           >
-            {revoked ? t('This message was recalled') : props.message.body}
+            {revoked ? (
+              t('This message was recalled')
+            ) : (
+              <MessageContent body={props.message.body} mine={props.mine} />
+            )}
           </div>
         </div>
         <div
@@ -294,7 +322,10 @@ function MessageBubble(props: MessageBubbleProps) {
           )}
         >
           {showGroupReceipts ? (
-            <MessageReceiptBadges summary={receiptSummary} />
+            <MessageReceiptBadges
+              summary={receiptSummary}
+              onViewUser={props.onViewUser}
+            />
           ) : (
             <span
               className={cn(
@@ -311,6 +342,18 @@ function MessageBubble(props: MessageBubbleProps) {
               )}
               {readLabelText}
             </span>
+          )}
+          {!revoked && (
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 gap-1 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100'
+              onClick={handleReply}
+            >
+              <Reply className='h-3.5 w-3.5' />
+              {t('Reply')}
+            </Button>
           )}
           {!revoked && (
             <Button
@@ -352,6 +395,7 @@ interface MessageReceiptBadgesProps {
     readUsers: ChatUser[]
     unreadUsers: ChatUser[]
   }
+  onViewUser: (user: ChatUser) => void
 }
 
 function MessageReceiptBadges(props: MessageReceiptBadgesProps) {
@@ -364,6 +408,7 @@ function MessageReceiptBadges(props: MessageReceiptBadgesProps) {
         title={t('Read by')}
         users={props.summary.readUsers}
         label={t('Read {{count}}', { count: props.summary.readUsers.length })}
+        onViewUser={props.onViewUser}
       />
       <ReceiptPopover
         icon='unread'
@@ -372,6 +417,7 @@ function MessageReceiptBadges(props: MessageReceiptBadgesProps) {
         label={t('Unread {{count}}', {
           count: props.summary.unreadUsers.length,
         })}
+        onViewUser={props.onViewUser}
       />
     </div>
   )
@@ -382,6 +428,7 @@ interface ReceiptPopoverProps {
   title: string
   users: ChatUser[]
   label: string
+  onViewUser: (user: ChatUser) => void
 }
 
 function ReceiptPopover(props: ReceiptPopoverProps) {
@@ -407,7 +454,7 @@ function ReceiptPopover(props: ReceiptPopoverProps) {
       </PopoverTrigger>
       <PopoverContent align='start' className='w-64'>
         <PopoverTitle className='text-sm'>{props.title}</PopoverTitle>
-        <ReceiptUserList users={props.users} />
+        <ReceiptUserList users={props.users} onViewUser={props.onViewUser} />
       </PopoverContent>
     </Popover>
   )
@@ -415,6 +462,7 @@ function ReceiptPopover(props: ReceiptPopoverProps) {
 
 interface ReceiptUserListProps {
   users: ChatUser[]
+  onViewUser: (user: ChatUser) => void
 }
 
 function ReceiptUserList(props: ReceiptUserListProps) {
@@ -430,23 +478,46 @@ function ReceiptUserList(props: ReceiptUserListProps) {
 
   return (
     <div className='max-h-60 space-y-1 overflow-y-auto'>
-      {props.users.map((user) => (
-        <div key={user.id} className='flex items-center gap-2 rounded-lg p-1.5'>
-          <Avatar size='sm' className='shrink-0'>
-            <AvatarFallback className='bg-muted text-[10px]'>
-              {getChatUserInitial(user)}
-            </AvatarFallback>
-          </Avatar>
-          <div className='min-w-0'>
-            <div className='truncate text-xs font-medium'>
-              {getChatUserDisplayName(user)}
-            </div>
-            <div className='text-muted-foreground truncate text-[11px]'>
-              @{user.username}
+      {props.users.map((user) => {
+        const displayName = getChatUserDisplayName(user)
+        return (
+          <div
+            key={user.id}
+            className='flex items-center gap-2 rounded-lg p-1.5'
+          >
+            <button
+              type='button'
+              onClick={() => props.onViewUser(user)}
+              className='focus-visible:ring-ring rounded-full transition-transform outline-none hover:scale-105 focus-visible:ring-2 focus-visible:ring-offset-2'
+              aria-label={t('View user profile')}
+            >
+              <Avatar size='sm' className='shrink-0'>
+                <AvatarFallback
+                  className='text-[10px] font-semibold'
+                  style={getUserAvatarStyle(displayName)}
+                >
+                  {getChatUserInitial(user)}
+                </AvatarFallback>
+              </Avatar>
+            </button>
+            <div className='min-w-0'>
+              <div className='truncate text-xs font-medium'>{displayName}</div>
+              <div className='text-muted-foreground truncate text-[11px]'>
+                @{user.username}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        )
+      })}
     </div>
   )
+}
+
+function getMessageSenderUser(message: ChatMessage): ChatUser {
+  return {
+    id: message.sender_id,
+    username: message.sender_username,
+    display_name: message.sender_display_name,
+    role: 0,
+  }
 }

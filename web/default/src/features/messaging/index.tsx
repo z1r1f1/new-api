@@ -23,6 +23,8 @@ import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { getUserAvatarStyle } from '@/lib/avatar'
+import { ROLE } from '@/lib/roles'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -37,7 +39,9 @@ import {
   revokeChatMessage,
   sendChatMessage,
 } from './api'
+import { ChatImagePreviewDialog } from './components/chat-image-preview-dialog'
 import { ChatSidebar } from './components/chat-sidebar'
+import { ChatUserProfileDialog } from './components/chat-user-profile-dialog'
 import { MessageComposer } from './components/message-composer'
 import { MessageList } from './components/message-list'
 import { RealtimeStatusBadge } from './components/realtime-status-badge'
@@ -52,12 +56,27 @@ import {
   getConversationTitle,
   getDirectConversationKey,
   getInitialConversation,
+  getMessageSenderName,
   getTotalUnreadCount,
   MAX_MESSAGE_LENGTH,
   mergeMessages,
   MESSAGE_PAGE_SIZE,
   type SidebarTab,
 } from './lib/format'
+import {
+  AVAILABLE_CHAT_STICKERS,
+  buildOutgoingMessageBody,
+  CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH,
+  CHAT_PASTED_IMAGE_MAX_COUNT,
+  CHAT_STICKER_MAX_COUNT,
+  createChatImageAttachment,
+  getMessageReplyPreview,
+  isChatMessageSendable,
+  type ChatImageAttachment,
+  type ChatImagePreview,
+  type ChatReplyReference,
+  type ChatSticker,
+} from './lib/message-content'
 import type {
   ApiResponse,
   ChatConversation,
@@ -66,10 +85,24 @@ import type {
   ChatUser,
 } from './types'
 
+interface PendingImageSend {
+  conversationId: number | null
+  text: string
+  stickers: ChatSticker[]
+  replyTo: ChatReplyReference | null
+}
+
+interface SendChatMessageVariables {
+  conversationId: number
+  body: string
+}
+
 export function Messaging() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const currentUserId = useAuthStore((state) => state.auth.user?.id ?? null)
+  const currentUserRole = useAuthStore((state) => state.auth.user?.role ?? 0)
+  const canViewUserDetails = currentUserRole >= ROLE.ADMIN
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('users')
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [activeConversationId, setActiveConversationId] = useState<
@@ -77,6 +110,17 @@ export function Messaging() {
   >(null)
   const [openingUserId, setOpeningUserId] = useState<number | null>(null)
   const [messageBody, setMessageBody] = useState('')
+  const [pastedImages, setPastedImages] = useState<ChatImageAttachment[]>([])
+  const [selectedStickers, setSelectedStickers] = useState<ChatSticker[]>([])
+  const [replyTarget, setReplyTarget] = useState<ChatReplyReference | null>(
+    null
+  )
+  const [processingPastedImages, setProcessingPastedImages] = useState(false)
+  const [previewImage, setPreviewImage] = useState<ChatImagePreview | null>(
+    null
+  )
+  const [profileUser, setProfileUser] = useState<ChatUser | null>(null)
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
   const [recallingMessageId, setRecallingMessageId] = useState<number | null>(
@@ -85,6 +129,10 @@ export function Messaging() {
   const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
     useState<Record<number, boolean>>({})
   const initializedConversationRef = useRef(false)
+  const activeConversationIdRef = useRef<number | null>(activeConversationId)
+  const pendingSendAfterImageProcessingRef = useRef<PendingImageSend | null>(
+    null
+  )
 
   const usersQuery = useQuery({
     queryKey: messagingQueryKeys.users,
@@ -129,6 +177,9 @@ export function Messaging() {
     [activeConversationId, conversations]
   )
   useEffect(() => {
+    activeConversationIdRef.current = activeConversationId
+  }, [activeConversationId])
+  useEffect(() => {
     if (initializedConversationRef.current) return
     if (!conversationsQuery.isSuccess) return
     if (activeConversationId || selectedUserId || openingUserId) {
@@ -138,11 +189,13 @@ export function Messaging() {
     const initialConversation = getInitialConversation(conversations)
     if (!initialConversation) return
     initializedConversationRef.current = true
+    activeConversationIdRef.current = initialConversation.id
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setActiveConversationId(initialConversation.id)
     setSelectedUserId(initialConversation.peer?.id ?? null)
     setSidebarTab('conversations')
     setMessageBody('')
+    setPastedImages([])
     setMessageSearch('')
   }, [
     activeConversationId,
@@ -207,6 +260,7 @@ export function Messaging() {
           conversation.direct_key === directKey
       )
       if (!existingConversation) return false
+      activeConversationIdRef.current = existingConversation.id
       setActiveConversationId(existingConversation.id)
       setSelectedUserId(user.id)
       return true
@@ -222,6 +276,7 @@ export function Messaging() {
     },
     onSuccess: (response) => {
       if (response.data) {
+        activeConversationIdRef.current = response.data.id
         setActiveConversationId(response.data.id)
         setSelectedUserId(response.data.peer?.id ?? null)
         void queryClient.invalidateQueries({
@@ -238,26 +293,63 @@ export function Messaging() {
     },
   })
 
-  const sendMutation = useMutation({
-    mutationFn: () => {
-      if (!activeConversationId) {
-        throw new Error(t('Select a conversation first'))
+  const { mutate: sendChatMessageMutation, isPending: sendingMessage } =
+    useMutation({
+      mutationFn: (variables: SendChatMessageVariables) => {
+        return sendChatMessage(variables.conversationId, {
+          body: variables.body,
+          client_message_id: nanoid(),
+        })
+      },
+      onSuccess: (response, variables) => {
+        if (response.data) appendMessage(response.data)
+        if (variables.conversationId === activeConversationIdRef.current) {
+          setMessageBody('')
+          setPastedImages([])
+          setSelectedStickers([])
+          setReplyTarget(null)
+          setMessageSearch('')
+        }
+        invalidateConversations()
+      },
+      onError: () => {
+        toast.error(t('Failed to send message'))
+      },
+    })
+
+  const sendMessageWithAttachments = useCallback(
+    (
+      text: string,
+      attachments: ChatImageAttachment[],
+      stickers: ChatSticker[],
+      replyTo: ChatReplyReference | null,
+      conversationId: number | null
+    ): boolean => {
+      if (!isChatMessageSendable(text, attachments, stickers)) return false
+      if (!conversationId) {
+        toast.error(t('Select a conversation first'))
+        return false
       }
-      return sendChatMessage(activeConversationId, {
-        body: messageBody.trim(),
-        client_message_id: nanoid(),
-      })
+      const textBody = text.trim()
+      if (textBody.length > MAX_MESSAGE_LENGTH) {
+        toast.error(t('Message is too long'))
+        return false
+      }
+      const body = buildOutgoingMessageBody(
+        text,
+        attachments,
+        replyTo,
+        stickers
+      )
+      if (body.length > CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH) {
+        toast.error(t('Message is too long'))
+        return false
+      }
+      sendChatMessageMutation({ conversationId, body })
+      return true
     },
-    onSuccess: (response) => {
-      if (response.data) appendMessage(response.data)
-      setMessageBody('')
-      setMessageSearch('')
-      invalidateConversations()
-    },
-    onError: () => {
-      toast.error(t('Failed to send message'))
-    },
-  })
+    [sendChatMessageMutation, t]
+  )
 
   const revokeMutation = useMutation({
     mutationFn: (message: ChatMessage) =>
@@ -354,9 +446,30 @@ export function Messaging() {
     }).then(() => invalidateConversations())
   }, [activeConversationId, invalidateConversations, lastMessageId])
 
+  useEffect(() => {
+    if (processingPastedImages) return
+    const pendingSend = pendingSendAfterImageProcessingRef.current
+    if (!pendingSend) return
+    pendingSendAfterImageProcessingRef.current = null
+    if (pendingSend.conversationId !== activeConversationIdRef.current) return
+    sendMessageWithAttachments(
+      pendingSend.text,
+      pastedImages,
+      pendingSend.stickers,
+      pendingSend.replyTo,
+      pendingSend.conversationId
+    )
+  }, [pastedImages, processingPastedImages, sendMessageWithAttachments])
+
   const handleSelectUser = (user: ChatUser): void => {
+    pendingSendAfterImageProcessingRef.current = null
+    activeConversationIdRef.current = null
     setSelectedUserId(user.id)
     setMessageBody('')
+    setPastedImages([])
+    setSelectedStickers([])
+    setReplyTarget(null)
+    setPreviewImage(null)
     setMessageSearch('')
     setActiveConversationId(null)
     if (openDirectConversation(user, conversations)) return
@@ -364,20 +477,116 @@ export function Messaging() {
   }
 
   const handleSelectConversation = (conversation: ChatConversation): void => {
+    pendingSendAfterImageProcessingRef.current = null
+    activeConversationIdRef.current = conversation.id
     setActiveConversationId(conversation.id)
     setSelectedUserId(conversation.peer?.id ?? null)
     setMessageBody('')
+    setPastedImages([])
+    setSelectedStickers([])
+    setReplyTarget(null)
+    setPreviewImage(null)
     setMessageSearch('')
   }
 
-  const handleSendMessage = (): void => {
-    const body = messageBody.trim()
-    if (!body) return
-    if (body.length > MAX_MESSAGE_LENGTH) {
-      toast.error(t('Message is too long'))
+  const handleViewUser = (user: ChatUser): void => {
+    setProfileUser(user)
+    setProfileDialogOpen(true)
+  }
+
+  const handleStartDirectChat = (user: ChatUser): void => {
+    setProfileDialogOpen(false)
+    handleSelectUser(user)
+  }
+
+  const handleReplyMessage = (message: ChatMessage): void => {
+    setReplyTarget({
+      messageId: message.id,
+      senderName: getMessageSenderName(message),
+      preview: getMessageReplyPreview(message.body) || t('Message'),
+    })
+  }
+
+  const handlePasteImages = (files: File[]): void => {
+    const pasteConversationId = activeConversationIdRef.current
+    if (pastedImages.length >= CHAT_PASTED_IMAGE_MAX_COUNT) {
+      toast.error(
+        t('You can attach up to {{count}} images', {
+          count: CHAT_PASTED_IMAGE_MAX_COUNT,
+        })
+      )
       return
     }
-    sendMutation.mutate()
+    const availableSlots = CHAT_PASTED_IMAGE_MAX_COUNT - pastedImages.length
+    const filesToProcess = files.slice(0, availableSlots)
+    if (files.length > availableSlots) {
+      toast.error(
+        t('You can attach up to {{count}} images', {
+          count: CHAT_PASTED_IMAGE_MAX_COUNT,
+        })
+      )
+    }
+
+    setProcessingPastedImages(true)
+    void Promise.all(
+      filesToProcess.map((file) => createChatImageAttachment(file, nanoid()))
+    )
+      .then((attachments) => {
+        if (pasteConversationId !== activeConversationIdRef.current) {
+          pendingSendAfterImageProcessingRef.current = null
+          return
+        }
+        setPastedImages((current) => [...current, ...attachments])
+      })
+      .catch((error: unknown) => {
+        pendingSendAfterImageProcessingRef.current = null
+        const message = error instanceof Error ? error.message : ''
+        toast.error(t(message || 'Failed to read pasted image'))
+      })
+      .finally(() => setProcessingPastedImages(false))
+  }
+
+  const handleRemovePastedImage = (id: string): void => {
+    setPastedImages((current) => current.filter((image) => image.id !== id))
+  }
+
+  const handleSelectSticker = (sticker: ChatSticker): void => {
+    setSelectedStickers((current) => {
+      if (current.length >= CHAT_STICKER_MAX_COUNT) {
+        toast.error(
+          t('You can select up to {{count}} stickers', {
+            count: CHAT_STICKER_MAX_COUNT,
+          })
+        )
+        return current
+      }
+      return [...current, sticker]
+    })
+  }
+
+  const handleRemoveSticker = (index: number): void => {
+    setSelectedStickers((current) =>
+      current.filter((_, currentIndex) => currentIndex !== index)
+    )
+  }
+
+  const handleSendMessage = (): void => {
+    if (processingPastedImages) {
+      pendingSendAfterImageProcessingRef.current = {
+        conversationId: activeConversationId,
+        text: messageBody,
+        stickers: selectedStickers,
+        replyTo: replyTarget,
+      }
+      return
+    }
+    sendMessageWithAttachments(
+      messageBody,
+      pastedImages,
+      selectedStickers,
+      replyTarget,
+      activeConversationId
+    )
   }
 
   const handleRefresh = (): void => {
@@ -434,6 +643,7 @@ export function Messaging() {
                 loading={loadingThread}
                 onSearchChange={setMessageSearch}
                 onRefresh={handleRefresh}
+                onViewUser={handleViewUser}
               />
               <CardContent className='flex min-h-0 flex-1 flex-col p-0'>
                 <MessageList
@@ -449,21 +659,55 @@ export function Messaging() {
                   recallingMessageId={recallingMessageId}
                   onLoadOlder={() => loadOlderMutation.mutate()}
                   onRecallMessage={(message) => revokeMutation.mutate(message)}
+                  onReplyMessage={handleReplyMessage}
+                  onViewUser={handleViewUser}
                 />
                 <MessageComposer
                   value={messageBody}
                   active={Boolean(activeConversationId)}
-                  sending={sendMutation.isPending}
+                  sending={sendingMessage}
+                  processingImages={processingPastedImages}
                   maxLength={MAX_MESSAGE_LENGTH}
                   mentionUsers={mentionUsers}
+                  attachments={pastedImages}
+                  stickers={selectedStickers}
+                  availableStickers={AVAILABLE_CHAT_STICKERS}
+                  replyTo={replyTarget}
                   onChange={setMessageBody}
                   onSend={handleSendMessage}
+                  onPasteImages={handlePasteImages}
+                  onRemoveAttachment={handleRemovePastedImage}
+                  onPreviewAttachment={(attachment) =>
+                    setPreviewImage({
+                      src: attachment.dataUrl,
+                      alt: attachment.name,
+                    })
+                  }
+                  onSelectSticker={handleSelectSticker}
+                  onRemoveSticker={handleRemoveSticker}
+                  onCancelReply={() => setReplyTarget(null)}
                 />
               </CardContent>
             </div>
           </Card>
         </main>
       </div>
+      <ChatUserProfileDialog
+        user={profileUser}
+        open={profileDialogOpen}
+        canViewDetails={canViewUserDetails}
+        currentUserId={currentUserId}
+        openingDirect={Boolean(profileUser && openingUserId === profileUser.id)}
+        onOpenChange={setProfileDialogOpen}
+        onStartDirectChat={handleStartDirectChat}
+      />
+      <ChatImagePreviewDialog
+        image={previewImage}
+        open={Boolean(previewImage)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewImage(null)
+        }}
+      />
     </div>
   )
 }
@@ -477,6 +721,7 @@ interface ChatHeaderProps {
   loading: boolean
   onSearchChange: (value: string) => void
   onRefresh: () => void
+  onViewUser: (user: ChatUser) => void
 }
 
 function ChatHeader(props: ChatHeaderProps) {
@@ -484,21 +729,38 @@ function ChatHeader(props: ChatHeaderProps) {
   const active = Boolean(props.conversation)
   const title = getHeaderTitle(props.conversation, props.pendingUser, t)
   const subtitle = getHeaderSubtitle(props.conversation, props.pendingUser, t)
+  const headerUser = props.conversation?.peer ?? props.pendingUser
+  const headerUserName = headerUser ? getChatUserDisplayName(headerUser) : ''
 
   return (
     <CardHeader className='border-border/80 shrink-0 border-b'>
       <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
         <div className='flex min-w-0 items-center gap-3'>
-          {props.conversation ? (
+          {headerUser ? (
+            <button
+              type='button'
+              onClick={() => props.onViewUser(headerUser)}
+              className='focus-visible:ring-ring rounded-full transition-transform outline-none hover:scale-105 focus-visible:ring-2 focus-visible:ring-offset-2'
+              aria-label={t('View user profile')}
+            >
+              <Avatar size='lg' className='shadow-sm'>
+                <AvatarFallback
+                  className='font-semibold'
+                  style={getUserAvatarStyle(headerUserName)}
+                >
+                  {getChatUserInitial(headerUser)}
+                </AvatarFallback>
+              </Avatar>
+            </button>
+          ) : props.conversation ? (
             <Avatar size='lg' className='shadow-sm'>
-              <AvatarFallback className='bg-muted'>
+              <AvatarFallback
+                className='font-semibold'
+                style={getUserAvatarStyle(
+                  getConversationTitle(props.conversation)
+                )}
+              >
                 {getConversationInitial(props.conversation)}
-              </AvatarFallback>
-            </Avatar>
-          ) : props.pendingUser ? (
-            <Avatar size='lg' className='shadow-sm'>
-              <AvatarFallback className='bg-muted'>
-                {getChatUserInitial(props.pendingUser)}
               </AvatarFallback>
             </Avatar>
           ) : (
