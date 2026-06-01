@@ -114,6 +114,11 @@ func InitOptionMap() {
 	common.OptionMap["WaffoPancakeMinTopUp"] = strconv.Itoa(setting.WaffoPancakeMinTopUp)
 	common.OptionMap["WaffoPancakeStoreID"] = setting.WaffoPancakeStoreID
 	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
+	common.OptionMap["LinuxDoCreditClientID"] = setting.LinuxDoCreditClientID
+	common.OptionMap["LinuxDoCreditClientSecret"] = setting.LinuxDoCreditClientSecret
+	common.OptionMap["LinuxDoCreditBaseURL"] = setting.LinuxDoCreditBaseURL
+	common.OptionMap["LinuxDoCreditUnitPrice"] = strconv.FormatFloat(setting.LinuxDoCreditUnitPrice, 'f', -1, 64)
+	common.OptionMap["LinuxDoCreditMinTopUp"] = strconv.Itoa(setting.LinuxDoCreditMinTopUp)
 	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
 	common.OptionMap["Chats"] = setting.Chats2JsonString()
 	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
@@ -462,6 +467,16 @@ func updateOptionMap(key string, value string) (err error) {
 		setting.WaffoPancakeUnitPrice, _ = strconv.ParseFloat(value, 64)
 	case "WaffoPancakeMinTopUp":
 		setting.WaffoPancakeMinTopUp, _ = strconv.Atoi(value)
+	case "LinuxDoCreditClientID":
+		setting.LinuxDoCreditClientID = value
+	case "LinuxDoCreditClientSecret":
+		setting.LinuxDoCreditClientSecret = value
+	case "LinuxDoCreditBaseURL":
+		setting.LinuxDoCreditBaseURL = value
+	case "LinuxDoCreditUnitPrice":
+		setting.LinuxDoCreditUnitPrice, _ = strconv.ParseFloat(value, 64)
+	case "LinuxDoCreditMinTopUp":
+		setting.LinuxDoCreditMinTopUp, _ = strconv.Atoi(value)
 	case "TopupGroupRatio":
 		err = common.UpdateTopupGroupRatioByJSONString(value)
 	case "GitHubClientId":

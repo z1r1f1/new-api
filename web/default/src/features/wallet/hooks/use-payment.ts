@@ -21,17 +21,25 @@ import i18next from 'i18next'
 import { toast } from 'sonner'
 import {
   calculateAmount,
+  calculateLinuxDoCreditAmount,
   calculateStripeAmount,
   calculateWaffoPancakeAmount,
+  requestLinuxDoCreditPayment,
   requestPayment,
   requestStripePayment,
   isApiSuccess,
 } from '../api'
 import {
+  isLinuxDoCreditPayment,
   isStripePayment,
   isWaffoPancakePayment,
   submitPaymentForm,
 } from '../lib'
+import type {
+  AmountResponse,
+  PaymentResponse,
+  StripePaymentResponse,
+} from '../types'
 
 // ============================================================================
 // Payment Hook
@@ -48,13 +56,18 @@ export function usePayment() {
       try {
         setCalculating(true)
 
-        const isStripe = isStripePayment(paymentType)
-        const isPancake = isWaffoPancakePayment(paymentType)
-        const response = isStripe
-          ? await calculateStripeAmount({ amount: topupAmount })
-          : isPancake
-            ? await calculateWaffoPancakeAmount({ amount: topupAmount })
-            : await calculateAmount({ amount: topupAmount })
+        let response: AmountResponse
+        if (isStripePayment(paymentType)) {
+          response = await calculateStripeAmount({ amount: topupAmount })
+        } else if (isWaffoPancakePayment(paymentType)) {
+          response = await calculateWaffoPancakeAmount({ amount: topupAmount })
+        } else if (isLinuxDoCreditPayment(paymentType)) {
+          response = await calculateLinuxDoCreditAmount({
+            amount: topupAmount,
+          })
+        } else {
+          response = await calculateAmount({ amount: topupAmount })
+        }
 
         if (isApiSuccess(response) && response.data) {
           const calculatedAmount = parseFloat(response.data)
@@ -82,17 +95,26 @@ export function usePayment() {
         setProcessing(true)
 
         const isStripe = isStripePayment(paymentType)
+        const isLinuxDoCredit = isLinuxDoCreditPayment(paymentType)
         const amount = Math.floor(topupAmount)
 
-        const response = isStripe
-          ? await requestStripePayment({
-              amount,
-              payment_method: 'stripe',
-            })
-          : await requestPayment({
-              amount,
-              payment_method: paymentType,
-            })
+        let response: PaymentResponse | StripePaymentResponse
+        if (isStripe) {
+          response = await requestStripePayment({
+            amount,
+            payment_method: 'stripe',
+          })
+        } else if (isLinuxDoCredit) {
+          response = await requestLinuxDoCreditPayment({
+            amount,
+            payment_method: paymentType,
+          })
+        } else {
+          response = await requestPayment({
+            amount,
+            payment_method: paymentType,
+          })
+        }
 
         if (!isApiSuccess(response)) {
           toast.error(response.message || i18next.t('Payment request failed'))

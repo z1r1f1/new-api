@@ -4845,6 +4845,17 @@
     "Fire": "太强了",
     "Ship it": "冲",
     "Watching": "围观",
-    "You can select up to {{count}} stickers": "最多可选择 {{count}} 个表情"
+    "You can select up to {{count}} stickers": "最多可选择 {{count}} 个表情",
+    "Linux DO Credit Gateway": "Linux DO Credit 网关",
+    "Dedicated Linux DO Credit settings using the EasyPay-compatible API": "使用 EasyPay 兼容 API 的独立 Linux DO Credit 设置",
+    "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.": "使用你的 Linux DO Credit Client ID 和 Client Secret；上游支付类型会自动以 epay 发送。",
+    "Linux DO Credit Client ID": "Linux DO Credit Client ID",
+    "Merchant Client ID from Linux DO Credit": "Linux DO Credit 提供的商户 Client ID",
+    "Enter new secret to update": "输入新密钥以更新",
+    "Payment endpoint": "支付端点",
+    "Default: https://credit.linux.do/epay/pay": "默认：https://credit.linux.do/epay/pay",
+    "Unit price (LDC / USD)": "单价（LDC / USD）",
+    "How many Linux DO Credit points to charge for each US dollar of balance": "每 1 美元余额需要收取的 Linux DO Credit 积分数",
+    "Smallest USD amount users can recharge": "用户可充值的最小美元金额"
   }
 }
