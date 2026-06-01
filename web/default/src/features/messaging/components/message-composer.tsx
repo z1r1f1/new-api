@@ -152,12 +152,11 @@ export function MessageComposer(props: MessageComposerProps) {
               {props.stickers.map((sticker, index) => (
                 <div
                   key={`${sticker.id}-${index}`}
-                  className={cn(
-                    'group/sticker relative flex size-10 shrink-0 items-center justify-center rounded-lg border bg-gradient-to-br',
-                    sticker.accent
-                  )}
+                  className='group/sticker hover:bg-muted relative flex size-9 shrink-0 items-center justify-center rounded-lg'
                 >
-                  <span className='text-xl leading-none'>{sticker.emoji}</span>
+                  <span className='text-2xl leading-none'>
+                    {sticker.emoji}
+                  </span>
                   <button
                     type='button'
                     className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/sticker:opacity-100 focus:opacity-100'

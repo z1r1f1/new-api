@@ -80,3 +80,38 @@ func TestGetChatMessageByIDRequiresConversationMatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, message.Id, found.Id)
 }
+
+func TestChatMessageReactionToggleAndSummaries(t *testing.T) {
+	setupChatTestDB(t)
+	truncateChatTables(t)
+
+	conv, err := GetOrCreateDirectConversation(100, 200)
+	require.NoError(t, err)
+	message, err := InsertChatMessage(conv.Id, 100, ChatMessageTypeText, "hello", "client-react")
+	require.NoError(t, err)
+
+	active, err := ToggleChatMessageReaction(conv.Id, message.Id, 100, "👍")
+	require.NoError(t, err)
+	assert.True(t, active)
+
+	active, err = ToggleChatMessageReaction(conv.Id, message.Id, 200, "👍")
+	require.NoError(t, err)
+	assert.True(t, active)
+
+	summaries, err := ListChatMessageReactionSummaries([]int{message.Id}, 100)
+	require.NoError(t, err)
+	require.Len(t, summaries[message.Id], 1)
+	assert.Equal(t, "👍", summaries[message.Id][0].Emoji)
+	assert.Equal(t, 2, summaries[message.Id][0].Count)
+	assert.True(t, summaries[message.Id][0].ReactedByCurrentUser)
+
+	active, err = ToggleChatMessageReaction(conv.Id, message.Id, 100, "👍")
+	require.NoError(t, err)
+	assert.False(t, active)
+
+	summaries, err = ListChatMessageReactionSummaries([]int{message.Id}, 100)
+	require.NoError(t, err)
+	require.Len(t, summaries[message.Id], 1)
+	assert.Equal(t, 1, summaries[message.Id][0].Count)
+	assert.False(t, summaries[message.Id][0].ReactedByCurrentUser)
+}

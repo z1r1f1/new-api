@@ -27,6 +27,7 @@ import type {
   CreateGroupConversationPayload,
   MarkReadPayload,
   SendMessagePayload,
+  ToggleMessageReactionPayload,
 } from './types'
 
 export const messagingQueryKeys = {
@@ -93,6 +94,18 @@ export async function revokeChatMessage(
 ): Promise<ApiResponse<ChatMessage>> {
   const res = await api.post(
     `/api/chat/conversations/${conversationId}/messages/${messageId}/revoke`
+  )
+  return res.data
+}
+
+export async function toggleChatMessageReaction(
+  conversationId: number,
+  messageId: number,
+  payload: ToggleMessageReactionPayload
+): Promise<ApiResponse<ChatMessage>> {
+  const res = await api.post(
+    `/api/chat/conversations/${conversationId}/messages/${messageId}/reactions`,
+    payload
   )
   return res.data
 }

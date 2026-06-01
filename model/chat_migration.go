@@ -29,6 +29,7 @@ func EnsureChatTables() error {
 		&ChatConversation{},
 		&ChatConversationMember{},
 		&ChatMessage{},
+		&ChatMessageReaction{},
 		&ChatReadState{},
 	); err != nil {
 		return err

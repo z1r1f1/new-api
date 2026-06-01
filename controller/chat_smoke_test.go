@@ -70,6 +70,7 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 			&model.ChatConversation{},
 			&model.ChatConversationMember{},
 			&model.ChatMessage{},
+			&model.ChatMessageReaction{},
 			&model.ChatReadState{},
 		))
 	}
@@ -170,6 +171,7 @@ func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
 	require.True(t, db.Migrator().HasTable(&model.ChatConversation{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatConversationMember{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatMessage{}))
+	require.True(t, db.Migrator().HasTable(&model.ChatMessageReaction{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatReadState{}))
 }
 
@@ -307,6 +309,28 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.Equal(t, message.Id, messageCreated.Message.Id)
 	require.Equal(t, message.Body, messageCreated.Message.Body)
 
+	reacted := reactChatMessageViaHTTP(t, httpClient, server.URL, cookies, conversation.Id, message.Id, "👍")
+	require.Len(t, reacted.Reactions, 1)
+	require.Equal(t, "👍", reacted.Reactions[0].Emoji)
+	require.Equal(t, 1, reacted.Reactions[0].Count)
+	require.True(t, reacted.Reactions[0].ReactedByMe)
+
+	reactionPublication := readChatWSReply(t, wsConn)
+	require.NotNil(t, reactionPublication.Push)
+	require.Equal(t, chatservice.ConversationChannel(conversation.Id), reactionPublication.Push.Channel)
+	require.NotNil(t, reactionPublication.Push.Pub)
+
+	var messageReactionUpdated chatservice.Event
+	require.NoError(t, common.Unmarshal(reactionPublication.Push.Pub.Data, &messageReactionUpdated))
+	require.Equal(t, chatservice.EventTypeMessageReactionUpdated, messageReactionUpdated.Type)
+	require.Equal(t, message.Id, messageReactionUpdated.Message.Id)
+	require.Equal(t, "👍", messageReactionUpdated.ReactionEmoji)
+	require.NotNil(t, messageReactionUpdated.ReactionActive)
+	require.True(t, *messageReactionUpdated.ReactionActive)
+	require.Len(t, messageReactionUpdated.Message.Reactions, 1)
+	require.Equal(t, 1, messageReactionUpdated.Message.Reactions[0].Count)
+	require.False(t, messageReactionUpdated.Message.Reactions[0].ReactedByMe)
+
 	revoked := revokeChatMessageViaHTTP(t, httpClient, server.URL, cookies, conversation.Id, message.Id)
 	require.Equal(t, message.Id, revoked.Id)
 	require.Empty(t, revoked.Body)
@@ -364,6 +388,36 @@ func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, c
 	require.NoError(t, err)
 
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages", bytes.NewReader(payload))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("New-Api-User", "1")
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+
+	resp, err := client.Do(req)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	defer func() { _ = resp.Body.Close() }()
+
+	var apiResp chatAPIResponse
+	require.NoError(t, common.DecodeJson(resp.Body, &apiResp))
+	require.True(t, apiResp.Success, apiResp.Message)
+
+	var message chatservice.MessageResponse
+	require.NoError(t, common.Unmarshal(apiResp.Data, &message))
+	return &message
+}
+
+func reactChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, messageID int, emoji string) *chatservice.MessageResponse {
+	t.Helper()
+
+	payload, err := common.Marshal(map[string]any{
+		"emoji": emoji,
+	})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages/"+strconv.Itoa(messageID)+"/reactions", bytes.NewReader(payload))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("New-Api-User", "1")

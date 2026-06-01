@@ -33,6 +33,13 @@ export interface MessageReceiptSummary {
   totalRecipients: number
 }
 
+export interface ReactionEventMergeOptions {
+  currentUserId: number | null
+  reactorUserId?: number | null
+  emoji?: string
+  active?: boolean
+}
+
 export function formatChatTime(timestamp: number): string {
   if (!timestamp) return '—'
   return new Intl.DateTimeFormat(undefined, {
@@ -76,6 +83,40 @@ export function mergeMessages(
   for (const message of existing) byId.set(message.id, message)
   for (const message of incoming) byId.set(message.id, message)
   return [...byId.values()].sort((a, b) => a.id - b.id)
+}
+
+export function mergeReactionEventMessage(
+  existing: ChatMessage | undefined,
+  incoming: ChatMessage,
+  options: ReactionEventMergeOptions
+): ChatMessage {
+  const existingReactionByEmoji = new Map(
+    (existing?.reactions ?? []).map((reaction) => [reaction.emoji, reaction])
+  )
+  const currentUserOwnsEvent = Boolean(
+    options.currentUserId &&
+      options.reactorUserId &&
+      options.currentUserId === options.reactorUserId
+  )
+
+  return {
+    ...incoming,
+    reactions: (incoming.reactions ?? []).map((reaction) => {
+      if (
+        currentUserOwnsEvent &&
+        reaction.emoji === options.emoji &&
+        typeof options.active === 'boolean'
+      ) {
+        return { ...reaction, reacted_by_me: options.active }
+      }
+      const existingReaction = existingReactionByEmoji.get(reaction.emoji)
+      if (!existingReaction) return reaction
+      return {
+        ...reaction,
+        reacted_by_me: existingReaction.reacted_by_me,
+      }
+    }),
+  }
 }
 
 export function buildMessageRows(messages: ChatMessage[]): MessageRow[] {

@@ -58,6 +58,7 @@ func setupChatServiceTestDB(t *testing.T) {
 		&model.ChatConversation{},
 		&model.ChatConversationMember{},
 		&model.ChatMessage{},
+		&model.ChatMessageReaction{},
 		&model.ChatReadState{},
 	))
 
@@ -137,6 +138,7 @@ func TestServiceListConversationsCreatesMissingChatTables(t *testing.T) {
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatConversation{}))
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatConversationMember{}))
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatMessage{}))
+	assert.True(t, model.DB.Migrator().HasTable(&model.ChatMessageReaction{}))
 	assert.True(t, model.DB.Migrator().HasTable(&model.ChatReadState{}))
 }
 
@@ -405,6 +407,68 @@ func TestServiceRevokeMessageRequiresSenderAndPublishes(t *testing.T) {
 	assert.Empty(t, messages[0].Body)
 	assert.Equal(t, revoked.RevokedAt, messages[0].RevokedAt)
 	assert.Equal(t, 1, messages[0].RevokedBy)
+}
+
+func TestServiceToggleMessageReactionPersistsCountsAndPublishes(t *testing.T) {
+	setupChatServiceTestDB(t)
+	seedChatServiceUser(t, 1, "admin", "Admin", common.RoleAdminUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 2, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+
+	publisher := &fakePublisher{}
+	svc := NewService(publisher)
+	conv, err := svc.CreateDirectConversation(context.Background(), 1, 2)
+	require.NoError(t, err)
+	message, err := svc.SendMessage(context.Background(), 1, conv.Id, "react here", "client-react")
+	require.NoError(t, err)
+	publisher.reset()
+
+	reacted, active, err := svc.ToggleMessageReaction(context.Background(), 2, conv.Id, message.Id, "👍")
+	require.NoError(t, err)
+	require.True(t, active)
+	require.NotNil(t, reacted)
+	require.Len(t, reacted.Reactions, 1)
+	assert.Equal(t, "👍", reacted.Reactions[0].Emoji)
+	assert.Equal(t, 1, reacted.Reactions[0].Count)
+	assert.True(t, reacted.Reactions[0].ReactedByMe)
+
+	require.Len(t, publisher.items, 1)
+	assert.Equal(t, ConversationChannel(conv.Id), publisher.items[0].Channel)
+	assert.Equal(t, EventTypeMessageReactionUpdated, publisher.items[0].Event.Type)
+	assert.Equal(t, 2, publisher.items[0].Event.UserID)
+	assert.Equal(t, "👍", publisher.items[0].Event.ReactionEmoji)
+	require.NotNil(t, publisher.items[0].Event.ReactionActive)
+	assert.True(t, *publisher.items[0].Event.ReactionActive)
+	require.NotNil(t, publisher.items[0].Event.Message)
+	require.Len(t, publisher.items[0].Event.Message.Reactions, 1)
+	assert.False(t, publisher.items[0].Event.Message.Reactions[0].ReactedByMe)
+
+	messagesForAlice, err := svc.ListMessages(context.Background(), 2, conv.Id, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, messagesForAlice, 1)
+	require.Len(t, messagesForAlice[0].Reactions, 1)
+	assert.True(t, messagesForAlice[0].Reactions[0].ReactedByMe)
+
+	messagesForAdmin, err := svc.ListMessages(context.Background(), 1, conv.Id, 10, 0)
+	require.NoError(t, err)
+	require.Len(t, messagesForAdmin, 1)
+	require.Len(t, messagesForAdmin[0].Reactions, 1)
+	assert.False(t, messagesForAdmin[0].Reactions[0].ReactedByMe)
+}
+
+func TestServiceToggleMessageReactionRequiresMembership(t *testing.T) {
+	setupChatServiceTestDB(t)
+	seedChatServiceUser(t, 1, "admin", "Admin", common.RoleAdminUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 2, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 3, "bob", "Bob", common.RoleCommonUser, common.UserStatusEnabled)
+
+	svc := NewService(&fakePublisher{})
+	conv, err := svc.CreateDirectConversation(context.Background(), 1, 2)
+	require.NoError(t, err)
+	message, err := svc.SendMessage(context.Background(), 1, conv.Id, "react here", "client-react")
+	require.NoError(t, err)
+
+	_, _, err = svc.ToggleMessageReaction(context.Background(), 3, conv.Id, message.Id, "👍")
+	require.ErrorIs(t, err, ErrForbidden)
 }
 
 func TestServiceGroupMemberManagementRequiresOwner(t *testing.T) {

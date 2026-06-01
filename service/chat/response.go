@@ -76,7 +76,7 @@ func (service *Service) decorateConversation(conversation *model.ChatConversatio
 	}, nil
 }
 
-func (service *Service) decorateMessages(messages []*model.ChatMessage) ([]*MessageResponse, error) {
+func (service *Service) decorateMessages(messages []*model.ChatMessage, currentUserID int) ([]*MessageResponse, error) {
 	responses := make([]*MessageResponse, 0, len(messages))
 	if len(messages) == 0 {
 		return responses, nil
@@ -90,7 +90,7 @@ func (service *Service) decorateMessages(messages []*model.ChatMessage) ([]*Mess
 		messagesByConversation[message.ConversationId] = append(messagesByConversation[message.ConversationId], message)
 	}
 	for conversationID, conversationMessages := range messagesByConversation {
-		decoration, err := newMessageDecorationContext(conversationID, conversationMessages)
+		decoration, err := newMessageDecorationContext(conversationID, conversationMessages, currentUserID)
 		if err != nil {
 			return nil, err
 		}
@@ -102,11 +102,11 @@ func (service *Service) decorateMessages(messages []*model.ChatMessage) ([]*Mess
 	return responses, nil
 }
 
-func (service *Service) decorateMessage(message *model.ChatMessage) (*MessageResponse, error) {
+func (service *Service) decorateMessage(message *model.ChatMessage, currentUserID int) (*MessageResponse, error) {
 	if message == nil {
 		return nil, ErrInvalidRequest
 	}
-	decoration, err := newMessageDecorationContext(message.ConversationId, []*model.ChatMessage{message})
+	decoration, err := newMessageDecorationContext(message.ConversationId, []*model.ChatMessage{message}, currentUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -114,12 +114,13 @@ func (service *Service) decorateMessage(message *model.ChatMessage) (*MessageRes
 }
 
 type messageDecorationContext struct {
-	memberIDs         []int
-	userByID          map[int]*UserSummary
-	readStateByUserID map[int]*model.ChatReadState
+	memberIDs            []int
+	userByID             map[int]*UserSummary
+	readStateByUserID    map[int]*model.ChatReadState
+	reactionsByMessageID map[int][]*MessageReactionResponse
 }
 
-func newMessageDecorationContext(conversationID int, messages []*model.ChatMessage) (*messageDecorationContext, error) {
+func newMessageDecorationContext(conversationID int, messages []*model.ChatMessage, currentUserID int) (*messageDecorationContext, error) {
 	memberIDs, err := model.ConversationMemberIDsForChat(conversationID)
 	if err != nil {
 		return nil, err
@@ -138,10 +139,25 @@ func newMessageDecorationContext(conversationID int, messages []*model.ChatMessa
 	if err != nil {
 		return nil, err
 	}
+	messageIDs := make([]int, 0, len(messages))
+	for _, message := range messages {
+		if message != nil {
+			messageIDs = append(messageIDs, message.Id)
+		}
+	}
+	reactionSummaries, err := model.ListChatMessageReactionSummaries(messageIDs, currentUserID)
+	if err != nil {
+		return nil, err
+	}
+	reactionsByMessageID := make(map[int][]*MessageReactionResponse, len(reactionSummaries))
+	for messageID, summaries := range reactionSummaries {
+		reactionsByMessageID[messageID] = toMessageReactionResponses(summaries)
+	}
 	return &messageDecorationContext{
-		memberIDs:         memberIDs,
-		userByID:          userByID,
-		readStateByUserID: readStateByUserID,
+		memberIDs:            memberIDs,
+		userByID:             userByID,
+		readStateByUserID:    readStateByUserID,
+		reactionsByMessageID: reactionsByMessageID,
 	}, nil
 }
 
@@ -165,6 +181,10 @@ func decorateMessageWithContext(message *model.ChatMessage, decoration *messageD
 		senderUsername = sender.Username
 		senderDisplayName = sender.DisplayName
 	}
+	reactions := decoration.reactionsByMessageID[message.Id]
+	if reactions == nil {
+		reactions = []*MessageReactionResponse{}
+	}
 
 	return &MessageResponse{
 		Id:                message.Id,
@@ -180,7 +200,23 @@ func decorateMessageWithContext(message *model.ChatMessage, decoration *messageD
 		RevokedAt:         message.RevokedAt,
 		RevokedBy:         message.RevokedBy,
 		ReadBy:            readBy,
+		Reactions:         reactions,
 	}
+}
+
+func toMessageReactionResponses(summaries []*model.ChatMessageReactionSummary) []*MessageReactionResponse {
+	responses := make([]*MessageReactionResponse, 0, len(summaries))
+	for _, summary := range summaries {
+		if summary == nil {
+			continue
+		}
+		responses = append(responses, &MessageReactionResponse{
+			Emoji:       summary.Emoji,
+			Count:       summary.Count,
+			ReactedByMe: summary.ReactedByCurrentUser,
+		})
+	}
+	return responses
 }
 
 func (service *Service) requireDirectConversationAllowed(currentUserID int, peerUserID int) error {

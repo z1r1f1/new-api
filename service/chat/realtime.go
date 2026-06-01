@@ -9,15 +9,16 @@ import (
 )
 
 const (
-	EventTypeConversationCreated = "conversation.created"
-	EventTypeConversationUpdated = "conversation.updated"
-	EventTypeMessageCreated      = "message.created"
-	EventTypeMessageRead         = "message.read"
-	EventTypeMessageRevoked      = "message.revoked"
-	EventTypeMemberAdded         = "member.added"
-	EventTypeMemberRemoved       = "member.removed"
-	EventTypePresenceUpdated     = "presence.updated"
-	EventTypeTypingUpdated       = "typing.updated"
+	EventTypeConversationCreated    = "conversation.created"
+	EventTypeConversationUpdated    = "conversation.updated"
+	EventTypeMessageCreated         = "message.created"
+	EventTypeMessageRead            = "message.read"
+	EventTypeMessageReactionUpdated = "message.reaction.updated"
+	EventTypeMessageRevoked         = "message.revoked"
+	EventTypeMemberAdded            = "member.added"
+	EventTypeMemberRemoved          = "member.removed"
+	EventTypePresenceUpdated        = "presence.updated"
+	EventTypeTypingUpdated          = "typing.updated"
 )
 
 type Event struct {
@@ -28,6 +29,8 @@ type Event struct {
 	UserID            int                   `json:"user_id,omitempty"`
 	MemberIDs         []int                 `json:"member_ids,omitempty"`
 	LastReadMessageID int                   `json:"last_read_message_id,omitempty"`
+	ReactionEmoji     string                `json:"reaction_emoji,omitempty"`
+	ReactionActive    *bool                 `json:"reaction_active,omitempty"`
 	CreatedAt         int64                 `json:"created_at,omitempty"`
 }
 

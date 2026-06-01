@@ -38,56 +38,68 @@ export interface ChatSticker {
   accent: string
 }
 
-export const AVAILABLE_CHAT_STICKERS: ChatSticker[] = [
-  {
-    id: 'cheer',
-    emoji: '🎉',
-    label: 'Cheer',
-    accent: 'from-amber-200 via-orange-200 to-rose-200',
-  },
-  {
-    id: 'thumbs-up',
-    emoji: '👍',
-    label: 'Nice',
-    accent: 'from-emerald-200 via-teal-200 to-cyan-200',
-  },
-  {
-    id: 'thinking',
-    emoji: '🤔',
-    label: 'Thinking',
-    accent: 'from-slate-200 via-zinc-200 to-stone-200',
-  },
-  {
-    id: 'laugh',
-    emoji: '😂',
-    label: 'Laugh',
-    accent: 'from-yellow-200 via-amber-200 to-orange-200',
-  },
-  {
-    id: 'heart',
-    emoji: '💖',
-    label: 'Love it',
-    accent: 'from-pink-200 via-fuchsia-200 to-purple-200',
-  },
-  {
-    id: 'fire',
-    emoji: '🔥',
-    label: 'Fire',
-    accent: 'from-orange-300 via-red-300 to-rose-300',
-  },
-  {
-    id: 'rocket',
-    emoji: '🚀',
-    label: 'Ship it',
-    accent: 'from-sky-200 via-indigo-200 to-violet-200',
-  },
-  {
-    id: 'eyes',
-    emoji: '👀',
-    label: 'Watching',
-    accent: 'from-lime-200 via-green-200 to-emerald-200',
-  },
+export interface ChatReactionOption {
+  id: string
+  emoji: string
+  label: string
+}
+
+export const AVAILABLE_CHAT_REACTIONS: ChatReactionOption[] = [
+  { id: 'thumbs-up', emoji: '👍', label: 'Thumbs up' },
+  { id: 'thumbs-down', emoji: '👎', label: 'Thumbs down' },
+  { id: 'heart', emoji: '❤️', label: 'Heart' },
+  { id: 'laugh', emoji: '😂', label: 'Laugh' },
+  { id: 'surprised', emoji: '😮', label: 'Surprised' },
+  { id: 'sad', emoji: '😢', label: 'Sad' },
+  { id: 'angry', emoji: '😡', label: 'Angry' },
+  { id: 'party', emoji: '🎉', label: 'Party' },
+  { id: 'fire', emoji: '🔥', label: 'Fire' },
+  { id: 'rocket', emoji: '🚀', label: 'Rocket' },
+  { id: 'clap', emoji: '👏', label: 'Clap' },
+  { id: 'hands', emoji: '🙌', label: 'Hands' },
+  { id: 'pray', emoji: '🙏', label: 'Pray' },
+  { id: 'handshake', emoji: '🤝', label: 'Handshake' },
+  { id: 'hundred', emoji: '💯', label: 'Hundred' },
+  { id: 'sparkles', emoji: '✨', label: 'Sparkles' },
+  { id: 'check', emoji: '✅', label: 'Check' },
+  { id: 'cross', emoji: '❌', label: 'Cross' },
+  { id: 'eyes', emoji: '👀', label: 'Eyes' },
+  { id: 'thinking', emoji: '🤔', label: 'Thinking' },
+  { id: 'cool', emoji: '😎', label: 'Cool' },
+  { id: 'smiling-hearts', emoji: '🥰', label: 'Smiling hearts' },
+  { id: 'heart-eyes', emoji: '😍', label: 'Heart eyes' },
+  { id: 'star-struck', emoji: '🤩', label: 'Star struck' },
+  { id: 'sweat-smile', emoji: '😅', label: 'Sweat smile' },
+  { id: 'rolling-laugh', emoji: '🤣', label: 'Rolling laugh' },
+  { id: 'crying', emoji: '😭', label: 'Crying' },
+  { id: 'triumph', emoji: '😤', label: 'Triumph' },
+  { id: 'scream', emoji: '😱', label: 'Scream' },
+  { id: 'salute', emoji: '🫡', label: 'Salute' },
+  { id: 'muscle', emoji: '💪', label: 'Muscle' },
+  { id: 'brain', emoji: '🧠', label: 'Brain' },
+  { id: 'idea', emoji: '💡', label: 'Idea' },
+  { id: 'star', emoji: '⭐', label: 'Star' },
+  { id: 'glowing-star', emoji: '🌟', label: 'Glowing star' },
+  { id: 'trophy', emoji: '🏆', label: 'Trophy' },
+  { id: 'pin', emoji: '📌', label: 'Pin' },
+  { id: 'memo', emoji: '📝', label: 'Memo' },
+  { id: 'cheers', emoji: '🍻', label: 'Cheers' },
+  { id: 'coffee', emoji: '☕', label: 'Coffee' },
+  { id: 'dog', emoji: '🐶', label: 'Dog' },
+  { id: 'cat', emoji: '🐱', label: 'Cat' },
+  { id: 'panda', emoji: '🐼', label: 'Panda' },
+  { id: 'penguin', emoji: '🐧', label: 'Penguin' },
+  { id: 'rainbow', emoji: '🌈', label: 'Rainbow' },
+  { id: 'zap', emoji: '⚡', label: 'Zap' },
+  { id: 'gem', emoji: '💎', label: 'Gem' },
+  { id: 'target', emoji: '🎯', label: 'Target' },
 ]
+
+export const AVAILABLE_CHAT_STICKERS: ChatSticker[] =
+  AVAILABLE_CHAT_REACTIONS.map((reaction) => ({
+    ...reaction,
+    accent: '',
+  }))
 
 const DEFAULT_CHAT_STICKER: ChatSticker = {
   id: 'custom',
@@ -218,7 +230,7 @@ export function getMessageReplyPreview(body: string): string {
       continue
     }
     if (part.type === 'image') return 'Image'
-    return `${part.sticker.emoji} ${part.sticker.label}`
+    return part.sticker.emoji
   }
   return ''
 }

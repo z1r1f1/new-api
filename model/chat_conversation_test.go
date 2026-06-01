@@ -15,6 +15,7 @@ import (
 func truncateChatTables(t *testing.T) {
 	t.Helper()
 	t.Cleanup(func() {
+		DB.Exec("DELETE FROM chat_message_reactions")
 		DB.Exec("DELETE FROM chat_read_states")
 		DB.Exec("DELETE FROM chat_messages")
 		DB.Exec("DELETE FROM chat_conversation_members")
@@ -46,6 +47,7 @@ func setupChatTestDB(t *testing.T) *gorm.DB {
 		&ChatConversation{},
 		&ChatConversationMember{},
 		&ChatMessage{},
+		&ChatMessageReaction{},
 		&ChatReadState{},
 	))
 

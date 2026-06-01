@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  AVAILABLE_CHAT_REACTIONS,
   AVAILABLE_CHAT_STICKERS,
   buildChatImageMarkdown,
   buildChatStickerMessage,
@@ -100,8 +101,15 @@ describe('message content image parsing', () => {
     ])
     assert.equal(
       getMessageReplyPreview(body),
-      `${sticker.emoji} ${sticker.label}`
+      sticker.emoji
     )
+  })
+
+  test('offers a richer plain emoji reaction set', () => {
+    assert.ok(AVAILABLE_CHAT_REACTIONS.length >= 40)
+    assert.ok(AVAILABLE_CHAT_REACTIONS.every((reaction) => reaction.emoji))
+    assert.ok(AVAILABLE_CHAT_REACTIONS.some((reaction) => reaction.emoji === '👍'))
+    assert.ok(AVAILABLE_CHAT_REACTIONS.some((reaction) => reaction.emoji === '❤️'))
   })
 
   test('escapes attachment names when building image markdown', () => {

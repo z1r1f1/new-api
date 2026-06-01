@@ -38,6 +38,7 @@ import {
   messagingQueryKeys,
   revokeChatMessage,
   sendChatMessage,
+  toggleChatMessageReaction,
 } from './api'
 import { ChatImagePreviewDialog } from './components/chat-image-preview-dialog'
 import { ChatSidebar } from './components/chat-sidebar'
@@ -59,6 +60,7 @@ import {
   getMessageSenderName,
   getTotalUnreadCount,
   MAX_MESSAGE_LENGTH,
+  mergeReactionEventMessage,
   mergeMessages,
   MESSAGE_PAGE_SIZE,
   type SidebarTab,
@@ -97,6 +99,11 @@ interface SendChatMessageVariables {
   body: string
 }
 
+interface ToggleMessageReactionVariables {
+  message: ChatMessage
+  emoji: string
+}
+
 export function Messaging() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
@@ -124,6 +131,9 @@ export function Messaging() {
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
   const [recallingMessageId, setRecallingMessageId] = useState<number | null>(
+    null
+  )
+  const [reactingMessageKey, setReactingMessageKey] = useState<string | null>(
     null
   )
   const [historyExhaustedByConversation, setHistoryExhaustedByConversation] =
@@ -239,16 +249,38 @@ export function Messaging() {
   }, [queryClient])
 
   const appendMessage = useCallback(
-    (message: ChatMessage) => {
+    (
+      message: ChatMessage,
+      reactionEvent?: {
+        reactorUserId?: number | null
+        emoji?: string
+        active?: boolean
+      }
+    ) => {
       queryClient.setQueryData(
         messagingQueryKeys.messages(message.conversation_id),
-        (current: ApiResponse<ChatMessage[]> | undefined) => ({
-          success: true,
-          data: mergeMessages(current?.data ?? [], [message]),
-        })
+        (current: ApiResponse<ChatMessage[]> | undefined) => {
+          const currentMessages = current?.data ?? []
+          const incomingMessage = reactionEvent
+            ? mergeReactionEventMessage(
+                currentMessages.find((item) => item.id === message.id),
+                message,
+                {
+                  currentUserId,
+                  reactorUserId: reactionEvent.reactorUserId,
+                  emoji: reactionEvent.emoji,
+                  active: reactionEvent.active,
+                }
+              )
+            : message
+          return {
+            success: true,
+            data: mergeMessages(currentMessages, [incomingMessage]),
+          }
+        }
       )
     },
-    [queryClient]
+    [currentUserId, queryClient]
   )
 
   const openDirectConversation = useCallback(
@@ -370,6 +402,27 @@ export function Messaging() {
     },
   })
 
+  const reactionMutation = useMutation({
+    mutationFn: (variables: ToggleMessageReactionVariables) =>
+      toggleChatMessageReaction(
+        variables.message.conversation_id,
+        variables.message.id,
+        { emoji: variables.emoji }
+      ),
+    onMutate: (variables) => {
+      setReactingMessageKey(`${variables.message.id}:${variables.emoji}`)
+    },
+    onSuccess: (response) => {
+      if (response.data) appendMessage(response.data)
+    },
+    onError: () => {
+      toast.error(t('Failed to update reaction'))
+    },
+    onSettled: () => {
+      setReactingMessageKey(null)
+    },
+  })
+
   const loadOlderMutation = useMutation({
     mutationFn: () => {
       if (!activeConversationId || messages.length === 0) {
@@ -410,6 +463,14 @@ export function Messaging() {
       if (event.type === 'message.revoked' && event.message) {
         appendMessage(event.message)
         invalidateConversations()
+        return
+      }
+      if (event.type === 'message.reaction.updated' && event.message) {
+        appendMessage(event.message, {
+          reactorUserId: event.user_id,
+          emoji: event.reaction_emoji,
+          active: event.reaction_active,
+        })
         return
       }
       if (event.type === 'message.read') {
@@ -570,6 +631,10 @@ export function Messaging() {
     )
   }
 
+  const handleReactMessage = (message: ChatMessage, emoji: string): void => {
+    reactionMutation.mutate({ message, emoji })
+  }
+
   const handleSendMessage = (): void => {
     if (processingPastedImages) {
       pendingSendAfterImageProcessingRef.current = {
@@ -657,9 +722,11 @@ export function Messaging() {
                   canLoadOlder={canLoadOlder}
                   loadingOlder={loadOlderMutation.isPending}
                   recallingMessageId={recallingMessageId}
+                  reactingMessageKey={reactingMessageKey}
                   onLoadOlder={() => loadOlderMutation.mutate()}
                   onRecallMessage={(message) => revokeMutation.mutate(message)}
                   onReplyMessage={handleReplyMessage}
+                  onReactMessage={handleReactMessage}
                   onViewUser={handleViewUser}
                 />
                 <MessageComposer

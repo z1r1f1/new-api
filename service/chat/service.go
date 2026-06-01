@@ -128,7 +128,7 @@ func (service *Service) SendMessage(ctx context.Context, currentUserID int, conv
 	if err := service.refreshReadStatesAfterMessage(conversationID, currentUserID, message.Id); err != nil {
 		return nil, err
 	}
-	response, err := service.decorateMessage(message)
+	response, err := service.decorateMessage(message, currentUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func (service *Service) RevokeMessage(ctx context.Context, currentUserID int, co
 	if err != nil {
 		return nil, err
 	}
-	response, err := service.decorateMessage(revoked)
+	response, err := service.decorateMessage(revoked, currentUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func (service *Service) ListMessages(ctx context.Context, currentUserID int, con
 	if err != nil {
 		return nil, err
 	}
-	return service.decorateMessages(messages)
+	return service.decorateMessages(messages, currentUserID)
 }
 
 func (service *Service) MarkRead(ctx context.Context, currentUserID int, conversationID int, lastReadMessageID int) error {

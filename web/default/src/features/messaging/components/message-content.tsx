@@ -111,20 +111,10 @@ interface ChatStickerContentProps {
 }
 
 function ChatStickerContent(props: ChatStickerContentProps) {
-  const { t } = useTranslation()
-
   return (
-    <div
-      className={cn(
-        'inline-flex w-fit items-center gap-1.5 rounded-2xl border bg-gradient-to-br px-3 py-2 shadow-sm',
-        props.sticker.accent
-      )}
-    >
-      <span className='text-3xl leading-none'>{props.sticker.emoji}</span>
-      <span className='text-[11px] font-medium text-slate-700'>
-        {t(props.sticker.label)}
-      </span>
-    </div>
+    <span className='inline-flex w-fit items-center text-4xl leading-none'>
+      {props.sticker.emoji}
+    </span>
   )
 }
 

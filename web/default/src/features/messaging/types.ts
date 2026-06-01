@@ -56,6 +56,13 @@ export interface ChatMessage {
   revoked_at: number
   revoked_by: number
   read_by: ChatUser[]
+  reactions: ChatMessageReaction[]
+}
+
+export interface ChatMessageReaction {
+  emoji: string
+  count: number
+  reacted_by_me: boolean
 }
 
 export interface ChatEvent {
@@ -66,6 +73,8 @@ export interface ChatEvent {
   user_id?: number
   member_ids?: number[]
   last_read_message_id?: number
+  reaction_emoji?: string
+  reaction_active?: boolean
   created_at?: number
 }
 
@@ -87,6 +96,10 @@ export interface CreateGroupConversationPayload {
 export interface SendMessagePayload {
   body: string
   client_message_id: string
+}
+
+export interface ToggleMessageReactionPayload {
+  emoji: string
 }
 
 export interface MarkReadPayload {

@@ -27,19 +27,26 @@ type ConversationResponse struct {
 }
 
 type MessageResponse struct {
-	Id                int            `json:"id"`
-	ConversationId    int            `json:"conversation_id"`
-	SenderId          int            `json:"sender_id"`
-	SenderUsername    string         `json:"sender_username"`
-	SenderDisplayName string         `json:"sender_display_name"`
-	MessageType       string         `json:"message_type"`
-	ClientMessageId   string         `json:"client_message_id"`
-	Body              string         `json:"body"`
-	CreatedAt         int64          `json:"created_at"`
-	UpdatedAt         int64          `json:"updated_at"`
-	RevokedAt         int64          `json:"revoked_at"`
-	RevokedBy         int            `json:"revoked_by"`
-	ReadBy            []*UserSummary `json:"read_by"`
+	Id                int                        `json:"id"`
+	ConversationId    int                        `json:"conversation_id"`
+	SenderId          int                        `json:"sender_id"`
+	SenderUsername    string                     `json:"sender_username"`
+	SenderDisplayName string                     `json:"sender_display_name"`
+	MessageType       string                     `json:"message_type"`
+	ClientMessageId   string                     `json:"client_message_id"`
+	Body              string                     `json:"body"`
+	CreatedAt         int64                      `json:"created_at"`
+	UpdatedAt         int64                      `json:"updated_at"`
+	RevokedAt         int64                      `json:"revoked_at"`
+	RevokedBy         int                        `json:"revoked_by"`
+	ReadBy            []*UserSummary             `json:"read_by"`
+	Reactions         []*MessageReactionResponse `json:"reactions"`
+}
+
+type MessageReactionResponse struct {
+	Emoji       string `json:"emoji"`
+	Count       int    `json:"count"`
+	ReactedByMe bool   `json:"reacted_by_me"`
 }
 
 func toUserSummary(user *model.ChatUser) *UserSummary {

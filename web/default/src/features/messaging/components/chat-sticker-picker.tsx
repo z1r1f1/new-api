@@ -19,7 +19,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { useState } from 'react'
 import { Sticker } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   Popover,
@@ -59,26 +58,20 @@ export function ChatStickerPicker(props: ChatStickerPickerProps) {
       >
         <Sticker className='h-4 w-4' />
       </PopoverTrigger>
-      <PopoverContent align='end' side='top' className='w-80'>
+      <PopoverContent align='end' side='top' className='w-72'>
         <PopoverTitle className='text-sm'>{t('Stickers')}</PopoverTitle>
-        <div className='grid grid-cols-4 gap-2'>
+        <div className='grid grid-cols-8 gap-1.5'>
           {props.stickers.map((sticker) => (
             <button
               key={sticker.id}
               type='button'
               onClick={() => handleSelectSticker(sticker)}
-              className={cn(
-                'focus-visible:ring-ring flex min-h-16 flex-col items-center justify-center rounded-2xl border bg-gradient-to-br p-2 text-center transition-transform hover:scale-[1.03] focus-visible:ring-2 focus-visible:ring-offset-2',
-                sticker.accent
-              )}
-              aria-label={t('Send {{name}} sticker', {
-                name: t(sticker.label),
+              className='hover:bg-muted focus-visible:ring-ring flex size-8 items-center justify-center rounded-lg text-xl leading-none transition-transform hover:scale-110 focus-visible:ring-2 focus-visible:ring-offset-2'
+              aria-label={t('Send {{emoji}} emoji', {
+                emoji: sticker.emoji,
               })}
             >
-              <span className='text-2xl leading-none'>{sticker.emoji}</span>
-              <span className='mt-1 text-[11px] font-medium text-slate-700'>
-                {t(sticker.label)}
-              </span>
+              {sticker.emoji}
             </button>
           ))}
         </div>

@@ -27,6 +27,10 @@ type sendChatMessageRequest struct {
 	ClientMessageId string `json:"client_message_id"`
 }
 
+type toggleChatMessageReactionRequest struct {
+	Emoji string `json:"emoji"`
+}
+
 type markChatReadRequest struct {
 	LastReadMessageId int `json:"last_read_message_id"`
 }
@@ -191,6 +195,39 @@ func RevokeChatMessage(c *gin.Context) {
 		return
 	}
 	message, err := service.RevokeMessage(c.Request.Context(), userId, conversationId, messageId)
+	if err != nil {
+		writeChatError(c, err)
+		return
+	}
+	chatJSON(c, http.StatusOK, true, "", message)
+}
+
+func ToggleChatMessageReaction(c *gin.Context) {
+	service, ok := getChatService(c)
+	if !ok {
+		return
+	}
+	userId, ok := currentChatUserID(c)
+	if !ok {
+		chatJSON(c, http.StatusUnauthorized, false, "not logged in", nil)
+		return
+	}
+	conversationId, ok := parseChatPathInt(c, "id")
+	if !ok {
+		chatJSON(c, http.StatusBadRequest, false, "invalid conversation id", nil)
+		return
+	}
+	messageId, ok := parseChatPathInt(c, "message_id")
+	if !ok {
+		chatJSON(c, http.StatusBadRequest, false, "invalid message id", nil)
+		return
+	}
+	var req toggleChatMessageReactionRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		chatJSON(c, http.StatusBadRequest, false, "invalid request", nil)
+		return
+	}
+	message, _, err := service.ToggleMessageReaction(c.Request.Context(), userId, conversationId, messageId, req.Emoji)
 	if err != nil {
 		writeChatError(c, err)
 		return

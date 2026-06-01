@@ -55,6 +55,7 @@ import {
 } from '../lib/format'
 import type { ChatConversation, ChatMessage, ChatUser } from '../types'
 import { MessageContent } from './message-content'
+import { MessageReactions } from './message-reactions'
 
 interface MessageListProps {
   conversation: ChatConversation | null
@@ -67,9 +68,11 @@ interface MessageListProps {
   canLoadOlder: boolean
   loadingOlder: boolean
   recallingMessageId: number | null
+  reactingMessageKey: string | null
   onLoadOlder: () => void
   onRecallMessage: (message: ChatMessage) => void
   onReplyMessage: (message: ChatMessage) => void
+  onReactMessage: (message: ChatMessage, emoji: string) => void
   onViewUser: (user: ChatUser) => void
 }
 
@@ -228,8 +231,10 @@ export function MessageList(props: MessageListProps) {
                 conversation={props.conversation}
                 currentUserId={props.currentUserId}
                 recallingMessageId={props.recallingMessageId}
+                reactingMessageKey={props.reactingMessageKey}
                 onRecallMessage={props.onRecallMessage}
                 onReplyMessage={props.onReplyMessage}
+                onReactMessage={props.onReactMessage}
                 onViewUser={props.onViewUser}
                 onJumpToMessage={handleJumpToMessage}
               />
@@ -266,8 +271,10 @@ interface MessageBubbleProps {
   conversation: ChatConversation | null
   currentUserId: number | null
   recallingMessageId: number | null
+  reactingMessageKey: string | null
   onRecallMessage: (message: ChatMessage) => void
   onReplyMessage: (message: ChatMessage) => void
+  onReactMessage: (message: ChatMessage, emoji: string) => void
   onViewUser: (user: ChatUser) => void
   onJumpToMessage: (messageId: number) => void
 }
@@ -306,6 +313,10 @@ function MessageBubble(props: MessageBubbleProps) {
 
   const handleReply = (): void => {
     props.onReplyMessage(props.message)
+  }
+
+  const handleReact = (emoji: string): void => {
+    props.onReactMessage(props.message, emoji)
   }
 
   const handleViewSender = (): void => {
@@ -377,6 +388,16 @@ function MessageBubble(props: MessageBubbleProps) {
             )}
           </div>
         </div>
+        {!revoked && (
+          <MessageReactions
+            reactions={props.message.reactions ?? []}
+            mine={props.mine}
+            disabled={props.reactingMessageKey?.startsWith(
+              `${props.message.id}:`
+            ) ?? false}
+            onReact={handleReact}
+          />
+        )}
         <div
           className={cn(
             'flex items-center gap-2 px-1 text-[11px]',

@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import type { ChatConversation } from '../types'
-import { getConversationTitle, getInitialConversation } from './format'
+import type { ChatConversation, ChatMessage } from '../types'
+import {
+  getConversationTitle,
+  getInitialConversation,
+  mergeReactionEventMessage,
+} from './format'
 
 function conversation(
   id: number,
@@ -21,6 +25,29 @@ function conversation(
     last_read_message_id: 0,
     is_default: false,
     members: [],
+    ...overrides,
+  }
+}
+
+function message(
+  id: number,
+  overrides: Partial<ChatMessage> = {}
+): ChatMessage {
+  return {
+    id,
+    conversation_id: 1,
+    sender_id: 1,
+    sender_username: 'alice',
+    sender_display_name: 'Alice',
+    message_type: 'text',
+    client_message_id: '',
+    body: 'hello',
+    created_at: 0,
+    updated_at: 0,
+    revoked_at: 0,
+    revoked_by: 0,
+    read_by: [],
+    reactions: [],
     ...overrides,
   }
 }
@@ -72,6 +99,43 @@ describe('getConversationTitle', () => {
         })
       ),
       'Issue feedback group'
+    )
+  })
+})
+
+describe('mergeReactionEventMessage', () => {
+  test('preserves current user reaction flags when another user reacts', () => {
+    const existing = message(1, {
+      reactions: [{ emoji: '👍', count: 1, reacted_by_me: true }],
+    })
+    const incoming = message(1, {
+      reactions: [{ emoji: '👍', count: 2, reacted_by_me: false }],
+    })
+
+    assert.deepEqual(
+      mergeReactionEventMessage(existing, incoming, {
+        currentUserId: 1,
+        reactorUserId: 2,
+        emoji: '👍',
+        active: true,
+      }).reactions,
+      [{ emoji: '👍', count: 2, reacted_by_me: true }]
+    )
+  })
+
+  test('applies current user reaction flag from realtime event metadata', () => {
+    const incoming = message(1, {
+      reactions: [{ emoji: '🎉', count: 1, reacted_by_me: false }],
+    })
+
+    assert.deepEqual(
+      mergeReactionEventMessage(undefined, incoming, {
+        currentUserId: 1,
+        reactorUserId: 1,
+        emoji: '🎉',
+        active: true,
+      }).reactions,
+      [{ emoji: '🎉', count: 1, reacted_by_me: true }]
     )
   })
 })
