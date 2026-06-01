@@ -53,6 +53,7 @@ export const STATIC_I18N_KEYS = [
   'Messages',
   'Direct chat',
   'Group chat',
+  'Issue feedback group',
   'direct',
   'group',
   'connected',

@@ -68,14 +68,14 @@ export function ChatStickerPicker(props: ChatStickerPickerProps) {
               type='button'
               onClick={() => handleSelectSticker(sticker)}
               className={cn(
-                'focus-visible:ring-ring flex min-h-20 flex-col items-center justify-center rounded-2xl border bg-gradient-to-br p-2 text-center transition-transform hover:scale-[1.03] focus-visible:ring-2 focus-visible:ring-offset-2',
+                'focus-visible:ring-ring flex min-h-16 flex-col items-center justify-center rounded-2xl border bg-gradient-to-br p-2 text-center transition-transform hover:scale-[1.03] focus-visible:ring-2 focus-visible:ring-offset-2',
                 sticker.accent
               )}
               aria-label={t('Send {{name}} sticker', {
                 name: t(sticker.label),
               })}
             >
-              <span className='text-3xl leading-none'>{sticker.emoji}</span>
+              <span className='text-2xl leading-none'>{sticker.emoji}</span>
               <span className='mt-1 text-[11px] font-medium text-slate-700'>
                 {t(sticker.label)}
               </span>

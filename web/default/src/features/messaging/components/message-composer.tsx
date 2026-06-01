@@ -93,7 +93,7 @@ export function MessageComposer(props: MessageComposerProps) {
 
   return (
     <div className='border-border/80 bg-background shrink-0 border-t p-3 lg:p-4'>
-      <div className='focus-within:border-primary/50 relative rounded-2xl border p-2'>
+      <div className='focus-within:border-[#07c160]/70 focus-within:ring-[#07c160]/15 bg-card/40 relative rounded-2xl border p-2 transition-colors focus-within:ring-2'>
         {showMentionCandidates && mentionCandidates.length > 0 && (
           <div className='bg-popover text-popover-foreground absolute right-2 bottom-[calc(100%-0.25rem)] left-2 z-10 rounded-xl border p-2 shadow-lg'>
             <div className='text-muted-foreground mb-1 flex items-center gap-1 px-1 text-xs'>
@@ -153,11 +153,11 @@ export function MessageComposer(props: MessageComposerProps) {
                 <div
                   key={`${sticker.id}-${index}`}
                   className={cn(
-                    'group/sticker relative flex size-12 shrink-0 items-center justify-center rounded-lg border bg-gradient-to-br',
+                    'group/sticker relative flex size-10 shrink-0 items-center justify-center rounded-lg border bg-gradient-to-br',
                     sticker.accent
                   )}
                 >
-                  <span className='text-2xl leading-none'>{sticker.emoji}</span>
+                  <span className='text-xl leading-none'>{sticker.emoji}</span>
                   <button
                     type='button'
                     className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/sticker:opacity-100 focus:opacity-100'
@@ -254,7 +254,7 @@ export function MessageComposer(props: MessageComposerProps) {
                 props.sending ||
                 (!hasContent && !props.processingImages)
               }
-              className='gap-2'
+              className='gap-2 bg-[#07c160] text-white hover:bg-[#06ad56] focus-visible:ring-[#07c160]/40'
             >
               {props.sending || props.processingImages ? (
                 <Loader2 className='h-4 w-4 animate-spin' />

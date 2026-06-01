@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useEffect, useMemo, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Check,
   CheckCheck,
@@ -76,13 +76,59 @@ interface MessageListProps {
 export function MessageList(props: MessageListProps) {
   const { t } = useTranslation()
   const viewportRef = useRef<HTMLDivElement | null>(null)
+  const messageElementsRef = useRef<Map<number, HTMLDivElement>>(new Map())
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const [highlightedMessageId, setHighlightedMessageId] = useState<
+    number | null
+  >(null)
   const rows = useMemo(() => buildMessageRows(props.messages), [props.messages])
+
+  const handleMessageElement = useCallback(
+    (messageId: number, element: HTMLDivElement | null) => {
+      if (element) {
+        messageElementsRef.current.set(messageId, element)
+        return
+      }
+      messageElementsRef.current.delete(messageId)
+    },
+    []
+  )
+
+  const handleJumpToMessage = useCallback(
+    (messageId: number) => {
+      const messageElement = messageElementsRef.current.get(messageId)
+      if (!messageElement) {
+        toast.info(t('Referenced message is not loaded'))
+        return
+      }
+      messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      setHighlightedMessageId(messageId)
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current)
+      }
+      highlightTimeoutRef.current = setTimeout(() => {
+        setHighlightedMessageId(null)
+        highlightTimeoutRef.current = null
+      }, 1800)
+    },
+    [t]
+  )
 
   useEffect(() => {
     const viewport = viewportRef.current
     if (!viewport || props.searchText.trim()) return
     viewport.scrollTo({ top: viewport.scrollHeight, behavior: 'smooth' })
   }, [props.messages.length, props.searchText])
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current)
+      }
+    }
+  }, [])
 
   if (props.empty) {
     return (
@@ -166,17 +212,28 @@ export function MessageList(props: MessageListProps) {
             return <DateDivider key={row.key} timestamp={row.timestamp} />
           }
           return (
-            <MessageBubble
+            <div
               key={row.key}
-              message={row.message}
-              mine={row.message.sender_id === props.currentUserId}
-              conversation={props.conversation}
-              currentUserId={props.currentUserId}
-              recallingMessageId={props.recallingMessageId}
-              onRecallMessage={props.onRecallMessage}
-              onReplyMessage={props.onReplyMessage}
-              onViewUser={props.onViewUser}
-            />
+              ref={(element) => handleMessageElement(row.message.id, element)}
+              id={`chat-message-${row.message.id}`}
+              className={cn(
+                'scroll-mt-24 rounded-3xl transition-shadow',
+                highlightedMessageId === row.message.id &&
+                  'ring-2 ring-[#07c160]/70 ring-offset-2 ring-offset-background'
+              )}
+            >
+              <MessageBubble
+                message={row.message}
+                mine={row.message.sender_id === props.currentUserId}
+                conversation={props.conversation}
+                currentUserId={props.currentUserId}
+                recallingMessageId={props.recallingMessageId}
+                onRecallMessage={props.onRecallMessage}
+                onReplyMessage={props.onReplyMessage}
+                onViewUser={props.onViewUser}
+                onJumpToMessage={handleJumpToMessage}
+              />
+            </div>
           )
         })}
       </div>
@@ -212,6 +269,7 @@ interface MessageBubbleProps {
   onRecallMessage: (message: ChatMessage) => void
   onReplyMessage: (message: ChatMessage) => void
   onViewUser: (user: ChatUser) => void
+  onJumpToMessage: (messageId: number) => void
 }
 
 function MessageBubble(props: MessageBubbleProps) {
@@ -295,7 +353,7 @@ function MessageBubble(props: MessageBubbleProps) {
           className={cn(
             'relative rounded-3xl px-4 py-3 text-sm shadow-sm transition-shadow group-hover:shadow-md',
             props.mine
-              ? 'bg-primary text-primary-foreground rounded-tr-md'
+              ? 'rounded-tr-md bg-[#95ec69] text-slate-950 dark:bg-[#78c957] dark:text-slate-950'
               : 'bg-card text-card-foreground rounded-tl-md border'
           )}
         >
@@ -304,14 +362,18 @@ function MessageBubble(props: MessageBubbleProps) {
               'leading-relaxed break-words whitespace-pre-wrap',
               revoked &&
                 (props.mine
-                  ? 'text-primary-foreground/75 italic'
+                  ? 'text-slate-800/70 italic'
                   : 'text-muted-foreground italic')
             )}
           >
             {revoked ? (
               t('This message was recalled')
             ) : (
-              <MessageContent body={props.message.body} mine={props.mine} />
+              <MessageContent
+                body={props.message.body}
+                mine={props.mine}
+                onReplyReferenceClick={props.onJumpToMessage}
+              />
             )}
           </div>
         </div>

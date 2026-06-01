@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import type { ChatConversation } from '../types'
-import { getInitialConversation } from './format'
+import { getConversationTitle, getInitialConversation } from './format'
 
 function conversation(
   id: number,
@@ -58,5 +58,20 @@ describe('getInitialConversation', () => {
   test('returns null when no conversation can be selected', () => {
     assert.equal(getInitialConversation([]), null)
     assert.equal(getInitialConversation([conversation(1)]), null)
+  })
+})
+
+describe('getConversationTitle', () => {
+  test('labels the default group as the issue feedback group', () => {
+    assert.equal(
+      getConversationTitle(
+        conversation(1, {
+          type: 'group',
+          title: 'Default group',
+          is_default: true,
+        })
+      ),
+      'Issue feedback group'
+    )
   })
 })

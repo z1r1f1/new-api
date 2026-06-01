@@ -53,7 +53,7 @@ export function formatChatDate(timestamp: number): string {
 }
 
 export function getConversationTitle(conversation: ChatConversation): string {
-  if (conversation.is_default) return 'Default group'
+  if (conversation.is_default) return 'Issue feedback group'
   if (conversation.type === 'direct' && conversation.peer) {
     return getChatUserDisplayName(conversation.peer)
   }

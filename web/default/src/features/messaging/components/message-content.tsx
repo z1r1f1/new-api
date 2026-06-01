@@ -30,6 +30,7 @@ import { ChatImagePreviewDialog } from './chat-image-preview-dialog'
 interface MessageContentProps {
   body: string
   mine: boolean
+  onReplyReferenceClick?: (messageId: number) => void
 }
 
 export function MessageContent(props: MessageContentProps) {
@@ -44,23 +45,16 @@ export function MessageContent(props: MessageContentProps) {
     <>
       <div className='flex flex-col gap-2'>
         {replyReference && (
-          <div
-            className={cn(
-              'mb-1 rounded-2xl border-l-4 px-3 py-2 text-xs',
-              props.mine
-                ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/85'
-                : 'border-primary/50 bg-muted/60 text-muted-foreground'
-            )}
-          >
-            <div className='font-medium'>
-              {t('Replying to {{name}}', {
-                name: replyReference.senderName,
-              })}
-            </div>
-            <div className='mt-0.5 line-clamp-2'>
-              {replyReference.preview || t('Message')}
-            </div>
-          </div>
+          <ReplyReferenceBlock
+            mine={props.mine}
+            senderName={replyReference.senderName}
+            preview={replyReference.preview || t('Message')}
+            onClick={
+              props.onReplyReferenceClick
+                ? () => props.onReplyReferenceClick?.(replyReference.messageId)
+                : undefined
+            }
+          />
         )}
         {parts.map((part, index) => {
           if (part.type === 'text') {
@@ -122,14 +116,62 @@ function ChatStickerContent(props: ChatStickerContentProps) {
   return (
     <div
       className={cn(
-        'inline-flex w-fit flex-col items-center rounded-3xl border bg-gradient-to-br px-5 py-4 shadow-sm',
+        'inline-flex w-fit items-center gap-1.5 rounded-2xl border bg-gradient-to-br px-3 py-2 shadow-sm',
         props.sticker.accent
       )}
     >
-      <span className='text-5xl leading-none'>{props.sticker.emoji}</span>
-      <span className='mt-2 text-xs font-medium text-slate-700'>
+      <span className='text-3xl leading-none'>{props.sticker.emoji}</span>
+      <span className='text-[11px] font-medium text-slate-700'>
         {t(props.sticker.label)}
       </span>
     </div>
+  )
+}
+
+interface ReplyReferenceBlockProps {
+  mine: boolean
+  senderName: string
+  preview: string
+  onClick?: () => void
+}
+
+function ReplyReferenceBlock(props: ReplyReferenceBlockProps) {
+  const { t } = useTranslation()
+  const className = cn(
+    'mb-1 w-full rounded-2xl border-l-4 px-3 py-2 text-left text-xs transition-colors',
+    props.mine
+      ? 'border-green-700/40 bg-white/35 text-slate-900/85'
+      : 'border-primary/50 bg-muted/60 text-muted-foreground',
+    props.onClick &&
+      (props.mine
+        ? 'cursor-pointer hover:bg-white/45 focus-visible:ring-green-700/40'
+        : 'cursor-pointer hover:bg-muted focus-visible:ring-ring'),
+    props.onClick && 'outline-none focus-visible:ring-2 focus-visible:ring-offset-2'
+  )
+
+  const content = (
+    <>
+      <div className='font-medium'>
+        {t('Replying to {{name}}', {
+          name: props.senderName,
+        })}
+      </div>
+      <div className='mt-0.5 line-clamp-2'>{props.preview}</div>
+    </>
+  )
+
+  if (!props.onClick) {
+    return <div className={className}>{content}</div>
+  }
+
+  return (
+    <button
+      type='button'
+      className={className}
+      onClick={props.onClick}
+      aria-label={t('Jump to replied message')}
+    >
+      {content}
+    </button>
   )
 }
