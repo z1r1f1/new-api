@@ -23,6 +23,8 @@ import { nanoid } from 'nanoid'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useAuthStore } from '@/stores/auth-store'
+import { getUserAvatarStyle } from '@/lib/avatar'
+import { ROLE } from '@/lib/roles'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -38,6 +40,7 @@ import {
   sendChatMessage,
 } from './api'
 import { ChatSidebar } from './components/chat-sidebar'
+import { ChatUserProfileDialog } from './components/chat-user-profile-dialog'
 import { MessageComposer } from './components/message-composer'
 import { MessageList } from './components/message-list'
 import { RealtimeStatusBadge } from './components/realtime-status-badge'
@@ -58,6 +61,13 @@ import {
   MESSAGE_PAGE_SIZE,
   type SidebarTab,
 } from './lib/format'
+import {
+  buildOutgoingMessageBody,
+  CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH,
+  CHAT_PASTED_IMAGE_MAX_COUNT,
+  createChatImageAttachment,
+  type ChatImageAttachment,
+} from './lib/message-content'
 import type {
   ApiResponse,
   ChatConversation,
@@ -70,6 +80,8 @@ export function Messaging() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const currentUserId = useAuthStore((state) => state.auth.user?.id ?? null)
+  const currentUserRole = useAuthStore((state) => state.auth.user?.role ?? 0)
+  const canViewUserDetails = currentUserRole >= ROLE.ADMIN
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('users')
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null)
   const [activeConversationId, setActiveConversationId] = useState<
@@ -77,6 +89,10 @@ export function Messaging() {
   >(null)
   const [openingUserId, setOpeningUserId] = useState<number | null>(null)
   const [messageBody, setMessageBody] = useState('')
+  const [pastedImages, setPastedImages] = useState<ChatImageAttachment[]>([])
+  const [processingPastedImages, setProcessingPastedImages] = useState(false)
+  const [profileUser, setProfileUser] = useState<ChatUser | null>(null)
+  const [profileDialogOpen, setProfileDialogOpen] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [messageSearch, setMessageSearch] = useState('')
   const [recallingMessageId, setRecallingMessageId] = useState<number | null>(
@@ -143,6 +159,7 @@ export function Messaging() {
     setSelectedUserId(initialConversation.peer?.id ?? null)
     setSidebarTab('conversations')
     setMessageBody('')
+    setPastedImages([])
     setMessageSearch('')
   }, [
     activeConversationId,
@@ -239,18 +256,19 @@ export function Messaging() {
   })
 
   const sendMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: (body: string) => {
       if (!activeConversationId) {
         throw new Error(t('Select a conversation first'))
       }
       return sendChatMessage(activeConversationId, {
-        body: messageBody.trim(),
+        body,
         client_message_id: nanoid(),
       })
     },
     onSuccess: (response) => {
       if (response.data) appendMessage(response.data)
       setMessageBody('')
+      setPastedImages([])
       setMessageSearch('')
       invalidateConversations()
     },
@@ -357,6 +375,7 @@ export function Messaging() {
   const handleSelectUser = (user: ChatUser): void => {
     setSelectedUserId(user.id)
     setMessageBody('')
+    setPastedImages([])
     setMessageSearch('')
     setActiveConversationId(null)
     if (openDirectConversation(user, conversations)) return
@@ -367,17 +386,74 @@ export function Messaging() {
     setActiveConversationId(conversation.id)
     setSelectedUserId(conversation.peer?.id ?? null)
     setMessageBody('')
+    setPastedImages([])
     setMessageSearch('')
   }
 
+  const handleViewUser = (user: ChatUser): void => {
+    setProfileUser(user)
+    setProfileDialogOpen(true)
+  }
+
+  const handleStartDirectChat = (user: ChatUser): void => {
+    setProfileDialogOpen(false)
+    handleSelectUser(user)
+  }
+
+  const handlePasteImages = (files: File[]): void => {
+    if (pastedImages.length >= CHAT_PASTED_IMAGE_MAX_COUNT) {
+      toast.error(
+        t('You can attach up to {{count}} images', {
+          count: CHAT_PASTED_IMAGE_MAX_COUNT,
+        })
+      )
+      return
+    }
+    const availableSlots = CHAT_PASTED_IMAGE_MAX_COUNT - pastedImages.length
+    const filesToProcess = files.slice(0, availableSlots)
+    if (files.length > availableSlots) {
+      toast.error(
+        t('You can attach up to {{count}} images', {
+          count: CHAT_PASTED_IMAGE_MAX_COUNT,
+        })
+      )
+    }
+
+    setProcessingPastedImages(true)
+    void Promise.all(
+      filesToProcess.map((file) => createChatImageAttachment(file, nanoid()))
+    )
+      .then((attachments) => {
+        setPastedImages((current) => [...current, ...attachments])
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : ''
+        toast.error(t(message || 'Failed to read pasted image'))
+      })
+      .finally(() => setProcessingPastedImages(false))
+  }
+
+  const handleRemovePastedImage = (id: string): void => {
+    setPastedImages((current) => current.filter((image) => image.id !== id))
+  }
+
   const handleSendMessage = (): void => {
-    const body = messageBody.trim()
-    if (!body) return
-    if (body.length > MAX_MESSAGE_LENGTH) {
+    const textBody = messageBody.trim()
+    if (!textBody && pastedImages.length === 0) return
+    if (processingPastedImages) {
+      toast.error(t('Processing image...'))
+      return
+    }
+    if (textBody.length > MAX_MESSAGE_LENGTH) {
       toast.error(t('Message is too long'))
       return
     }
-    sendMutation.mutate()
+    const body = buildOutgoingMessageBody(messageBody, pastedImages)
+    if (body.length > CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH) {
+      toast.error(t('Message is too long'))
+      return
+    }
+    sendMutation.mutate(body)
   }
 
   const handleRefresh = (): void => {
@@ -434,6 +510,7 @@ export function Messaging() {
                 loading={loadingThread}
                 onSearchChange={setMessageSearch}
                 onRefresh={handleRefresh}
+                onViewUser={handleViewUser}
               />
               <CardContent className='flex min-h-0 flex-1 flex-col p-0'>
                 <MessageList
@@ -449,21 +526,35 @@ export function Messaging() {
                   recallingMessageId={recallingMessageId}
                   onLoadOlder={() => loadOlderMutation.mutate()}
                   onRecallMessage={(message) => revokeMutation.mutate(message)}
+                  onViewUser={handleViewUser}
                 />
                 <MessageComposer
                   value={messageBody}
                   active={Boolean(activeConversationId)}
                   sending={sendMutation.isPending}
+                  processingImages={processingPastedImages}
                   maxLength={MAX_MESSAGE_LENGTH}
                   mentionUsers={mentionUsers}
+                  attachments={pastedImages}
                   onChange={setMessageBody}
                   onSend={handleSendMessage}
+                  onPasteImages={handlePasteImages}
+                  onRemoveAttachment={handleRemovePastedImage}
                 />
               </CardContent>
             </div>
           </Card>
         </main>
       </div>
+      <ChatUserProfileDialog
+        user={profileUser}
+        open={profileDialogOpen}
+        canViewDetails={canViewUserDetails}
+        currentUserId={currentUserId}
+        openingDirect={Boolean(profileUser && openingUserId === profileUser.id)}
+        onOpenChange={setProfileDialogOpen}
+        onStartDirectChat={handleStartDirectChat}
+      />
     </div>
   )
 }
@@ -477,6 +568,7 @@ interface ChatHeaderProps {
   loading: boolean
   onSearchChange: (value: string) => void
   onRefresh: () => void
+  onViewUser: (user: ChatUser) => void
 }
 
 function ChatHeader(props: ChatHeaderProps) {
@@ -484,21 +576,38 @@ function ChatHeader(props: ChatHeaderProps) {
   const active = Boolean(props.conversation)
   const title = getHeaderTitle(props.conversation, props.pendingUser, t)
   const subtitle = getHeaderSubtitle(props.conversation, props.pendingUser, t)
+  const headerUser = props.conversation?.peer ?? props.pendingUser
+  const headerUserName = headerUser ? getChatUserDisplayName(headerUser) : ''
 
   return (
     <CardHeader className='border-border/80 shrink-0 border-b'>
       <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
         <div className='flex min-w-0 items-center gap-3'>
-          {props.conversation ? (
+          {headerUser ? (
+            <button
+              type='button'
+              onClick={() => props.onViewUser(headerUser)}
+              className='focus-visible:ring-ring rounded-full transition-transform outline-none hover:scale-105 focus-visible:ring-2 focus-visible:ring-offset-2'
+              aria-label={t('View user profile')}
+            >
+              <Avatar size='lg' className='shadow-sm'>
+                <AvatarFallback
+                  className='font-semibold'
+                  style={getUserAvatarStyle(headerUserName)}
+                >
+                  {getChatUserInitial(headerUser)}
+                </AvatarFallback>
+              </Avatar>
+            </button>
+          ) : props.conversation ? (
             <Avatar size='lg' className='shadow-sm'>
-              <AvatarFallback className='bg-muted'>
+              <AvatarFallback
+                className='font-semibold'
+                style={getUserAvatarStyle(
+                  getConversationTitle(props.conversation)
+                )}
+              >
                 {getConversationInitial(props.conversation)}
-              </AvatarFallback>
-            </Avatar>
-          ) : props.pendingUser ? (
-            <Avatar size='lg' className='shadow-sm'>
-              <AvatarFallback className='bg-muted'>
-                {getChatUserInitial(props.pendingUser)}
               </AvatarFallback>
             </Avatar>
           ) : (

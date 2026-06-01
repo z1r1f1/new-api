@@ -25,6 +25,7 @@ import {
   Users,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { getUserAvatarStyle } from '@/lib/avatar'
 import { cn } from '@/lib/utils'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -218,7 +219,10 @@ function UserListItem(props: UserListItemProps) {
       )}
     >
       <Avatar size='sm' className='shrink-0'>
-        <AvatarFallback className='bg-muted text-xs'>
+        <AvatarFallback
+          className='text-xs font-semibold'
+          style={getUserAvatarStyle(displayName)}
+        >
           {getChatUserInitial(props.user)}
         </AvatarFallback>
       </Avatar>
@@ -280,6 +284,9 @@ interface ConversationListItemProps {
 function ConversationListItem(props: ConversationListItemProps) {
   const { t } = useTranslation()
   const title = getConversationTitle(props.conversation)
+  const avatarName = props.conversation.peer
+    ? getChatUserDisplayName(props.conversation.peer)
+    : title
 
   return (
     <button
@@ -291,7 +298,10 @@ function ConversationListItem(props: ConversationListItemProps) {
       )}
     >
       <Avatar size='sm' className='shrink-0'>
-        <AvatarFallback className='bg-muted text-xs'>
+        <AvatarFallback
+          className='text-xs font-semibold'
+          style={getUserAvatarStyle(avatarName)}
+        >
           {getConversationInitial(props.conversation)}
         </AvatarFallback>
       </Avatar>

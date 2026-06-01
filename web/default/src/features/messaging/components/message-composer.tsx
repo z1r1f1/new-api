@@ -16,23 +16,28 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo } from 'react'
-import { AtSign, Loader2, Send } from 'lucide-react'
+import { useMemo, type ClipboardEvent } from 'react'
+import { AtSign, ImagePlus, Loader2, Send, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { getChatUserDisplayName } from '../lib/format'
+import type { ChatImageAttachment } from '../lib/message-content'
 import type { ChatUser } from '../types'
 
 interface MessageComposerProps {
   value: string
   active: boolean
   sending: boolean
+  processingImages: boolean
   maxLength: number
   mentionUsers: ChatUser[]
+  attachments: ChatImageAttachment[]
   onChange: (value: string) => void
   onSend: () => void
+  onPasteImages: (files: File[]) => void
+  onRemoveAttachment: (id: string) => void
 }
 
 export function MessageComposer(props: MessageComposerProps) {
@@ -46,6 +51,7 @@ export function MessageComposer(props: MessageComposerProps) {
   const showMentionCandidates = Boolean(
     props.active && !props.sending && mentionQuery !== null
   )
+  const hasContent = Boolean(props.value.trim() || props.attachments.length > 0)
 
   const handleMention = (user: ChatUser): void => {
     const mention = `@${user.username} `
@@ -59,6 +65,13 @@ export function MessageComposer(props: MessageComposerProps) {
       return
     }
     props.onChange(`${props.value.slice(0, atIndex)}${mention}`)
+  }
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>): void => {
+    const files = getImageFilesFromClipboard(event)
+    if (files.length === 0) return
+    event.preventDefault()
+    props.onPasteImages(files)
   }
 
   return (
@@ -89,11 +102,36 @@ export function MessageComposer(props: MessageComposerProps) {
             </div>
           </div>
         )}
+        {props.attachments.length > 0 && (
+          <div className='mb-2 flex flex-wrap gap-2 border-b pb-2'>
+            {props.attachments.map((attachment) => (
+              <div
+                key={attachment.id}
+                className='group/attachment bg-muted relative h-20 w-20 overflow-hidden rounded-xl border'
+              >
+                <img
+                  src={attachment.dataUrl}
+                  alt={attachment.name}
+                  className='size-full object-cover'
+                />
+                <button
+                  type='button'
+                  className='bg-background/90 text-foreground absolute top-1 right-1 flex size-6 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/attachment:opacity-100 focus:opacity-100'
+                  onClick={() => props.onRemoveAttachment(attachment.id)}
+                  aria-label={t('Remove image')}
+                >
+                  <X className='h-3.5 w-3.5' />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <Textarea
           value={props.value}
           onChange={(event) => props.onChange(event.target.value)}
-          placeholder={t('Type a message...')}
-          disabled={!props.active || props.sending}
+          onPaste={handlePaste}
+          placeholder={t('Paste images or type a message...')}
+          disabled={!props.active || props.sending || props.processingImages}
           className='min-h-20 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0'
           onKeyDown={(event) => {
             if (event.key === 'Enter' && !event.shiftKey) {
@@ -103,18 +141,39 @@ export function MessageComposer(props: MessageComposerProps) {
           }}
         />
         <div className='flex items-center justify-between gap-3 border-t pt-2'>
-          <span
-            className={cn(
-              'text-muted-foreground px-1 text-xs tabular-nums',
-              remaining < 0 && 'text-destructive'
+          <div className='flex min-w-0 flex-wrap items-center gap-2'>
+            <span
+              className={cn(
+                'text-muted-foreground px-1 text-xs tabular-nums',
+                remaining < 0 && 'text-destructive'
+              )}
+            >
+              {t('{{count}} characters left', { count: remaining })}
+            </span>
+            {props.processingImages && (
+              <span className='text-muted-foreground flex items-center gap-1 text-xs'>
+                <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                {t('Processing image...')}
+              </span>
             )}
-          >
-            {t('{{count}} characters left', { count: remaining })}
-          </span>
+            {props.attachments.length > 0 && !props.processingImages && (
+              <span className='text-muted-foreground flex items-center gap-1 text-xs'>
+                <ImagePlus className='h-3.5 w-3.5' />
+                {t('{{count}} images attached', {
+                  count: props.attachments.length,
+                })}
+              </span>
+            )}
+          </div>
           <Button
             type='button'
             onClick={props.onSend}
-            disabled={!props.active || props.sending || !props.value.trim()}
+            disabled={
+              !props.active ||
+              props.sending ||
+              props.processingImages ||
+              !hasContent
+            }
             className='gap-2'
           >
             {props.sending ? (
@@ -150,4 +209,17 @@ function filterMentionCandidates(
       )
     })
     .slice(0, 8)
+}
+
+function getImageFilesFromClipboard(
+  event: ClipboardEvent<HTMLTextAreaElement>
+): File[] {
+  const files: File[] = []
+  for (const item of Array.from(event.clipboardData.items)) {
+    if (item.kind !== 'file') continue
+    const file = item.getAsFile()
+    if (!file?.type.startsWith('image/')) continue
+    files.push(file)
+  }
+  return files
 }
