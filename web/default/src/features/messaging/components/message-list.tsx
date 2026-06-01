@@ -26,6 +26,7 @@ import {
   EyeOff,
   Loader2,
   MessageCircle,
+  Reply,
   Undo2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
@@ -68,6 +69,7 @@ interface MessageListProps {
   recallingMessageId: number | null
   onLoadOlder: () => void
   onRecallMessage: (message: ChatMessage) => void
+  onReplyMessage: (message: ChatMessage) => void
   onViewUser: (user: ChatUser) => void
 }
 
@@ -172,6 +174,7 @@ export function MessageList(props: MessageListProps) {
               currentUserId={props.currentUserId}
               recallingMessageId={props.recallingMessageId}
               onRecallMessage={props.onRecallMessage}
+              onReplyMessage={props.onReplyMessage}
               onViewUser={props.onViewUser}
             />
           )
@@ -207,6 +210,7 @@ interface MessageBubbleProps {
   currentUserId: number | null
   recallingMessageId: number | null
   onRecallMessage: (message: ChatMessage) => void
+  onReplyMessage: (message: ChatMessage) => void
   onViewUser: (user: ChatUser) => void
 }
 
@@ -240,6 +244,10 @@ function MessageBubble(props: MessageBubbleProps) {
 
   const handleRecall = (): void => {
     props.onRecallMessage(props.message)
+  }
+
+  const handleReply = (): void => {
+    props.onReplyMessage(props.message)
   }
 
   const handleViewSender = (): void => {
@@ -334,6 +342,18 @@ function MessageBubble(props: MessageBubbleProps) {
               )}
               {readLabelText}
             </span>
+          )}
+          {!revoked && (
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='h-7 gap-1 px-2 text-xs opacity-0 transition-opacity group-hover:opacity-100'
+              onClick={handleReply}
+            >
+              <Reply className='h-3.5 w-3.5' />
+              {t('Reply')}
+            </Button>
           )}
           {!revoked && (
             <Button

@@ -4828,6 +4828,23 @@
     "Unread {{count}}": "Non lu {{count}}",
     "Read by": "Lu par",
     "Unread by": "Non lu par",
-    "No users": "Aucun utilisateur"
+    "No users": "Aucun utilisateur",
+    "Stickers": "Autocollants",
+    "Send {{name}} sticker": "Envoyer l’autocollant {{name}}",
+    "Remove sticker": "Supprimer l’autocollant",
+    "{{count}} stickers selected": "{{count}} autocollants sélectionnés",
+    "Replying to {{name}}": "Réponse à {{name}}",
+    "Cancel reply": "Annuler la réponse",
+    "Reply": "Répondre",
+    "Message": "Message",
+    "Cheer": "Bravo",
+    "Nice": "Super",
+    "Thinking": "Réflexion",
+    "Laugh": "Rire",
+    "Love it": "J’adore",
+    "Fire": "Excellent",
+    "Ship it": "On y va",
+    "Watching": "Je regarde",
+    "You can select up to {{count}} stickers": "Vous pouvez sélectionner jusqu’à {{count}} autocollants"
   }
 }

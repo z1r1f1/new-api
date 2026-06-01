@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useMemo, type ClipboardEvent } from 'react'
-import { AtSign, ImagePlus, Loader2, Send, X } from 'lucide-react'
+import { AtSign, ImagePlus, Loader2, Reply, Send, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -26,8 +26,11 @@ import { getChatUserDisplayName } from '../lib/format'
 import {
   isChatMessageSendable,
   type ChatImageAttachment,
+  type ChatReplyReference,
+  type ChatSticker,
 } from '../lib/message-content'
 import type { ChatUser } from '../types'
+import { ChatStickerPicker } from './chat-sticker-picker'
 
 interface MessageComposerProps {
   value: string
@@ -37,11 +40,17 @@ interface MessageComposerProps {
   maxLength: number
   mentionUsers: ChatUser[]
   attachments: ChatImageAttachment[]
+  stickers: ChatSticker[]
+  availableStickers: ChatSticker[]
+  replyTo: ChatReplyReference | null
   onChange: (value: string) => void
   onSend: () => void
   onPasteImages: (files: File[]) => void
   onRemoveAttachment: (id: string) => void
   onPreviewAttachment: (attachment: ChatImageAttachment) => void
+  onSelectSticker: (sticker: ChatSticker) => void
+  onRemoveSticker: (index: number) => void
+  onCancelReply: () => void
 }
 
 export function MessageComposer(props: MessageComposerProps) {
@@ -55,7 +64,11 @@ export function MessageComposer(props: MessageComposerProps) {
   const showMentionCandidates = Boolean(
     props.active && !props.sending && mentionQuery !== null
   )
-  const hasContent = isChatMessageSendable(props.value, props.attachments)
+  const hasContent = isChatMessageSendable(
+    props.value,
+    props.attachments,
+    props.stickers
+  )
 
   const handleMention = (user: ChatUser): void => {
     const mention = `@${user.username} `
@@ -106,7 +119,7 @@ export function MessageComposer(props: MessageComposerProps) {
             </div>
           </div>
         )}
-        {props.attachments.length > 0 && (
+        {(props.attachments.length > 0 || props.stickers.length > 0) && (
           <div className='mb-1 max-w-full overflow-x-auto border-b pb-1.5'>
             <div className='flex w-max items-center gap-1.5'>
               {props.attachments.map((attachment) => (
@@ -136,7 +149,47 @@ export function MessageComposer(props: MessageComposerProps) {
                   </button>
                 </div>
               ))}
+              {props.stickers.map((sticker, index) => (
+                <div
+                  key={`${sticker.id}-${index}`}
+                  className={cn(
+                    'group/sticker relative flex size-12 shrink-0 items-center justify-center rounded-lg border bg-gradient-to-br',
+                    sticker.accent
+                  )}
+                >
+                  <span className='text-2xl leading-none'>{sticker.emoji}</span>
+                  <button
+                    type='button'
+                    className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/sticker:opacity-100 focus:opacity-100'
+                    onClick={() => props.onRemoveSticker(index)}
+                    aria-label={t('Remove sticker')}
+                  >
+                    <X className='h-3 w-3' />
+                  </button>
+                </div>
+              ))}
             </div>
+          </div>
+        )}
+        {props.replyTo && (
+          <div className='bg-muted/60 border-primary/50 mb-2 flex items-start gap-2 rounded-xl border-l-4 px-3 py-2'>
+            <Reply className='text-muted-foreground mt-0.5 h-3.5 w-3.5 shrink-0' />
+            <div className='min-w-0 flex-1'>
+              <div className='text-xs font-medium'>
+                {t('Replying to {{name}}', { name: props.replyTo.senderName })}
+              </div>
+              <div className='text-muted-foreground mt-0.5 line-clamp-2 text-xs'>
+                {props.replyTo.preview || t('Message')}
+              </div>
+            </div>
+            <button
+              type='button'
+              className='text-muted-foreground hover:text-foreground rounded-full p-0.5'
+              onClick={props.onCancelReply}
+              aria-label={t('Cancel reply')}
+            >
+              <X className='h-3.5 w-3.5' />
+            </button>
           </div>
         )}
         <Textarea
@@ -177,24 +230,40 @@ export function MessageComposer(props: MessageComposerProps) {
                 })}
               </span>
             )}
-          </div>
-          <Button
-            type='button'
-            onClick={props.onSend}
-            disabled={
-              !props.active ||
-              props.sending ||
-              (!hasContent && !props.processingImages)
-            }
-            className='gap-2'
-          >
-            {props.sending || props.processingImages ? (
-              <Loader2 className='h-4 w-4 animate-spin' />
-            ) : (
-              <Send className='h-4 w-4' />
+            {props.stickers.length > 0 && !props.processingImages && (
+              <span className='text-muted-foreground flex items-center gap-1 text-xs'>
+                {t('{{count}} stickers selected', {
+                  count: props.stickers.length,
+                })}
+              </span>
             )}
-            {t('Send')}
-          </Button>
+          </div>
+          <div className='flex shrink-0 items-center gap-1'>
+            <ChatStickerPicker
+              stickers={props.availableStickers}
+              disabled={
+                !props.active || props.sending || props.processingImages
+              }
+              onSelectSticker={props.onSelectSticker}
+            />
+            <Button
+              type='button'
+              onClick={props.onSend}
+              disabled={
+                !props.active ||
+                props.sending ||
+                (!hasContent && !props.processingImages)
+              }
+              className='gap-2'
+            >
+              {props.sending || props.processingImages ? (
+                <Loader2 className='h-4 w-4 animate-spin' />
+              ) : (
+                <Send className='h-4 w-4' />
+              )}
+              {t('Send')}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
+  AVAILABLE_CHAT_STICKERS,
   buildChatImageMarkdown,
+  buildChatStickerMessage,
   extractMessageContentParts,
+  extractMessageReplyReference,
+  getMessageReplyPreview,
   isChatMessageSendable,
   isSafeChatImageDataUrl,
 } from './message-content'
@@ -63,6 +67,41 @@ describe('message content image parsing', () => {
       true
     )
     assert.equal(isChatMessageSendable('   ', []), false)
+  })
+
+  test('allows sending a sticker-only message', () => {
+    assert.equal(
+      isChatMessageSendable('', [], [AVAILABLE_CHAT_STICKERS[0]]),
+      true
+    )
+    assert.equal(isChatMessageSendable('   ', [], []), false)
+  })
+
+  test('builds and extracts a reply reference without leaking it into content parts', () => {
+    const reply = {
+      messageId: 42,
+      senderName: 'Alice',
+      preview: 'hello from earlier',
+    }
+    const body = buildChatStickerMessage(AVAILABLE_CHAT_STICKERS[1], reply)
+
+    assert.deepEqual(extractMessageReplyReference(body), reply)
+    assert.deepEqual(extractMessageContentParts(body), [
+      { type: 'sticker', sticker: AVAILABLE_CHAT_STICKERS[1] },
+    ])
+  })
+
+  test('builds and extracts sticker messages', () => {
+    const sticker = AVAILABLE_CHAT_STICKERS[2]
+    const body = buildChatStickerMessage(sticker)
+
+    assert.deepEqual(extractMessageContentParts(body), [
+      { type: 'sticker', sticker },
+    ])
+    assert.equal(
+      getMessageReplyPreview(body),
+      `${sticker.emoji} ${sticker.label}`
+    )
   })
 
   test('escapes attachment names when building image markdown', () => {

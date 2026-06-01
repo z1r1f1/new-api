@@ -4828,6 +4828,23 @@
     "Unread {{count}}": "Chưa đọc {{count}}",
     "Read by": "Đã đọc bởi",
     "Unread by": "Chưa đọc bởi",
-    "No users": "Không có người dùng"
+    "No users": "Không có người dùng",
+    "Stickers": "Nhãn dán",
+    "Send {{name}} sticker": "Gửi nhãn dán {{name}}",
+    "Remove sticker": "Xóa nhãn dán",
+    "{{count}} stickers selected": "Đã chọn {{count}} nhãn dán",
+    "Replying to {{name}}": "Đang trả lời {{name}}",
+    "Cancel reply": "Hủy trả lời",
+    "Reply": "Trả lời",
+    "Message": "Tin nhắn",
+    "Cheer": "Ăn mừng",
+    "Nice": "Tuyệt",
+    "Thinking": "Đang nghĩ",
+    "Laugh": "Cười",
+    "Love it": "Thích quá",
+    "Fire": "Đỉnh",
+    "Ship it": "Triển khai",
+    "Watching": "Đang xem",
+    "You can select up to {{count}} stickers": "Bạn có thể chọn tối đa {{count}} nhãn dán"
   }
 }

@@ -4828,6 +4828,23 @@
     "Unread {{count}}": "未読 {{count}}",
     "Read by": "既読メンバー",
     "Unread by": "未読メンバー",
-    "No users": "ユーザーはいません"
+    "No users": "ユーザーはいません",
+    "Stickers": "スタンプ",
+    "Send {{name}} sticker": "{{name}}スタンプを送信",
+    "Remove sticker": "スタンプを削除",
+    "{{count}} stickers selected": "{{count}} 個のスタンプを選択済み",
+    "Replying to {{name}}": "{{name}} に返信",
+    "Cancel reply": "返信をキャンセル",
+    "Reply": "返信",
+    "Message": "メッセージ",
+    "Cheer": "お祝い",
+    "Nice": "いいね",
+    "Thinking": "考え中",
+    "Laugh": "笑い",
+    "Love it": "好き",
+    "Fire": "最高",
+    "Ship it": "進めよう",
+    "Watching": "見ています",
+    "You can select up to {{count}} stickers": "スタンプは最大 {{count}} 個まで選択できます"
   }
 }

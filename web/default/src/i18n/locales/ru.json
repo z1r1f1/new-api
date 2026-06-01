@@ -4828,6 +4828,23 @@
     "Unread {{count}}": "Не прочитали {{count}}",
     "Read by": "Прочитали",
     "Unread by": "Не прочитали",
-    "No users": "Нет пользователей"
+    "No users": "Нет пользователей",
+    "Stickers": "Стикеры",
+    "Send {{name}} sticker": "Отправить стикер {{name}}",
+    "Remove sticker": "Удалить стикер",
+    "{{count}} stickers selected": "Выбрано стикеров: {{count}}",
+    "Replying to {{name}}": "Ответ для {{name}}",
+    "Cancel reply": "Отменить ответ",
+    "Reply": "Ответить",
+    "Message": "Сообщение",
+    "Cheer": "Ура",
+    "Nice": "Отлично",
+    "Thinking": "Думаю",
+    "Laugh": "Смех",
+    "Love it": "Нравится",
+    "Fire": "Огонь",
+    "Ship it": "Запускаем",
+    "Watching": "Смотрю",
+    "You can select up to {{count}} stickers": "Можно выбрать до {{count}} стикеров"
   }
 }

@@ -56,6 +56,7 @@ import {
   getConversationTitle,
   getDirectConversationKey,
   getInitialConversation,
+  getMessageSenderName,
   getTotalUnreadCount,
   MAX_MESSAGE_LENGTH,
   mergeMessages,
@@ -63,13 +64,18 @@ import {
   type SidebarTab,
 } from './lib/format'
 import {
+  AVAILABLE_CHAT_STICKERS,
   buildOutgoingMessageBody,
   CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH,
   CHAT_PASTED_IMAGE_MAX_COUNT,
+  CHAT_STICKER_MAX_COUNT,
   createChatImageAttachment,
+  getMessageReplyPreview,
   isChatMessageSendable,
   type ChatImageAttachment,
   type ChatImagePreview,
+  type ChatReplyReference,
+  type ChatSticker,
 } from './lib/message-content'
 import type {
   ApiResponse,
@@ -82,6 +88,8 @@ import type {
 interface PendingImageSend {
   conversationId: number | null
   text: string
+  stickers: ChatSticker[]
+  replyTo: ChatReplyReference | null
 }
 
 interface SendChatMessageVariables {
@@ -103,6 +111,10 @@ export function Messaging() {
   const [openingUserId, setOpeningUserId] = useState<number | null>(null)
   const [messageBody, setMessageBody] = useState('')
   const [pastedImages, setPastedImages] = useState<ChatImageAttachment[]>([])
+  const [selectedStickers, setSelectedStickers] = useState<ChatSticker[]>([])
+  const [replyTarget, setReplyTarget] = useState<ChatReplyReference | null>(
+    null
+  )
   const [processingPastedImages, setProcessingPastedImages] = useState(false)
   const [previewImage, setPreviewImage] = useState<ChatImagePreview | null>(
     null
@@ -248,6 +260,7 @@ export function Messaging() {
           conversation.direct_key === directKey
       )
       if (!existingConversation) return false
+      activeConversationIdRef.current = existingConversation.id
       setActiveConversationId(existingConversation.id)
       setSelectedUserId(user.id)
       return true
@@ -293,6 +306,8 @@ export function Messaging() {
         if (variables.conversationId === activeConversationIdRef.current) {
           setMessageBody('')
           setPastedImages([])
+          setSelectedStickers([])
+          setReplyTarget(null)
           setMessageSearch('')
         }
         invalidateConversations()
@@ -306,9 +321,11 @@ export function Messaging() {
     (
       text: string,
       attachments: ChatImageAttachment[],
+      stickers: ChatSticker[],
+      replyTo: ChatReplyReference | null,
       conversationId: number | null
     ): boolean => {
-      if (!isChatMessageSendable(text, attachments)) return false
+      if (!isChatMessageSendable(text, attachments, stickers)) return false
       if (!conversationId) {
         toast.error(t('Select a conversation first'))
         return false
@@ -318,7 +335,12 @@ export function Messaging() {
         toast.error(t('Message is too long'))
         return false
       }
-      const body = buildOutgoingMessageBody(text, attachments)
+      const body = buildOutgoingMessageBody(
+        text,
+        attachments,
+        replyTo,
+        stickers
+      )
       if (body.length > CHAT_IMAGE_TOTAL_BODY_MAX_LENGTH) {
         toast.error(t('Message is too long'))
         return false
@@ -433,6 +455,8 @@ export function Messaging() {
     sendMessageWithAttachments(
       pendingSend.text,
       pastedImages,
+      pendingSend.stickers,
+      pendingSend.replyTo,
       pendingSend.conversationId
     )
   }, [pastedImages, processingPastedImages, sendMessageWithAttachments])
@@ -443,6 +467,8 @@ export function Messaging() {
     setSelectedUserId(user.id)
     setMessageBody('')
     setPastedImages([])
+    setSelectedStickers([])
+    setReplyTarget(null)
     setPreviewImage(null)
     setMessageSearch('')
     setActiveConversationId(null)
@@ -457,6 +483,8 @@ export function Messaging() {
     setSelectedUserId(conversation.peer?.id ?? null)
     setMessageBody('')
     setPastedImages([])
+    setSelectedStickers([])
+    setReplyTarget(null)
     setPreviewImage(null)
     setMessageSearch('')
   }
@@ -469,6 +497,14 @@ export function Messaging() {
   const handleStartDirectChat = (user: ChatUser): void => {
     setProfileDialogOpen(false)
     handleSelectUser(user)
+  }
+
+  const handleReplyMessage = (message: ChatMessage): void => {
+    setReplyTarget({
+      messageId: message.id,
+      senderName: getMessageSenderName(message),
+      preview: getMessageReplyPreview(message.body) || t('Message'),
+    })
   }
 
   const handlePasteImages = (files: File[]): void => {
@@ -514,15 +550,43 @@ export function Messaging() {
     setPastedImages((current) => current.filter((image) => image.id !== id))
   }
 
+  const handleSelectSticker = (sticker: ChatSticker): void => {
+    setSelectedStickers((current) => {
+      if (current.length >= CHAT_STICKER_MAX_COUNT) {
+        toast.error(
+          t('You can select up to {{count}} stickers', {
+            count: CHAT_STICKER_MAX_COUNT,
+          })
+        )
+        return current
+      }
+      return [...current, sticker]
+    })
+  }
+
+  const handleRemoveSticker = (index: number): void => {
+    setSelectedStickers((current) =>
+      current.filter((_, currentIndex) => currentIndex !== index)
+    )
+  }
+
   const handleSendMessage = (): void => {
     if (processingPastedImages) {
       pendingSendAfterImageProcessingRef.current = {
         conversationId: activeConversationId,
         text: messageBody,
+        stickers: selectedStickers,
+        replyTo: replyTarget,
       }
       return
     }
-    sendMessageWithAttachments(messageBody, pastedImages, activeConversationId)
+    sendMessageWithAttachments(
+      messageBody,
+      pastedImages,
+      selectedStickers,
+      replyTarget,
+      activeConversationId
+    )
   }
 
   const handleRefresh = (): void => {
@@ -595,6 +659,7 @@ export function Messaging() {
                   recallingMessageId={recallingMessageId}
                   onLoadOlder={() => loadOlderMutation.mutate()}
                   onRecallMessage={(message) => revokeMutation.mutate(message)}
+                  onReplyMessage={handleReplyMessage}
                   onViewUser={handleViewUser}
                 />
                 <MessageComposer
@@ -605,6 +670,9 @@ export function Messaging() {
                   maxLength={MAX_MESSAGE_LENGTH}
                   mentionUsers={mentionUsers}
                   attachments={pastedImages}
+                  stickers={selectedStickers}
+                  availableStickers={AVAILABLE_CHAT_STICKERS}
+                  replyTo={replyTarget}
                   onChange={setMessageBody}
                   onSend={handleSendMessage}
                   onPasteImages={handlePasteImages}
@@ -615,6 +683,9 @@ export function Messaging() {
                       alt: attachment.name,
                     })
                   }
+                  onSelectSticker={handleSelectSticker}
+                  onRemoveSticker={handleRemoveSticker}
+                  onCancelReply={() => setReplyTarget(null)}
                 />
               </CardContent>
             </div>

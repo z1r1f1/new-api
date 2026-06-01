@@ -4828,6 +4828,23 @@
     "Unread {{count}}": "Unread {{count}}",
     "Read by": "Read by",
     "Unread by": "Unread by",
-    "No users": "No users"
+    "No users": "No users",
+    "Stickers": "Stickers",
+    "Send {{name}} sticker": "Send {{name}} sticker",
+    "Remove sticker": "Remove sticker",
+    "{{count}} stickers selected": "{{count}} stickers selected",
+    "Replying to {{name}}": "Replying to {{name}}",
+    "Cancel reply": "Cancel reply",
+    "Reply": "Reply",
+    "Message": "Message",
+    "Cheer": "Cheer",
+    "Nice": "Nice",
+    "Thinking": "Thinking",
+    "Laugh": "Laugh",
+    "Love it": "Love it",
+    "Fire": "Fire",
+    "Ship it": "Ship it",
+    "Watching": "Watching",
+    "You can select up to {{count}} stickers": "You can select up to {{count}} stickers"
   }
 }

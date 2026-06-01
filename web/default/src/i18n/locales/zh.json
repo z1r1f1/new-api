@@ -4828,6 +4828,23 @@
     "Unread {{count}}": "未读 {{count}}",
     "Read by": "已读成员",
     "Unread by": "未读成员",
-    "No users": "无用户"
+    "No users": "无用户",
+    "Stickers": "表情包",
+    "Send {{name}} sticker": "发送 {{name}} 表情",
+    "Remove sticker": "移除表情",
+    "{{count}} stickers selected": "已选择 {{count}} 个表情",
+    "Replying to {{name}}": "回复 {{name}}",
+    "Cancel reply": "取消回复",
+    "Reply": "回复",
+    "Message": "消息",
+    "Cheer": "庆祝",
+    "Nice": "赞",
+    "Thinking": "思考",
+    "Laugh": "大笑",
+    "Love it": "喜欢",
+    "Fire": "太强了",
+    "Ship it": "冲",
+    "Watching": "围观",
+    "You can select up to {{count}} stickers": "最多可选择 {{count}} 个表情"
   }
 }

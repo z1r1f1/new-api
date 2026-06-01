@@ -21,7 +21,9 @@ import { useTranslation } from 'react-i18next'
 import { cn } from '@/lib/utils'
 import {
   extractMessageContentParts,
+  extractMessageReplyReference,
   type ChatImagePreview,
+  type ChatSticker,
 } from '../lib/message-content'
 import { ChatImagePreviewDialog } from './chat-image-preview-dialog'
 
@@ -35,11 +37,31 @@ export function MessageContent(props: MessageContentProps) {
   const [previewImage, setPreviewImage] = useState<ChatImagePreview | null>(
     null
   )
+  const replyReference = extractMessageReplyReference(props.body)
   const parts = extractMessageContentParts(props.body)
 
   return (
     <>
       <div className='flex flex-col gap-2'>
+        {replyReference && (
+          <div
+            className={cn(
+              'mb-1 rounded-2xl border-l-4 px-3 py-2 text-xs',
+              props.mine
+                ? 'border-primary-foreground/50 bg-primary-foreground/10 text-primary-foreground/85'
+                : 'border-primary/50 bg-muted/60 text-muted-foreground'
+            )}
+          >
+            <div className='font-medium'>
+              {t('Replying to {{name}}', {
+                name: replyReference.senderName,
+              })}
+            </div>
+            <div className='mt-0.5 line-clamp-2'>
+              {replyReference.preview || t('Message')}
+            </div>
+          </div>
+        )}
         {parts.map((part, index) => {
           if (part.type === 'text') {
             if (!part.text) return null
@@ -47,6 +69,14 @@ export function MessageContent(props: MessageContentProps) {
               <span key={`text-${index}`} className='whitespace-pre-wrap'>
                 {part.text}
               </span>
+            )
+          }
+          if (part.type === 'sticker') {
+            return (
+              <ChatStickerContent
+                key={`sticker-${index}`}
+                sticker={part.sticker}
+              />
             )
           }
           const alt = part.alt || t('Image Preview')
@@ -79,5 +109,27 @@ export function MessageContent(props: MessageContentProps) {
         }}
       />
     </>
+  )
+}
+
+interface ChatStickerContentProps {
+  sticker: ChatSticker
+}
+
+function ChatStickerContent(props: ChatStickerContentProps) {
+  const { t } = useTranslation()
+
+  return (
+    <div
+      className={cn(
+        'inline-flex w-fit flex-col items-center rounded-3xl border bg-gradient-to-br px-5 py-4 shadow-sm',
+        props.sticker.accent
+      )}
+    >
+      <span className='text-5xl leading-none'>{props.sticker.emoji}</span>
+      <span className='mt-2 text-xs font-medium text-slate-700'>
+        {t(props.sticker.label)}
+      </span>
+    </div>
   )
 }

@@ -22,10 +22,79 @@ export const CHAT_IMAGE_MAX_SOURCE_FILE_SIZE = 5 * 1024 * 1024
 export const CHAT_IMAGE_MAX_DATA_URL_LENGTH = 54_000
 export const CHAT_IMAGE_MAX_DIMENSION = 1280
 export const CHAT_IMAGE_OUTPUT_QUALITY = 0.72
+export const CHAT_STICKER_MAX_COUNT = 6
 
 const SAFE_IMAGE_DATA_URL_PATTERN =
   /^data:image\/(?:png|jpe?g|gif|webp);base64,[A-Za-z0-9+/=]+$/i
-const MESSAGE_IMAGE_PATTERN = /!\[([^\]\n]*)\]\(([^)\s]+)\)/g
+const MESSAGE_CONTENT_PATTERN =
+  /!\[([^\]\n]*)\]\(([^)\s]+)\)|<!--chat-sticker:([^>]+)-->/g
+const MESSAGE_REPLY_PATTERN = /^<!--chat-reply:([^>]+)-->\n*/i
+const MESSAGE_MARKER_ID_PATTERN = /^[a-z0-9_-]{1,48}$/i
+
+export interface ChatSticker {
+  id: string
+  emoji: string
+  label: string
+  accent: string
+}
+
+export const AVAILABLE_CHAT_STICKERS: ChatSticker[] = [
+  {
+    id: 'cheer',
+    emoji: '🎉',
+    label: 'Cheer',
+    accent: 'from-amber-200 via-orange-200 to-rose-200',
+  },
+  {
+    id: 'thumbs-up',
+    emoji: '👍',
+    label: 'Nice',
+    accent: 'from-emerald-200 via-teal-200 to-cyan-200',
+  },
+  {
+    id: 'thinking',
+    emoji: '🤔',
+    label: 'Thinking',
+    accent: 'from-slate-200 via-zinc-200 to-stone-200',
+  },
+  {
+    id: 'laugh',
+    emoji: '😂',
+    label: 'Laugh',
+    accent: 'from-yellow-200 via-amber-200 to-orange-200',
+  },
+  {
+    id: 'heart',
+    emoji: '💖',
+    label: 'Love it',
+    accent: 'from-pink-200 via-fuchsia-200 to-purple-200',
+  },
+  {
+    id: 'fire',
+    emoji: '🔥',
+    label: 'Fire',
+    accent: 'from-orange-300 via-red-300 to-rose-300',
+  },
+  {
+    id: 'rocket',
+    emoji: '🚀',
+    label: 'Ship it',
+    accent: 'from-sky-200 via-indigo-200 to-violet-200',
+  },
+  {
+    id: 'eyes',
+    emoji: '👀',
+    label: 'Watching',
+    accent: 'from-lime-200 via-green-200 to-emerald-200',
+  },
+]
+
+const DEFAULT_CHAT_STICKER: ChatSticker = {
+  id: 'custom',
+  emoji: '🙂',
+  label: 'Sticker',
+  accent: 'from-muted via-muted to-muted',
+}
 
 export interface ChatImageAttachment {
   id: string
@@ -40,9 +109,16 @@ export interface ChatImagePreview {
   alt: string
 }
 
+export interface ChatReplyReference {
+  messageId: number
+  senderName: string
+  preview: string
+}
+
 export type MessageContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; alt: string; src: string }
+  | { type: 'sticker'; sticker: ChatSticker }
 
 export function isSafeChatImageDataUrl(value: string): boolean {
   return SAFE_IMAGE_DATA_URL_PATTERN.test(value)
@@ -50,35 +126,48 @@ export function isSafeChatImageDataUrl(value: string): boolean {
 
 export function isChatMessageSendable(
   text: string,
-  attachments: ChatImageAttachment[]
+  attachments: ChatImageAttachment[],
+  stickers: ChatSticker[] = []
 ): boolean {
-  return Boolean(text.trim() || attachments.length > 0)
+  return Boolean(text.trim() || attachments.length > 0 || stickers.length > 0)
+}
+
+export function extractMessageReplyReference(
+  body: string
+): ChatReplyReference | null {
+  const match = MESSAGE_REPLY_PATTERN.exec(body)
+  if (!match) return null
+  return parseReplyReferencePayload(match[1] ?? '')
 }
 
 export function extractMessageContentParts(body: string): MessageContentPart[] {
+  const contentBody = stripMessageReplyReference(body)
   const parts: MessageContentPart[] = []
   let cursor = 0
 
-  for (const match of body.matchAll(MESSAGE_IMAGE_PATTERN)) {
+  for (const match of contentBody.matchAll(MESSAGE_CONTENT_PATTERN)) {
     const index = match.index ?? 0
     const fullMatch = match[0]
     const alt = match[1] ?? ''
     const src = match[2] ?? ''
+    const stickerPayload = match[3] ?? ''
 
-    if (!isSafeChatImageDataUrl(src)) continue
+    const part = stickerPayload
+      ? getStickerContentPart(stickerPayload)
+      : getImageContentPart(alt, src)
+    if (!part) continue
 
-    if (index > cursor) {
-      parts.push({ type: 'text', text: body.slice(cursor, index) })
-    }
-    parts.push({ type: 'image', alt, src })
+    if (index > cursor)
+      parts.push({ type: 'text', text: contentBody.slice(cursor, index) })
+    parts.push(part)
     cursor = index + fullMatch.length
   }
 
-  if (cursor < body.length) {
-    parts.push({ type: 'text', text: body.slice(cursor) })
+  if (cursor < contentBody.length) {
+    parts.push({ type: 'text', text: contentBody.slice(cursor) })
   }
 
-  if (parts.length === 0) return [{ type: 'text', text: body }]
+  if (parts.length === 0) return [{ type: 'text', text: contentBody }]
   return mergeAdjacentTextParts(parts)
 }
 
@@ -94,17 +183,44 @@ export function buildChatImageMarkdown(
   return `![${alt}](${attachment.dataUrl})`
 }
 
+export function buildChatStickerMessage(
+  sticker: ChatSticker,
+  replyReference?: ChatReplyReference | null
+): string {
+  return buildOutgoingMessageBody('', [], replyReference, [sticker])
+}
+
 export function buildOutgoingMessageBody(
   text: string,
-  attachments: ChatImageAttachment[]
+  attachments: ChatImageAttachment[],
+  replyReference?: ChatReplyReference | null,
+  stickers: ChatSticker[] = []
 ): string {
   const bodyParts: string[] = []
+  if (replyReference) bodyParts.push(buildChatReplyMarker(replyReference))
   const trimmedText = text.trim()
   if (trimmedText) bodyParts.push(trimmedText)
   for (const attachment of attachments) {
     bodyParts.push(buildChatImageMarkdown(attachment))
   }
+  for (const sticker of stickers) {
+    bodyParts.push(buildChatStickerMarker(sticker))
+  }
   return bodyParts.join('\n\n')
+}
+
+export function getMessageReplyPreview(body: string): string {
+  const parts = extractMessageContentParts(body)
+  for (const part of parts) {
+    if (part.type === 'text') {
+      const text = part.text.trim().replace(/\s+/g, ' ')
+      if (text) return truncateMessagePreview(text)
+      continue
+    }
+    if (part.type === 'image') return 'Image'
+    return `${part.sticker.emoji} ${part.sticker.label}`
+  }
+  return ''
 }
 
 export async function createChatImageAttachment(
@@ -155,6 +271,104 @@ function mergeAdjacentTextParts(
     merged.push(part)
   }
   return merged
+}
+
+function stripMessageReplyReference(body: string): string {
+  return body.replace(MESSAGE_REPLY_PATTERN, '')
+}
+
+function buildChatReplyMarker(reference: ChatReplyReference): string {
+  const payload = {
+    messageId: Math.max(0, Math.trunc(reference.messageId)),
+    senderName: truncateMessagePreview(reference.senderName.trim() || 'User'),
+    preview: truncateMessagePreview(reference.preview.trim()),
+  }
+  return `<!--chat-reply:${encodeMarkerPayload(payload)}-->`
+}
+
+function buildChatStickerMarker(sticker: ChatSticker): string {
+  const payload = {
+    id: sticker.id,
+    emoji: sticker.emoji,
+    label: sticker.label,
+  }
+  return `<!--chat-sticker:${encodeMarkerPayload(payload)}-->`
+}
+
+function getImageContentPart(
+  alt: string,
+  src: string
+): MessageContentPart | null {
+  if (!isSafeChatImageDataUrl(src)) return null
+  return { type: 'image', alt, src }
+}
+
+function getStickerContentPart(payload: string): MessageContentPart | null {
+  const sticker = parseStickerPayload(payload)
+  if (!sticker) return null
+  return { type: 'sticker', sticker }
+}
+
+function parseReplyReferencePayload(
+  payload: string
+): ChatReplyReference | null {
+  const value = decodeMarkerPayload(payload)
+  if (!isRecord(value)) return null
+  const messageId = Number(value.messageId)
+  const senderName = getMarkerString(value.senderName, 80)
+  const preview = getMarkerString(value.preview, 160)
+  if (!Number.isFinite(messageId) || messageId < 0) return null
+  if (!senderName) return null
+  return {
+    messageId: Math.trunc(messageId),
+    senderName,
+    preview,
+  }
+}
+
+function parseStickerPayload(payload: string): ChatSticker | null {
+  const value = decodeMarkerPayload(payload)
+  if (!isRecord(value)) return null
+  const id = getMarkerString(value.id, 48)
+  const emoji = getMarkerString(value.emoji, 16)
+  const label = getMarkerString(value.label, 40)
+  if (!MESSAGE_MARKER_ID_PATTERN.test(id) || !emoji || !label) return null
+  const knownSticker = AVAILABLE_CHAT_STICKERS.find(
+    (sticker) => sticker.id === id
+  )
+  return {
+    id,
+    emoji,
+    label,
+    accent: knownSticker?.accent ?? DEFAULT_CHAT_STICKER.accent,
+  }
+}
+
+function encodeMarkerPayload(value: object): string {
+  return encodeURIComponent(JSON.stringify(value))
+}
+
+function decodeMarkerPayload(payload: string): unknown {
+  try {
+    return JSON.parse(decodeURIComponent(payload))
+  } catch {
+    return null
+  }
+}
+
+function getMarkerString(value: unknown, maxLength: number): string {
+  if (typeof value !== 'string') return ''
+  return value.trim().slice(0, maxLength)
+}
+
+function truncateMessagePreview(value: string): string {
+  const normalized = value.trim().replace(/\s+/g, ' ')
+  if (normalized.length <= 120) return normalized
+  return `${normalized.slice(0, 119)}…`
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
 }
 
 function readFileAsDataUrl(file: File): Promise<string> {
