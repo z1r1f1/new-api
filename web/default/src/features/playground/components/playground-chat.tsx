@@ -56,6 +56,8 @@ import { parseThinkTags } from '../lib/message-utils'
 import type { Message as MessageType } from '../types'
 import { MessageActions } from './message-actions'
 import { MessageError } from './message-error'
+import { MessageErrorActions } from './message-error-actions'
+import { PlaygroundEmptyState } from './playground-empty-state'
 
 interface PlaygroundChatProps {
   messages: MessageType[]
@@ -68,6 +70,7 @@ interface PlaygroundChatProps {
   onSaveEdit?: (newContent: string) => void
   onCancelEdit?: (open: boolean) => void
   onSaveEditAndSubmit?: (newContent: string) => void
+  onSelectPrompt?: (prompt: string) => void
 }
 
 export function PlaygroundChat({
@@ -81,6 +84,7 @@ export function PlaygroundChat({
   onSaveEdit,
   onCancelEdit,
   onSaveEditAndSubmit,
+  onSelectPrompt,
 }: PlaygroundChatProps) {
   const { t } = useTranslation()
   const [editText, setEditText] = useState('')
@@ -102,16 +106,35 @@ export function PlaygroundChat({
     () => editText !== originalText,
     [editText, originalText]
   )
+
+  const getPreviousUserMessage = (messageIndex: number) => {
+    for (let index = messageIndex - 1; index >= 0; index--) {
+      const candidate = messages[index]
+      if (candidate?.from === MESSAGE_ROLES.USER) {
+        return candidate
+      }
+    }
+
+    return null
+  }
+
   return (
     <Conversation>
       {/* Remove outer padding; apply padding to inner centered container to align with input */}
       <ConversationContent className='p-0'>
         <div className='mx-auto w-full max-w-4xl px-4 py-4'>
-          {messages.map((message, messageIndex) => {
+          {messages.length === 0 && onSelectPrompt ? (
+            <PlaygroundEmptyState onSelectPrompt={onSelectPrompt} />
+          ) : (
+            messages.map((message, messageIndex) => {
             const { versions = [] } = message
             const isLastAssistantMessage =
               messageIndex === messages.length - 1 &&
               message.from === MESSAGE_ROLES.ASSISTANT
+            const isError = message.status === 'error'
+            const previousUserMessage = isError
+              ? getPreviousUserMessage(messageIndex)
+              : null
             return (
               <Branch defaultBranch={0} key={message.key}>
                 <BranchMessages>
@@ -127,14 +150,14 @@ export function PlaygroundChat({
                     >
                       <div className='w-full min-w-0 flex-1 basis-full'>
                         {isEditing(message.key) ? (
-                          <div className='space-y-2'>
+                          <div className='border-border/70 bg-background/80 space-y-3 rounded-xl border p-3 shadow-sm'>
                             <Textarea
                               value={editText}
                               onChange={(e) => setEditText(e.target.value)}
                               className='font-mono text-sm'
                               rows={8}
                             />
-                            <div className='flex gap-2'>
+                            <div className='flex flex-wrap gap-2'>
                               {/* Save & Submit only makes sense for user messages */}
                               {message.from === MESSAGE_ROLES.USER && (
                                 <Button
@@ -144,7 +167,7 @@ export function PlaygroundChat({
                                   }
                                   disabled={isEmpty || !isChanged}
                                 >
-                                  Save & Submit
+                                  {t('Save & Submit')}
                                 </Button>
                               )}
                               <Button
@@ -152,14 +175,22 @@ export function PlaygroundChat({
                                 onClick={() => onSaveEdit?.(editText)}
                                 disabled={isEmpty || !isChanged}
                               >
-                                Save
+                                {t('Save')}
+                              </Button>
+                              <Button
+                                size='sm'
+                                variant='outline'
+                                onClick={() => setEditText(originalText)}
+                                disabled={!isChanged}
+                              >
+                                {t('Reset')}
                               </Button>
                               <Button
                                 size='sm'
                                 variant='outline'
                                 onClick={() => onCancelEdit?.(false)}
                               >
-                                Cancel
+                                {t('Cancel')}
                               </Button>
                             </div>
                           </div>
@@ -256,8 +287,32 @@ export function PlaygroundChat({
                                       <MessageError
                                         message={message}
                                         className='mb-2'
+                                        actions={
+                                          <MessageErrorActions
+                                            disabled={isGenerating}
+                                            onRetry={
+                                              onRegenerateMessage
+                                                ? () =>
+                                                    onRegenerateMessage(message)
+                                                : undefined
+                                            }
+                                            onEditPrompt={
+                                              onEditMessage &&
+                                              previousUserMessage
+                                                ? () =>
+                                                    onEditMessage(
+                                                      previousUserMessage
+                                                    )
+                                                : undefined
+                                            }
+                                            onDelete={
+                                              onDeleteMessage
+                                                ? () => onDeleteMessage(message)
+                                                : undefined
+                                            }
+                                          />
+                                        }
                                       />
-                                      {actions}
                                     </>
                                   ) : (
                                     showRenderableContent && (
@@ -316,7 +371,8 @@ export function PlaygroundChat({
                 )}
               </Branch>
             )
-          })}
+            })
+          )}
         </div>
       </ConversationContent>
       <ConversationScrollButton />

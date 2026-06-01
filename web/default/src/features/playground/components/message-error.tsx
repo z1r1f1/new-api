@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { AlertCircle, AlertTriangle, Settings } from 'lucide-react'
+import type { ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useAuthStore } from '@/stores/auth-store'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -26,6 +27,7 @@ import type { Message } from '../types'
 
 interface MessageErrorProps {
   message: Message
+  actions?: ReactNode
   className?: string
 }
 
@@ -33,21 +35,21 @@ interface MessageErrorProps {
  * Display error messages using Alert component
  * Following ai-elements pattern for error handling
  */
-export function MessageError({ message, className = '' }: MessageErrorProps) {
+export function MessageError(props: MessageErrorProps) {
   const { t } = useTranslation()
   const user = useAuthStore((s) => s.auth.user)
   const isAdmin = user?.role != null && user.role >= 10
 
-  if (message.status !== MESSAGE_STATUS.ERROR) {
+  if (props.message.status !== MESSAGE_STATUS.ERROR) {
     return null
   }
 
   const errorContent =
-    message.versions[0]?.content || 'An unknown error occurred'
+    props.message.versions[0]?.content || t('An unknown error occurred')
 
-  if (message.errorCode === 'model_price_error') {
+  if (props.message.errorCode === 'model_price_error') {
     return (
-      <Alert variant='default' className={className}>
+      <Alert variant='default' className={props.className}>
         <AlertTriangle className='text-orange-500' />
         <AlertTitle>{t('Model Price Not Configured')}</AlertTitle>
         <AlertDescription className='space-y-2'>
@@ -64,16 +66,20 @@ export function MessageError({ message, className = '' }: MessageErrorProps) {
               {t('Go to Settings')}
             </Button>
           )}
+          {props.actions}
         </AlertDescription>
       </Alert>
     )
   }
 
   return (
-    <Alert variant='destructive' className={className}>
+    <Alert variant='destructive' className={props.className}>
       <AlertCircle />
       <AlertTitle>{t('Error')}</AlertTitle>
-      <AlertDescription>{errorContent}</AlertDescription>
+      <AlertDescription className='space-y-2'>
+        <p>{errorContent}</p>
+        {props.actions}
+      </AlertDescription>
     </Alert>
   )
 }

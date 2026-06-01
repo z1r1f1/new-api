@@ -114,6 +114,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     updateConfig,
     updateParameterEnabled,
     updateWorkbenchState,
+    clearMessages,
     replaceWorkbenchState,
     resetConfig,
     replaceConfig,
@@ -308,6 +309,11 @@ function PlaygroundContent(props: PlaygroundContentProps) {
     const newMessages = messages.filter((m) => m.key !== message.key)
     updateMessages(newMessages)
   }
+
+  const handleClearChatHistory = useCallback(() => {
+    clearMessages()
+    resetDebugData()
+  }, [clearMessages, resetDebugData])
 
   const handleExport = useCallback(() => {
     exportPlaygroundData({
@@ -619,6 +625,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
             onRegenerateMessage={handleRegenerateMessage}
             onEditMessage={handleEditMessage}
             onDeleteMessage={handleDeleteMessage}
+            onSelectPrompt={handleSendMessage}
             isGenerating={isGenerating}
             editingKey={editingMessageKey}
             onCancelEdit={handleEditOpenChange}
@@ -645,6 +652,8 @@ function PlaygroundContent(props: PlaygroundContentProps) {
               updateWorkbenchState('searchEnabled', value)
             }
             onSubmit={handleSendMessage}
+            hasMessages={messages.length > 0}
+            onClearMessages={handleClearChatHistory}
             showModelControls
           />
         </div>
