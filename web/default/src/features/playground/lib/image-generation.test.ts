@@ -162,6 +162,27 @@ describe('image generation task rendering', () => {
     )
   })
 
+  test('uses the task image endpoint when task result has both url and base64 image data', () => {
+    const markdown = imageTaskResultToMarkdown('task_done', {
+      task_id: 'task_done',
+      status: 'succeeded',
+      data: {
+        data: [
+          {
+            url: 'https://chatgpt.com/backend-api/estuary/content?id=source_image',
+            b64_json: 'new-image-base64',
+          },
+        ],
+      },
+    })
+
+    assert.equal(
+      markdown,
+      '![generated image 1](/pg/images/generations/task_done/image/0)'
+    )
+    assert.equal(markdown.includes('source_image'), false)
+  })
+
   test('computes wait elapsed from the original task start time', () => {
     const originalNow = Date.now
     Date.now = () => 1_777_000_065_000

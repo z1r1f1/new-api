@@ -640,7 +640,7 @@ export function imageTaskResultToMarkdown(
         ? `**Revised prompt ${index + 1}:** ${item.revised_prompt}\n\n`
         : ''
 
-      const url = item?.url || buildImageTaskContentUrl(taskId, index)
+      const url = buildImageTaskContentUrl(taskId, index)
       return `${revisedPrompt}![generated image ${index + 1}](${url})`
     })
     .filter(Boolean)
