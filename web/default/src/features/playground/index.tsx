@@ -576,9 +576,9 @@ function PlaygroundContent(props: PlaygroundContentProps) {
   )
 
   return (
-    <div className='relative flex size-full overflow-hidden'>
+    <div className='relative flex size-full min-h-0 overflow-hidden'>
       {sessionSidebar}
-      <div className='flex min-w-0 flex-1 flex-col overflow-hidden'>
+      <div className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'>
         <div className='border-border bg-background/80 flex h-12 shrink-0 items-center justify-between border-b px-3 backdrop-blur'>
           <div className='flex items-center gap-2'>
             <Button
@@ -613,7 +613,7 @@ function PlaygroundContent(props: PlaygroundContentProps) {
         {sessionHeader}
 
         {/* Full-width scroll container: scrolling works even over side whitespace */}
-        <div className='flex flex-1 flex-col overflow-hidden'>
+        <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
           <PlaygroundChat
             messages={messages}
             onRegenerateMessage={handleRegenerateMessage}

@@ -4622,6 +4622,7 @@
     "This generation may take 2–3 minutes. Please wait patiently.": "生成には 2～3 分かかる場合があります。しばらくお待ちください。",
     "Elapsed: {{elapsed}}": "経過時間：{{elapsed}}",
     "Image generation completed, but the response did not include displayable image data.": "画像生成は完了しましたが、表示できる画像データがレスポンスに含まれていません。",
+    "Image not available": "画像を利用できません",
     "Responding...": "応答中...",
     "Image generation task timed out": "画像生成タスクがタイムアウトしました",
     "Image generation failed": "画像生成に失敗しました",

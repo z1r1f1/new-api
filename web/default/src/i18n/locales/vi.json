@@ -4622,6 +4622,7 @@
     "This generation may take 2–3 minutes. Please wait patiently.": "Quá trình tạo có thể mất 2–3 phút, vui lòng kiên nhẫn chờ.",
     "Elapsed: {{elapsed}}": "Đã chờ: {{elapsed}}",
     "Image generation completed, but the response did not include displayable image data.": "Tạo ảnh đã hoàn tất, nhưng phản hồi không có dữ liệu ảnh có thể hiển thị.",
+    "Image not available": "Không có hình ảnh",
     "Responding...": "Đang phản hồi...",
     "Image generation task timed out": "Tác vụ tạo ảnh đã hết thời gian chờ",
     "Image generation failed": "Tạo ảnh thất bại",

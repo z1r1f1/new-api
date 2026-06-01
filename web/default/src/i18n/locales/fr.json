@@ -4622,6 +4622,7 @@
     "This generation may take 2–3 minutes. Please wait patiently.": "Cette génération peut prendre 2 à 3 minutes. Merci de patienter.",
     "Elapsed: {{elapsed}}": "Temps écoulé : {{elapsed}}",
     "Image generation completed, but the response did not include displayable image data.": "La génération d'image est terminée, mais la réponse ne contient aucune image affichable.",
+    "Image not available": "Image indisponible",
     "Responding...": "Réponse en cours...",
     "Image generation task timed out": "La tâche de génération d'image a expiré",
     "Image generation failed": "Échec de la génération d'image",

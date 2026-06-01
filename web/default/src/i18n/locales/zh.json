@@ -4622,6 +4622,7 @@
     "This generation may take 2–3 minutes. Please wait patiently.": "这个生成过程可能需要 2～3 分钟，请耐心等待。",
     "Elapsed: {{elapsed}}": "已等待：{{elapsed}}",
     "Image generation completed, but the response did not include displayable image data.": "图片生成已完成，但响应中没有可显示的图片数据。",
+    "Image not available": "图片不可用",
     "Responding...": "正在响应...",
     "Image generation task timed out": "图片生成任务已超时",
     "Image generation failed": "图片生成失败",

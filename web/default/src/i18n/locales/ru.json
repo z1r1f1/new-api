@@ -4622,6 +4622,7 @@
     "This generation may take 2–3 minutes. Please wait patiently.": "Генерация может занять 2–3 минуты. Пожалуйста, подождите.",
     "Elapsed: {{elapsed}}": "Прошло: {{elapsed}}",
     "Image generation completed, but the response did not include displayable image data.": "Генерация изображения завершена, но ответ не содержит данных изображения для отображения.",
+    "Image not available": "Изображение недоступно",
     "Responding...": "Ответ формируется...",
     "Image generation task timed out": "Время ожидания задачи генерации изображения истекло",
     "Image generation failed": "Не удалось сгенерировать изображение",

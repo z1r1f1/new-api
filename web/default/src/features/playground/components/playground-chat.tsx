@@ -117,11 +117,15 @@ export function PlaygroundChat({
                 <BranchMessages>
                   {versions.map((version, versionIndex) => (
                     <Message
-                      className='group flex-row-reverse'
+                      className={
+                        message.from === MESSAGE_ROLES.ASSISTANT
+                          ? 'group flex-row-reverse py-3'
+                          : 'group flex-row-reverse py-1.5'
+                      }
                       from={message.from}
                       key={`${message.key}-${version.id}-${versionIndex}`}
                     >
-                      <div className='w-full min-w-0 flex-1 basis-full py-1'>
+                      <div className='w-full min-w-0 flex-1 basis-full'>
                         {isEditing(message.key) ? (
                           <div className='space-y-2'>
                             <Textarea
@@ -197,7 +201,7 @@ export function PlaygroundChat({
                                   onDelete={onDeleteMessage}
                                   isGenerating={isGenerating}
                                   alwaysVisible={isLastAssistantMessage}
-                                  className='mt-1'
+                                  className='mt-2'
                                 />
                               )
 
