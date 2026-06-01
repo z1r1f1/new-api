@@ -340,6 +340,81 @@ func TestRunImageGenerationFiltersBaselineRefsFromSSE(t *testing.T) {
 	}
 }
 
+func TestRunImageGenerationPollsPastEditInputPreviewFromSSE(t *testing.T) {
+	var mappingCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/backend-api/sentinel/chat-requirements/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"persona":"chatgpt","prepare_token":"prepare-token","turnstile":{"required":false},"proofofwork":{"required":false}}`))
+		case "/backend-api/sentinel/chat-requirements/finalize":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"token":"requirements-token","persona":"chatgpt"}`))
+		case "/backend-api/f/conversation/prepare":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"conduit_token":"conduit-test"}`))
+		case "/backend-api/f/conversation":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte(`data: {"v":{"conversation_id":"conv-1","message":{"author":{"role":"tool","name":"dalle.text2im"},"recipient":"assistant","metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"sediment://uploaded-input-preview"}]}}}}` + "\n\n"))
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		case "/backend-api/conversation/conv-1":
+			mappingCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"current_node":"new-tool",
+				"mapping":{
+					"new-tool":{"message":{"author":{"role":"tool","name":"dalle.text2im"},"recipient":"assistant","metadata":{"async_task_type":"image_gen"},"content":{"content_type":"multimodal_text","parts":[{"asset_pointer":"file-service://generated-output"}]}}}
+				}
+			}`))
+		case "/backend-api/conversation/conv-1/attachment/uploaded-input-preview/download":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/input.png"}`))
+		case "/backend-api/files/generated-output/download", "/backend-api/files/download/generated-output":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"download_url":"https://example.test/generated.png"}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{
+			BaseURL:    server.URL,
+			AuthToken:  "access-token",
+			DeviceID:   "device-id",
+			SessionID:  "session-id",
+			UserAgent:  defaultUserAgent,
+			Language:   "zh-CN",
+			SSETimeout: time.Second,
+		},
+		hc: server.Client(),
+	}
+
+	result, err := runImageGeneration(context.Background(), client, generationRequest{
+		Model:  "gpt-image-2",
+		Prompt: "edit this image",
+		N:      1,
+	}, []*UploadedFile{{FileID: "uploaded-file", FileName: "reference.png", MimeType: "image/png"}}, false, nil)
+	if err != nil {
+		t.Fatalf("runImageGeneration returned error: %v", err)
+	}
+	if mappingCalls == 0 {
+		t.Fatal("expected image edit with sediment-only SSE preview to poll for the generated output")
+	}
+	for _, ref := range result.FileRefs {
+		if ref == "sed:uploaded-input-preview" {
+			t.Fatalf("must not accept the uploaded/input preview as generated output: %#v", result.FileRefs)
+		}
+	}
+	if len(result.FileRefs) != 1 || result.FileRefs[0] != "generated-output" {
+		t.Fatalf("expected generated output ref, got %#v", result.FileRefs)
+	}
+	if len(result.SignedURLs) != 1 || result.SignedURLs[0] != "https://example.test/generated.png" {
+		t.Fatalf("expected generated image download URL, got %#v", result.SignedURLs)
+	}
+}
+
 func TestPreemptiveLocalToolResponseForClaudeFileRead(t *testing.T) {
 	service.InitTokenEncoders()
 	stream := true

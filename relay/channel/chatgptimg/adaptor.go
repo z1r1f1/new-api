@@ -4681,6 +4681,7 @@ func runImageGeneration(ctx context.Context, client *Client, req generationReque
 	var fallbackRefs []*UploadedFile
 	var fallbackRefsLoaded bool
 	var activeExcludedFileIDs map[string]struct{}
+	var deferredPreviewSedimentIDs map[string]struct{}
 
 attemptLoop:
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -4721,6 +4722,7 @@ attemptLoop:
 		lastPreviewFids = nil
 		lastPreviewSids = nil
 		fileRefs = nil
+		deferredPreviewSedimentIDs = nil
 		result.IsPreview = false
 		prompt := req.Prompt
 		activeRefs := refs
@@ -4839,14 +4841,19 @@ attemptLoop:
 				}
 			}
 			if len(sseResult.FileIDs) > 0 || len(sseResult.SedimentIDs) > 0 {
-				fileRefs = append(fileRefs, sseResult.FileIDs...)
-				for _, sid := range sseResult.SedimentIDs {
-					fileRefs = append(fileRefs, "sed:"+sid)
-				}
-				if len(sseResult.FileIDs) == 0 {
+				if len(sseResult.FileIDs) == 0 && len(activeRefs) > 0 {
 					result.IsPreview = true
+					deferredPreviewSedimentIDs = mergeStringSets(deferredPreviewSedimentIDs, stringSliceSet(sseResult.SedimentIDs))
+				} else {
+					fileRefs = append(fileRefs, sseResult.FileIDs...)
+					for _, sid := range sseResult.SedimentIDs {
+						fileRefs = append(fileRefs, "sed:"+sid)
+					}
+					if len(sseResult.FileIDs) == 0 {
+						result.IsPreview = true
+					}
+					break
 				}
-				break
 			}
 			if convID == "" {
 				return nil, errors.New("chatgpt web channel: missing conversation id from SSE")
@@ -4859,7 +4866,7 @@ attemptLoop:
 				PreviewWait:         8 * time.Second,
 				BaselineToolIDs:     baseline.ToolIDs,
 				BaselineFileIDs:     baseline.FileIDs,
-				BaselineSedimentIDs: baseline.SedimentIDs,
+				BaselineSedimentIDs: mergeStringSets(baseline.SedimentIDs, deferredPreviewSedimentIDs),
 				ExcludedFileIDs:     uploadedExcludedFileIDs,
 			})
 			if timing != nil {
@@ -4962,7 +4969,7 @@ attemptLoop:
 			PreviewWait:         15 * time.Second,
 			BaselineToolIDs:     baseline.ToolIDs,
 			BaselineFileIDs:     baseline.FileIDs,
-			BaselineSedimentIDs: baseline.SedimentIDs,
+			BaselineSedimentIDs: mergeStringSets(baseline.SedimentIDs, deferredPreviewSedimentIDs),
 			ExcludedFileIDs:     activeExcludedFileIDs,
 		})
 		if timing != nil {
