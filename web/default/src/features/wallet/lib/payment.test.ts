@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { PAYMENT_TYPES } from '../constants'
+import { PAYMENT_ICON_COLORS, PAYMENT_TYPES } from '../constants'
 import type { TopupInfo } from '../types'
 import {
+  formatLinuxDoCreditExchangeRatio,
+  getDefaultPaymentMethod,
   getDefaultPaymentType,
   getMinTopupAmount,
   isLinuxDoCreditPayment,
@@ -35,5 +37,34 @@ describe('Linux DO Credit payment helpers', () => {
 
     assert.equal(getDefaultPaymentType(info), PAYMENT_TYPES.LINUXDO_CREDIT)
     assert.equal(getMinTopupAmount(info), 5)
+  })
+
+  test('returns the default Linux DO Credit method as a selectable payment method', () => {
+    const method = getDefaultPaymentMethod(
+      topupInfo({
+        enable_linuxdo_credit_topup: true,
+        pay_methods: [
+          {
+            color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.LINUXDO_CREDIT],
+            min_topup: 1,
+            name: 'Linux DO Credit',
+            type: PAYMENT_TYPES.LINUXDO_CREDIT,
+          },
+        ],
+      })
+    )
+
+    assert.deepEqual(method, {
+      color: PAYMENT_ICON_COLORS[PAYMENT_TYPES.LINUXDO_CREDIT],
+      min_topup: 1,
+      name: 'Linux DO Credit',
+      type: PAYMENT_TYPES.LINUXDO_CREDIT,
+    })
+  })
+
+  test('formats the configured Linux DO Credit exchange ratio for display', () => {
+    assert.equal(formatLinuxDoCreditExchangeRatio(2), '2:1')
+    assert.equal(formatLinuxDoCreditExchangeRatio(2.5), '2.5:1')
+    assert.equal(formatLinuxDoCreditExchangeRatio(0), null)
   })
 })

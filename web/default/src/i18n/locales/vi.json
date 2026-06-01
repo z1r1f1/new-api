@@ -4846,6 +4846,7 @@
     "Ship it": "Triển khai",
     "Watching": "Đang xem",
     "You can select up to {{count}} stickers": "Bạn có thể chọn tối đa {{count}} nhãn dán",
+    "Linux DO Credit": "Linux DO Credit",
     "Linux DO Credit Gateway": "Cổng Linux DO Credit",
     "Dedicated Linux DO Credit settings using the EasyPay-compatible API": "Cài đặt Linux DO Credit riêng dùng API tương thích EasyPay",
     "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.": "Sử dụng Client ID và Client Secret của Linux DO Credit; loại thanh toán gửi lên upstream sẽ tự động là epay.",
@@ -4856,6 +4857,8 @@
     "Default: https://credit.linux.do/epay/pay": "Mặc định: https://credit.linux.do/epay/pay",
     "Unit price (LDC / USD)": "Đơn giá (LDC / USD)",
     "How many Linux DO Credit points to charge for each US dollar of balance": "Số điểm Linux DO Credit cần thu cho mỗi đô la Mỹ số dư",
-    "Smallest USD amount users can recharge": "Số tiền USD tối thiểu người dùng có thể nạp"
+    "Smallest USD amount users can recharge": "Số tiền USD tối thiểu người dùng có thể nạp",
+    "Exchange Rate": "Tỷ giá quy đổi",
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
   }
 }

@@ -4846,6 +4846,7 @@
     "Ship it": "Запускаем",
     "Watching": "Смотрю",
     "You can select up to {{count}} stickers": "Можно выбрать до {{count}} стикеров",
+    "Linux DO Credit": "Linux DO Credit",
     "Linux DO Credit Gateway": "Шлюз Linux DO Credit",
     "Dedicated Linux DO Credit settings using the EasyPay-compatible API": "Отдельные настройки Linux DO Credit с EasyPay-совместимым API",
     "Use your Linux DO Credit Client ID and Client Secret; the upstream payment type is sent as epay automatically.": "Используйте Client ID и Client Secret Linux DO Credit; тип платежа наверх автоматически отправляется как epay.",
@@ -4856,6 +4857,8 @@
     "Default: https://credit.linux.do/epay/pay": "По умолчанию: https://credit.linux.do/epay/pay",
     "Unit price (LDC / USD)": "Цена за единицу (LDC / USD)",
     "How many Linux DO Credit points to charge for each US dollar of balance": "Сколько баллов Linux DO Credit списывать за каждый доллар США баланса",
-    "Smallest USD amount users can recharge": "Минимальная сумма в USD, которую пользователи могут пополнить"
+    "Smallest USD amount users can recharge": "Минимальная сумма в USD, которую пользователи могут пополнить",
+    "Exchange Rate": "Обменный курс",
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
   }
 }

@@ -155,6 +155,8 @@ export interface TopupInfo {
   enable_linuxdo_credit_topup?: boolean
   /** Minimum topup amount for Linux DO Credit */
   linuxdo_credit_min_topup?: number
+  /** Linux DO Credit points charged per USD */
+  linuxdo_credit_unit_price?: number
   /** Whether redemption code usage is enabled */
   enable_redemption?: boolean
   /** Whether compliance confirmation has been completed */
