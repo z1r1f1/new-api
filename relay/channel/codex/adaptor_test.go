@@ -87,6 +87,88 @@ func TestConvertOpenAIResponsesRequestDropsUnsupportedTopPForCodex(t *testing.T)
 	}
 }
 
+func TestConvertOpenAIResponsesRequestWrapsStringInputForCodex(t *testing.T) {
+	input, _ := common.Marshal("hello")
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model: "gpt-5.4-mini",
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+
+	req := converted.(dto.OpenAIResponsesRequest)
+	var inputList []map[string]any
+	if err := common.Unmarshal(req.Input, &inputList); err != nil {
+		t.Fatalf("failed to decode converted input: %v", err)
+	}
+	if len(inputList) != 1 {
+		t.Fatalf("input list len = %d, want 1: %#v", len(inputList), inputList)
+	}
+	if inputList[0]["role"] != "user" || inputList[0]["content"] != "hello" {
+		t.Fatalf("unexpected converted input item: %#v", inputList[0])
+	}
+}
+
+func TestConvertOpenAIResponsesRequestKeepsListInputForCodex(t *testing.T) {
+	input := []byte(`[{"role":"user","content":"hello"}]`)
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model: "gpt-5.4-mini",
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+
+	req := converted.(dto.OpenAIResponsesRequest)
+	if string(req.Input) != string(input) {
+		t.Fatalf("expected list input to stay unchanged, got %s", req.Input)
+	}
+}
+
+func TestConvertOpenAIResponsesRequestWrapsSingleContentPartInputForCodex(t *testing.T) {
+	input := []byte(`{"type":"input_text","text":"hello"}`)
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model: "gpt-5.4-mini",
+		Input: input,
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+
+	req := converted.(dto.OpenAIResponsesRequest)
+	var inputList []map[string]any
+	if err := common.Unmarshal(req.Input, &inputList); err != nil {
+		t.Fatalf("failed to decode converted input: %v", err)
+	}
+	if len(inputList) != 1 || inputList[0]["role"] != "user" {
+		t.Fatalf("unexpected converted input list: %#v", inputList)
+	}
+	content, ok := inputList[0]["content"].([]any)
+	if !ok || len(content) != 1 {
+		t.Fatalf("expected one content part, got %#v", inputList[0]["content"])
+	}
+	part, ok := content[0].(map[string]any)
+	if !ok || part["type"] != "input_text" || part["text"] != "hello" {
+		t.Fatalf("unexpected content part: %#v", content[0])
+	}
+}
+
 func TestConvertOpenAIResponsesRequestForcesExplicitFalseStreamForCodex(t *testing.T) {
 	stream := false
 	gin.SetMode(gin.TestMode)

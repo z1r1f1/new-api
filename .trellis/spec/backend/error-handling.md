@@ -421,6 +421,93 @@ return message
 
 ---
 
+## Scenario: Codex Responses Input Compatibility
+
+### 1. Scope / Trigger
+
+- Trigger: changes to `relay/channel/codex` handling for `/v1/responses` or
+  `/v1/responses/compact`.
+- Purpose: public Responses API clients may send `input` as a string or other
+  non-list JSON shape, while ChatGPT Codex backend
+  `/backend-api/codex/responses` rejects non-list input with
+  `Input must be a list`.
+
+### 2. Signatures
+
+- Adapter request conversion:
+  `(*codex.Adaptor).ConvertOpenAIResponsesRequest(c, info, request)`.
+- Input normalizer:
+  `normalizeCodexResponsesInputList(input json.RawMessage)`.
+- Upstream URL:
+  `{ChannelBaseUrl}/backend-api/codex/responses` for normal responses and
+  `{ChannelBaseUrl}/backend-api/codex/responses/compact` for compact responses.
+
+### 3. Contracts
+
+- Codex upstream payload `input` must be a JSON list when `input` is present.
+- Public Responses string input is converted to:
+  `[{"role":"user","content":"<text>"}]`.
+- Public Responses list input is preserved unchanged.
+- A single content-part object such as
+  `{"type":"input_text","text":"..."}` is wrapped as one user message with a
+  content-part list.
+- `instructions` must still default to an empty string for Codex requests.
+- Existing Codex restrictions remain: normal responses force
+  `stream=true`, `store=false`, and remove unsupported `stream_options`,
+  `top_p`, `max_output_tokens`, and `temperature` as appropriate.
+
+### 4. Validation & Error Matrix
+
+- `input: "hello"` -> upstream receives list input; no upstream
+  `Input must be a list` error due to string shape.
+- `input: [{"role":"user","content":"hello"}]` -> upstream input stays
+  unchanged.
+- `input: {"type":"input_text","text":"hello"}` -> upstream receives a list
+  containing a user message with that content part.
+- Invalid JSON should still fail during request parsing before adapter
+  conversion.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a public Responses client using the shorthand string input works on a
+  Codex channel.
+- Base: chat-completions compatibility that already constructs Responses list
+  input remains unchanged.
+- Bad: forwarding `input` as a bare JSON string to
+  `/backend-api/codex/responses`; upstream returns HTTP `400` with
+  `Input must be a list`.
+
+### 6. Tests Required
+
+- `relay/channel/codex`: regression test proving string input is wrapped into
+  a user-message list.
+- `relay/channel/codex`: regression test proving list input is preserved.
+- `relay/channel/codex`: regression test proving a single content-part object
+  is wrapped as a user-message list with content parts.
+- Run `go test ./relay/channel/codex ./relay/channel/openai ./relay/helper ./service ./controller`
+  after changing Codex Responses request compatibility.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Public Responses input can be a string; Codex upstream cannot accept it.
+return request, nil
+```
+
+Correct:
+
+```go
+input, err := normalizeCodexResponsesInputList(request.Input)
+if err != nil {
+    return nil, err
+}
+request.Input = input
+```
+
+---
+
 ## Dashboard/API Error Responses
 
 Controller/admin endpoints usually respond with `gin.H`.

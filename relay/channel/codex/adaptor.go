@@ -97,6 +97,11 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	if len(request.Instructions) == 0 {
 		request.Instructions = json.RawMessage(`""`)
 	}
+	input, err := normalizeCodexResponsesInputList(request.Input)
+	if err != nil {
+		return nil, err
+	}
+	request.Input = input
 	request.Tools = openaicompat.NormalizeResponsesToolSchemas(request.Tools)
 	// Codex backend is stricter than the public Responses API and rejects
 	// stream_options/top_p. Chat Completions compatibility may carry
@@ -126,6 +131,54 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	request.MaxOutputTokens = nil
 	request.Temperature = nil
 	return request, nil
+}
+
+func normalizeCodexResponsesInputList(input json.RawMessage) (json.RawMessage, error) {
+	if len(input) == 0 {
+		return input, nil
+	}
+
+	switch common.GetJsonType(input) {
+	case "array":
+		return input, nil
+	case "string":
+		var text string
+		if err := common.Unmarshal(input, &text); err != nil {
+			return nil, err
+		}
+		return common.Marshal([]map[string]any{{
+			"role":    "user",
+			"content": text,
+		}})
+	case "object":
+		var item map[string]any
+		if err := common.Unmarshal(input, &item); err != nil {
+			return nil, err
+		}
+		if isCodexResponsesContentPart(item) {
+			return common.Marshal([]map[string]any{{
+				"role":    "user",
+				"content": []map[string]any{item},
+			}})
+		}
+		return common.Marshal([]map[string]any{item})
+	case "null":
+		return input, nil
+	default:
+		return common.Marshal([]map[string]any{{
+			"role":    "user",
+			"content": strings.TrimSpace(string(input)),
+		}})
+	}
+}
+
+func isCodexResponsesContentPart(item map[string]any) bool {
+	switch common.Interface2String(item["type"]) {
+	case "input_text", "input_image", "input_file", "input_audio":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
