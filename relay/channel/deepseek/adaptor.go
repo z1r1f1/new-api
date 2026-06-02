@@ -10,10 +10,10 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/relay/channel"
-	"github.com/QuantumNous/new-api/relay/channel/claude"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -28,19 +28,14 @@ func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dt
 }
 
 func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.ClaudeRequest) (any, error) {
-	adaptor := claude.Adaptor{}
-	convertedRequest, err := adaptor.ConvertClaudeRequest(c, info, req)
+	openAIRequest, err := service.ClaudeToOpenAIRequest(*req, info)
 	if err != nil {
 		return nil, err
 	}
-	claudeRequest, ok := convertedRequest.(*dto.ClaudeRequest)
-	if !ok {
-		return convertedRequest, nil
+	if info.SupportStreamOptions && info.IsStream {
+		openAIRequest.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 	}
-	if err := applyDeepSeekV4ClaudeThinkingSuffix(info, claudeRequest); err != nil {
-		return nil, err
-	}
-	return claudeRequest, nil
+	return a.ConvertOpenAIRequest(c, info, openAIRequest)
 }
 
 func (a *Adaptor) ConvertAudioRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.AudioRequest) (io.Reader, error) {
@@ -60,7 +55,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	fimBaseUrl := info.ChannelBaseUrl
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
-		return fmt.Sprintf("%s/anthropic/v1/messages", info.ChannelBaseUrl), nil
+		return fmt.Sprintf("%s/v1/chat/completions", info.ChannelBaseUrl), nil
 	default:
 		if !strings.HasSuffix(info.ChannelBaseUrl, "/beta") {
 			fimBaseUrl += "/beta"
@@ -118,37 +113,6 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	return nil
 }
 
-func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *dto.ClaudeRequest) error {
-	modelName := request.Model
-	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
-		modelName = info.UpstreamModelName
-	}
-	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
-	if !ok {
-		return nil
-	}
-	request.Model = baseModel
-	request.Thinking = &dto.Thinking{Type: thinkingType}
-	if effort == "" {
-		request.OutputConfig = nil
-	} else {
-		outputConfig, err := common.Marshal(map[string]string{
-			"effort": effort,
-		})
-		if err != nil {
-			return fmt.Errorf("error marshalling output_config: %w", err)
-		}
-		request.OutputConfig = outputConfig
-	}
-	if info != nil {
-		if info.ChannelMeta != nil {
-			info.UpstreamModelName = baseModel
-		}
-		info.ReasoningEffort = effort
-	}
-	return nil
-}
-
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {
 	return nil, nil
 }
@@ -169,7 +133,7 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage any, err *types.NewAPIError) {
 	switch info.RelayFormat {
 	case types.RelayFormatClaude:
-		adaptor := claude.Adaptor{}
+		adaptor := openai.Adaptor{}
 		return adaptor.DoResponse(c, resp, info)
 	default:
 		if isDeepSeekResponsesRelay(info) {

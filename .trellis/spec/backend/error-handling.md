@@ -140,6 +140,93 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
 
 ---
 
+## Scenario: DeepSeek Claude Messages Bridge
+
+### 1. Scope / Trigger
+
+- Trigger: any change to `relay/channel/deepseek` handling for
+  Claude-compatible `/v1/messages` requests.
+- Purpose: DeepSeek-compatible channels are OpenAI chat-completions upstreams
+  for Claude Messages traffic. They must not send Claude-format payloads to
+  provider-specific `/anthropic/v1/messages` paths unless that provider has an
+  explicit native Anthropic contract.
+
+### 2. Signatures
+
+- Request route: `POST /v1/messages` with `types.RelayFormatClaude`.
+- Adapter request conversion:
+  `(*deepseek.Adaptor).ConvertClaudeRequest(c, info, *dto.ClaudeRequest)`.
+- Adapter URL selection:
+  `(*deepseek.Adaptor).GetRequestURL(info)`.
+- Adapter response conversion:
+  `(*deepseek.Adaptor).DoResponse(c, resp, info)`.
+
+### 3. Contracts
+
+- DeepSeek Claude-format requests are converted with
+  `service.ClaudeToOpenAIRequest` into `*dto.GeneralOpenAIRequest`.
+- Streaming Claude requests keep OpenAI chat stream usage enabled when
+  `info.SupportStreamOptions && info.IsStream` by setting
+  `stream_options.include_usage=true`.
+- DeepSeek Claude-format upstream URL is
+  `{ChannelBaseUrl}/v1/chat/completions`.
+- DeepSeek Claude-format upstream responses are parsed as OpenAI chat
+  completions and converted back to Claude response/SSE shapes for the client.
+- `relaycommon.AppendRequestConversionFromRequest` should see the converted
+  OpenAI request so the conversion chain records Claude -> OpenAI.
+
+### 4. Validation & Error Matrix
+
+- `/v1/messages` + DeepSeek channel + valid OpenAI-compatible upstream response
+  -> client receives Claude-compatible response.
+- `/v1/messages` + DeepSeek channel + stream request -> upstream receives
+  OpenAI chat-completions payload with `stream_options.include_usage=true`.
+- `/v1/messages` + DeepSeek channel + conversion failure -> relay
+  `convert_request_failed` with skip retry, rendered by `controller.Relay`.
+- `/v1/messages` + DeepSeek channel must not be sent to
+  `{ChannelBaseUrl}/anthropic/v1/messages`; web/base URLs may return HTML 404
+  pages that are not useful API errors.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a Claude client calling `/v1/messages` for `deepseek-v4-flash-free`
+  reaches `https://.../v1/chat/completions` and receives a Claude-shaped
+  response.
+- Base: native OpenAI `/v1/chat/completions` and `/v1/responses` DeepSeek
+  paths remain unchanged.
+- Bad: sending DeepSeek Claude traffic to
+  `https://opencode.ai/zen/anthropic/v1/messages`; upstream can return
+  `Not Found | opencode` HTML 404 and repeat the same failing channel on retry.
+
+### 6. Tests Required
+
+- `relay/channel/deepseek`: regression test proving
+  `ConvertClaudeRequest` returns `*dto.GeneralOpenAIRequest` with converted
+  system/user messages and stream usage options.
+- `relay/channel/deepseek`: regression test proving `GetRequestURL` maps
+  Claude format to `/v1/chat/completions`.
+- `relay/channel/deepseek`: regression test proving an OpenAI chat completion
+  response is converted back to Claude response shape.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+case types.RelayFormatClaude:
+    return fmt.Sprintf("%s/anthropic/v1/messages", info.ChannelBaseUrl), nil
+```
+
+Correct:
+
+```go
+openAIRequest, err := service.ClaudeToOpenAIRequest(*req, info)
+if err != nil {
+    return nil, err
+}
+return a.ConvertOpenAIRequest(c, info, openAIRequest)
+```
+
 ## Upstream Error Wrapping
 
 `service/error.go` contains wrappers for provider/upstream failures:
