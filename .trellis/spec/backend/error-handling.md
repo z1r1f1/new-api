@@ -63,6 +63,83 @@ Do not duplicate relay error rendering inside provider adapters. Return `*types.
 
 ---
 
+## Scenario: `gpt-image-2` Endpoint Guard
+
+### 1. Scope / Trigger
+
+- Trigger: any relay entry-point change that can route `gpt-image-2` requests
+  through OpenAI-compatible text, Responses, Claude Messages, or image endpoints.
+- Purpose: prevent `gpt-image-2` from being proxied to non-image upstream
+  endpoints such as `/v1/chat/completions`, `/v1/responses`, or `/v1/messages`.
+
+### 2. Signatures
+
+- Entry point: `controller.Relay(c *gin.Context, relayFormat types.RelayFormat)`.
+- Guard helper: `validateGPTImage2Endpoint(relayMode int, modelName string) error`.
+- Allowed relay modes:
+  `relayconstant.RelayModeImagesGenerations` and
+  `relayconstant.RelayModeImagesEdits`.
+
+### 3. Contracts
+
+- Model name comparison is case-insensitive after trimming whitespace.
+- Exact model `gpt-image-2` is only valid on `/v1/images/generations` and
+  `/v1/images/edits` (including equivalent `/pg/images/*` playground relay
+  paths after relay mode normalization).
+- Non-image endpoints must fail locally before token counting, billing, channel
+  selection, retries, or upstream calls.
+- The local relay error uses HTTP `400`, `types.ErrorCodeInvalidRequest`, and
+  `types.ErrOptionWithSkipRetry()`.
+
+### 4. Validation & Error Matrix
+
+- `model=gpt-image-2` + `/v1/images/generations` -> allowed.
+- `model=gpt-image-2` + `/v1/images/edits` -> allowed.
+- `model=gpt-image-2` + `/v1/chat/completions` -> HTTP `400`,
+  `invalid_request`, no channel selection.
+- `model=gpt-image-2` + `/v1/responses` or `/v1/responses/compact` -> HTTP
+  `400`, `invalid_request`, no channel selection.
+- Any non-`gpt-image-2` model -> unaffected by this guard.
+
+### 5. Good/Base/Bad Cases
+
+- Good: a client that accidentally sends `gpt-image-2` to
+  `/v1/chat/completions` receives a clear local error telling them to use a
+  `/v1/images/*` endpoint.
+- Base: normal image generation/edit requests still reach the image relay
+  handler.
+- Bad: forwarding a non-image `gpt-image-2` request to ChatGPT Web
+  `/backend-api/f/conversation`; upstream may reject it with 413/404/500 after
+  consuming retries and delaying the client.
+
+### 6. Tests Required
+
+- `controller`: regression test proving `/v1/chat/completions` with
+  `gpt-image-2` returns HTTP `400` with `invalid_request`.
+- `controller`: helper tests proving image relay modes are allowed and common
+  non-image relay modes are rejected.
+- Run `go test ./controller ./relay/helper ./relay/channel/chatgptimg` after
+  changing this guard or adjacent relay entry-point behavior.
+
+### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Let the provider adapter discover that the endpoint is wrong.
+newAPIError = relayHandler(c, relayInfo)
+```
+
+Correct:
+
+```go
+if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelName); err != nil {
+    return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+}
+```
+
+---
+
 ## Upstream Error Wrapping
 
 `service/error.go` contains wrappers for provider/upstream failures:

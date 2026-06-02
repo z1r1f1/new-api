@@ -122,6 +122,10 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = types.NewError(err, types.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelName); err != nil {
+		newAPIError = types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		return
+	}
 
 	needSensitiveCheck := setting.ShouldCheckPromptSensitive()
 	needCountToken := constant.CountToken
@@ -329,6 +333,18 @@ func getChannel(c *gin.Context, info *relaycommon.RelayInfo, retryParam *service
 		return nil, newAPIError
 	}
 	return channel, nil
+}
+
+func validateGPTImage2Endpoint(relayMode int, modelName string) error {
+	if !strings.EqualFold(strings.TrimSpace(modelName), "gpt-image-2") {
+		return nil
+	}
+	switch relayMode {
+	case relayconstant.RelayModeImagesGenerations, relayconstant.RelayModeImagesEdits:
+		return nil
+	default:
+		return errors.New("gpt-image-2 only supports /v1/images/generations or /v1/images/edits; use a /v1/images/* endpoint instead of chat/responses endpoints")
+	}
 }
 
 func shouldRetry(c *gin.Context, openaiErr *types.NewAPIError, retryTimes int) bool {
