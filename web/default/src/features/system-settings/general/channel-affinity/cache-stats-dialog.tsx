@@ -43,6 +43,7 @@ interface Props {
     using_group: string
     key_hint: string
     key_fp: string
+    key_source_label?: string
   } | null
 }
 
@@ -100,6 +101,11 @@ export function CacheStatsDialog(props: Props) {
       })
     if (props.target?.key_hint)
       data.push({ key: t('Key Summary'), value: props.target.key_hint })
+    if (props.target?.key_source_label)
+      data.push({
+        key: t('Key Source'),
+        value: props.target.key_source_label,
+      })
     if (s.key_fp || props.target?.key_fp)
       data.push({
         key: t('Key Fingerprint'),

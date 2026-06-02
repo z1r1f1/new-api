@@ -142,6 +142,16 @@ Use `common.MaskSensitiveInfo` before logging strings that may contain secrets. 
 
 `model.formatUserLogs` removes admin-only fields such as `admin_info` and `stream_status` before presenting logs to users; preserve this separation between admin-only diagnostic data and user-visible logs.
 
+### Channel Affinity Diagnostics
+
+Channel affinity details stored under `Other.admin_info.channel_affinity` are admin-only diagnostics. They may include:
+
+- `rule_name`, `using_group`, `selected_group`, `request_path`, and `channel_id` for route/rule context;
+- `key_source`, `key_key`, and `key_path` for the matched key source metadata;
+- `key_hint` and `key_fp` for safe identification of the matched key value.
+
+Do **not** persist or display the raw matched affinity value in usage logs. Use `key_hint`/`key_fp` for value identification, and use `key_source` + `key_key`/`key_path` when the UI needs to explain which configured source matched.
+
 ---
 
 ## Log Levels

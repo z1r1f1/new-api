@@ -35,6 +35,7 @@ import {
   USAGE_LOGS_DEFAULT_SECTION,
   type UsageLogsSectionId,
 } from './section-registry'
+import { formatChannelAffinityKeySource } from './lib/format'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 const TASK_LOG_SECTIONS = ['drawing', 'task'] as const
@@ -151,6 +152,7 @@ function UsageLogsContent() {
                   '',
                 key_hint: affinityTarget.key_hint || '',
                 key_fp: affinityTarget.key_fp || '',
+                key_source_label: formatChannelAffinityKeySource(affinityTarget),
               }
             : null
         }

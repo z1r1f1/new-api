@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 import {
   detectUnixTimestampUnit,
+  formatChannelAffinityKeySource,
   formatLogTimestampToDate,
   shouldShowRequestConversion,
 } from './format'
@@ -45,5 +46,32 @@ describe('usage log request conversion visibility', () => {
       ),
       false
     )
+  })
+})
+
+describe('channel affinity key source formatting', () => {
+  test('combines matched key source type and path', () => {
+    assert.equal(
+      formatChannelAffinityKeySource({
+        key_source: 'gjson',
+        key_path: 'prompt_cache_key',
+      }),
+      'gjson:prompt_cache_key'
+    )
+  })
+
+  test('uses context key when the fallback source is a context id', () => {
+    assert.equal(
+      formatChannelAffinityKeySource({
+        key_source: 'context_int',
+        key_key: 'token_id',
+      }),
+      'context_int:token_id'
+    )
+  })
+
+  test('returns an empty string when no source metadata exists', () => {
+    assert.equal(formatChannelAffinityKeySource({}), '')
+    assert.equal(formatChannelAffinityKeySource(null), '')
   })
 })

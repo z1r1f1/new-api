@@ -47,6 +47,7 @@ import {
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
+  formatChannelAffinityKeySource,
 } from '../../lib/format'
 import {
   isDisplayableLogType,
@@ -315,6 +316,7 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
 
           const other = parseLogOther(log.other)
           const affinity = other?.admin_info?.channel_affinity
+          const affinityKeySource = formatChannelAffinityKeySource(affinity)
           const useChannel = other?.admin_info?.use_channel
           const channelChain =
             useChannel && useChannel.length > 0
@@ -357,6 +359,9 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                               '',
                             key_hint: affinity.key_hint || '',
                             key_fp: affinity.key_fp || '',
+                            key_source: affinity.key_source || '',
+                            key_key: affinity.key_key || '',
+                            key_path: affinity.key_path || '',
                           })
                           setAffinityDialogOpen(true)
                         }}
@@ -395,6 +400,11 @@ export function useCommonLogsColumns(isAdmin: boolean): ColumnDef<UsageLog>[] {
                               '-'
                             : '••••'}
                         </p>
+                        {affinityKeySource && (
+                          <p>
+                            {t('Key Source')}: {affinityKeySource}
+                          </p>
+                        )}
                       </div>
                     )}
                   </div>

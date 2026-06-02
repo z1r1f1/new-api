@@ -25,7 +25,7 @@ import {
   type ParsedTier,
 } from '@/features/pricing/lib/billing-expr'
 import type { UsageLog } from '../data/schema'
-import type { LogOtherData } from '../types'
+import type { ChannelAffinityInfo, LogOtherData } from '../types'
 
 export { normalizeTierLabel }
 
@@ -108,6 +108,20 @@ export function shouldShowRequestConversion(
 ): boolean {
   if (logType === 6) return false
   return Boolean(other?.request_path || getRequestConversionChain(other).length)
+}
+
+export function formatChannelAffinityKeySource(
+  affinity: ChannelAffinityInfo | null | undefined
+): string {
+  if (!affinity) return ''
+
+  const sourceType = String(affinity.key_source || '').trim()
+  const sourceTarget = String(
+    affinity.key_path || affinity.key_key || ''
+  ).trim()
+
+  if (sourceType && sourceTarget) return `${sourceType}:${sourceTarget}`
+  return sourceType || sourceTarget
 }
 
 /**

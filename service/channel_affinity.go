@@ -55,6 +55,7 @@ type channelAffinityMeta struct {
 	KeySourceType     string
 	KeySourceKey      string
 	KeySourcePath     string
+	AffinityValue     string
 	KeyHint           string
 	KeyFingerprint    string
 	UsingGroup        string
@@ -1091,13 +1092,55 @@ func ApplyChannelAffinityOverrideTemplate(c *gin.Context, paramOverride map[stri
 	if !ok {
 		return paramOverride, false
 	}
-	if len(meta.ParamTemplate) == 0 {
+
+	effectiveTemplate := cloneStringAnyMap(meta.ParamTemplate)
+	if fallbackTemplate := buildChannelAffinityFallbackPromptCacheTemplate(meta); len(fallbackTemplate) > 0 {
+		effectiveTemplate = mergeChannelOverride(effectiveTemplate, fallbackTemplate)
+	}
+	if len(effectiveTemplate) == 0 {
 		return paramOverride, false
 	}
 
-	mergedParam := mergeChannelOverride(paramOverride, meta.ParamTemplate)
+	meta.ParamTemplate = effectiveTemplate
+	mergedParam := mergeChannelOverride(paramOverride, effectiveTemplate)
 	appendChannelAffinityTemplateAdminInfo(c, meta)
 	return mergedParam, true
+}
+
+func buildChannelAffinityFallbackPromptCacheTemplate(meta channelAffinityMeta) map[string]interface{} {
+	promptCacheKey := buildChannelAffinityFallbackPromptCacheKey(meta)
+	if promptCacheKey == "" {
+		return nil
+	}
+	return map[string]interface{}{
+		"operations": []map[string]interface{}{
+			{
+				"path":        "prompt_cache_key",
+				"mode":        "set",
+				"value":       promptCacheKey,
+				"keep_origin": true,
+			},
+		},
+	}
+}
+
+func buildChannelAffinityFallbackPromptCacheKey(meta channelAffinityMeta) string {
+	value := strings.TrimSpace(meta.AffinityValue)
+	if value == "" {
+		return ""
+	}
+	if !strings.EqualFold(strings.TrimSpace(meta.KeySourceType), "context_int") {
+		return ""
+	}
+
+	switch strings.ToLower(strings.TrimSpace(meta.KeySourceKey)) {
+	case "token_id":
+		return "new-api:affinity:token_id:" + value
+	case "id", "user_id":
+		return "new-api:affinity:user_id:" + value
+	default:
+		return ""
+	}
 }
 
 func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup string) (int, bool) {
@@ -1160,6 +1203,7 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 			KeySourceType:     strings.TrimSpace(usedSource.Type),
 			KeySourceKey:      strings.TrimSpace(usedSource.Key),
 			KeySourcePath:     strings.TrimSpace(usedSource.Path),
+			AffinityValue:     affinityValue,
 			KeyHint:           buildChannelAffinityKeyHint(affinityValue),
 			KeyFingerprint:    affinityFingerprint(affinityValue),
 			UsingGroup:        usingGroup,

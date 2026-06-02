@@ -147,6 +147,70 @@ func TestApplyChannelAffinityOverrideTemplate_MergeOperations(t *testing.T) {
 	require.Equal(t, "trim_prefix", secondOp["mode"])
 }
 
+func TestChannelAffinityContextIDFallbackBuildsPromptCacheKey(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	setting := operation_setting.GetChannelAffinitySetting()
+	require.NotNil(t, setting)
+
+	oldEnabled := setting.Enabled
+	oldDefaultTTLSeconds := setting.DefaultTTLSeconds
+	oldRules := append([]operation_setting.ChannelAffinityRule(nil), setting.Rules...)
+	t.Cleanup(func() {
+		setting.Enabled = oldEnabled
+		setting.DefaultTTLSeconds = oldDefaultTTLSeconds
+		setting.Rules = oldRules
+	})
+
+	setting.Enabled = true
+	setting.DefaultTTLSeconds = 3600
+	setting.Rules = []operation_setting.ChannelAffinityRule{
+		{
+			Name:       "fallback-token-id",
+			ModelRegex: []string{"^gpt-5$"},
+			PathRegex:  []string{"/v1/chat/completions"},
+			KeySources: []operation_setting.ChannelAffinityKeySource{
+				{Type: "gjson", Path: "prompt_cache_key"},
+				{Type: "context_int", Key: "token_id"},
+			},
+			IncludeRuleName:   true,
+			IncludeModelName:  true,
+			IncludeUsingGroup: true,
+		},
+	}
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5","messages":[]}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Set("token_id", 207)
+
+	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5", "vip")
+	require.False(t, found)
+	require.Equal(t, 0, channelID)
+
+	meta, ok := getChannelAffinityMeta(ctx)
+	require.True(t, ok)
+	require.Equal(t, "context_int", meta.KeySourceType)
+	require.Equal(t, "token_id", meta.KeySourceKey)
+
+	mergedOverride, applied := ApplyChannelAffinityOverrideTemplate(ctx, nil)
+	require.True(t, applied)
+
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{
+			ParamOverride: mergedOverride,
+		},
+	}
+	out, err := relaycommon.ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-5","messages":[]}`), info)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-5","messages":[],"prompt_cache_key":"new-api:affinity:token_id:207"}`, string(out))
+
+	out, err = relaycommon.ApplyParamOverrideWithRelayInfo([]byte(`{"model":"gpt-5","prompt_cache_key":"client-cache-key"}`), info)
+	require.NoError(t, err)
+	require.JSONEq(t, `{"model":"gpt-5","prompt_cache_key":"client-cache-key"}`, string(out))
+}
+
 func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 	tests := []struct {
 		name string
