@@ -64,6 +64,29 @@ func TestConvertOpenAIResponsesRequestDropsUnsupportedStreamOptionsForCodex(t *t
 	}
 }
 
+func TestConvertOpenAIResponsesRequestDropsUnsupportedTopPForCodex(t *testing.T) {
+	stream := true
+	topP := 0.9
+	info := &relaycommon.RelayInfo{
+		RelayMode:   relayconstant.RelayModeResponses,
+		ChannelMeta: &relaycommon.ChannelMeta{},
+	}
+
+	converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, dto.OpenAIResponsesRequest{
+		Model:  "gpt-5.5",
+		Stream: &stream,
+		TopP:   &topP,
+	})
+	if err != nil {
+		t.Fatalf("ConvertOpenAIResponsesRequest returned error: %v", err)
+	}
+
+	req := converted.(dto.OpenAIResponsesRequest)
+	if req.TopP != nil {
+		t.Fatalf("expected codex request to drop unsupported top_p, got %#v", req.TopP)
+	}
+}
+
 func TestConvertOpenAIResponsesRequestForcesExplicitFalseStreamForCodex(t *testing.T) {
 	stream := false
 	gin.SetMode(gin.TestMode)

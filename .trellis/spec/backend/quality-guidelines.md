@@ -1675,12 +1675,14 @@ httpRouter.POST("/message", func(c *gin.Context) {
 - Adaptor hook: `relay/channel/codex.Adaptor.ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.OpenAIResponsesRequest) (any, error)`.
 - Request field: `dto.OpenAIResponsesRequest.Stream *bool \`json:"stream,omitempty"\``.
 - Unsupported upstream field: `dto.OpenAIResponsesRequest.StreamOptions *dto.StreamOptions \`json:"stream_options,omitempty"\``.
+- Unsupported upstream field: `dto.OpenAIResponsesRequest.TopP *float64 \`json:"top_p,omitempty"\``.
 - Runtime stream flag: `relaycommon.RelayInfo.IsStream` plus Gin context key `constant.ContextKeyIsStream`.
 
 #### 3. Contracts
 
 - For Codex normal Responses requests (`RelayModeResponses`), `stream` must be normalized to `stream:true` before sending to upstream, even when a compatible client explicitly sends `stream:false`.
 - Codex backend rejects `stream_options`; the adaptor must drop `StreamOptions` before forwarding both native Responses requests and Chat Completions compatibility requests that carried `stream_options.include_usage`.
+- Codex backend rejects `top_p`; the adaptor must drop `TopP` before forwarding native Responses requests and Chat Completions compatibility requests that carried `top_p` through `ChatCompletionsRequestToResponsesRequest`.
 - When the adaptor normalizes or receives `stream:true`, it must also mark `RelayInfo.IsStream=true` and update `ContextKeyIsStream`, so response handling, stream status tracking, and consume logs all use streaming semantics.
 - `RelayModeResponsesCompact` must not get this default; compact requests keep their own endpoint semantics.
 - `stream:false` is not forwardable to Codex normal Responses because the upstream rejects it; compact mode keeps its own endpoint semantics.
@@ -1692,6 +1694,7 @@ httpRouter.POST("/message", func(c *gin.Context) {
 - `RelayModeResponses`, `stream:false` -> upstream body is rewritten to `"stream":true`; downstream handled as stream.
 - `RelayModeResponsesCompact`, `stream` omitted -> leave omitted.
 - Any Codex Responses request with `stream_options` -> upstream body omits `stream_options`.
+- Any Codex Responses request with `top_p` -> upstream body omits `top_p`.
 
 #### 5. Good/Base/Bad Cases
 
@@ -1699,6 +1702,7 @@ httpRouter.POST("/message", func(c *gin.Context) {
 - Good: OpenAI-compatible `/v1/responses` request without `stream` on Codex does not fail with upstream `stream must set to be true`.
 - Good: OpenAI-compatible `/v1/responses` request with explicit `stream:false` on Codex does not fail with upstream `stream must set to be true`; the gateway treats it as Codex-required streaming.
 - Good: OpenAI-compatible `/v1/chat/completions` with `stream_options.include_usage` can route through Codex responses without upstream `Unsupported parameter: stream_options`.
+- Good: OpenAI-compatible `/v1/chat/completions` with `top_p` can route through Codex responses without upstream `Unsupported parameter: top_p`.
 - Base: compact request to `/v1/responses/compact` remains non-stream-defaulted.
 - Bad: adding only `request.Stream=true` without syncing `RelayInfo.IsStream`; response code can parse the upstream SSE with a non-stream handler or log incorrect stream state.
 
@@ -1709,6 +1713,7 @@ httpRouter.POST("/message", func(c *gin.Context) {
 - `relay/channel/codex`: regression test that `RelayInfo.IsStream` and `ContextKeyIsStream` are true after the default is applied.
 - `relay/channel/codex`: regression test that compact requests do not receive the default.
 - `relay/channel/codex`: regression test that `StreamOptions` is dropped before forwarding to Codex.
+- `relay/channel/codex`: regression test that `TopP` is dropped before forwarding to Codex.
 
 #### 7. Wrong vs Correct
 

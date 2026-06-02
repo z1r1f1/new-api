@@ -99,9 +99,11 @@ func (a *Adaptor) ConvertOpenAIResponsesRequest(c *gin.Context, info *relaycommo
 	}
 	request.Tools = openaicompat.NormalizeResponsesToolSchemas(request.Tools)
 	// Codex backend is stricter than the public Responses API and rejects
-	// stream_options. Chat Completions compatibility may carry
-	// stream_options.include_usage into Responses; do not forward it upstream.
+	// stream_options/top_p. Chat Completions compatibility may carry
+	// stream_options.include_usage and top_p into Responses; do not forward
+	// them upstream.
 	request.StreamOptions = nil
+	request.TopP = nil
 
 	if isCompact {
 		return request, nil
