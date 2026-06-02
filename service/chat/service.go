@@ -121,6 +121,9 @@ func (service *Service) SendMessage(ctx context.Context, currentUserID int, conv
 	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
 		return nil, err
 	}
+	if err := service.requireConversationMemberCanSend(conversationID, currentUserID); err != nil {
+		return nil, err
+	}
 	message, err := model.InsertChatMessage(conversationID, currentUserID, model.ChatMessageTypeText, body, clientMessageID)
 	if err != nil {
 		return nil, err
@@ -276,6 +279,50 @@ func (service *Service) RemoveMember(ctx context.Context, currentUserID int, con
 	return nil
 }
 
+func (service *Service) SetMemberMuted(ctx context.Context, currentUserID int, currentUserRole int, conversationID int, targetUserID int, muted bool) error {
+	if currentUserID <= 0 || conversationID <= 0 || targetUserID <= 0 {
+		return ErrInvalidRequest
+	}
+	if currentUserID == targetUserID {
+		return ErrInvalidRequest
+	}
+	if currentUserRole < common.RoleAdminUser {
+		return ErrForbidden
+	}
+	if err := model.EnsureChatTables(); err != nil {
+		return err
+	}
+	if err := service.requireConversationMember(conversationID, currentUserID); err != nil {
+		return err
+	}
+	conversation, err := model.GetConversationByID(conversationID)
+	if err != nil {
+		return err
+	}
+	if conversation.Type != model.ChatConversationTypeGroup {
+		return ErrInvalidRequest
+	}
+	targetIsMember, err := model.IsConversationMember(conversationID, targetUserID)
+	if err != nil {
+		return err
+	}
+	if !targetIsMember {
+		return ErrForbidden
+	}
+	if err := model.SetConversationMemberMuted(conversationID, targetUserID, muted); err != nil {
+		return err
+	}
+	mutedValue := muted
+	service.publishBestEffort(ctx, ConversationChannel(conversationID), Event{
+		Type:           EventTypeMemberMuted,
+		ConversationID: conversationID,
+		UserID:         targetUserID,
+		Muted:          &mutedValue,
+		CreatedAt:      common.GetTimestamp(),
+	})
+	return nil
+}
+
 func (service *Service) requireGroupOwner(conversationID int, userID int) error {
 	conversation, err := model.GetConversationByID(conversationID)
 	if err != nil {
@@ -285,6 +332,17 @@ func (service *Service) requireGroupOwner(conversationID int, userID int) error 
 		return ErrInvalidRequest
 	}
 	if conversation.OwnerId != userID {
+		return ErrForbidden
+	}
+	return nil
+}
+
+func (service *Service) requireConversationMemberCanSend(conversationID int, userID int) error {
+	muted, err := model.IsConversationMemberMuted(conversationID, userID)
+	if err != nil {
+		return err
+	}
+	if muted {
 		return ErrForbidden
 	}
 	return nil

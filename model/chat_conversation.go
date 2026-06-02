@@ -317,6 +317,27 @@ func RemoveConversationMember(conversationID int, userID int) error {
 	})
 }
 
+func SetConversationMemberMuted(conversationID int, userID int, muted bool) error {
+	if conversationID <= 0 || userID <= 0 {
+		return gorm.ErrRecordNotFound
+	}
+	return DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&ChatConversationMember{}).
+			Where("conversation_id = ? AND user_id = ? AND active = ?", conversationID, userID, true).
+			Updates(map[string]any{
+				"muted":      muted,
+				"updated_at": common.GetTimestamp(),
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return nil
+	})
+}
+
 func ListConversationMembers(conversationID int) ([]*ChatConversationMember, error) {
 	if conversationID <= 0 {
 		return []*ChatConversationMember{}, nil
@@ -328,6 +349,22 @@ func ListConversationMembers(conversationID int) ([]*ChatConversationMember, err
 		return nil, err
 	}
 	return members, nil
+}
+
+func IsConversationMemberMuted(conversationID int, userID int) (bool, error) {
+	if conversationID <= 0 || userID <= 0 {
+		return false, nil
+	}
+	var member ChatConversationMember
+	err := DB.Where("conversation_id = ? AND user_id = ? AND active = ?", conversationID, userID, true).
+		First(&member).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return member.Muted, nil
 }
 
 func IsConversationMember(conversationID int, userID int) (bool, error) {

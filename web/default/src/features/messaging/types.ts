@@ -23,6 +23,7 @@ export interface ChatUser {
   username: string
   display_name: string
   role: number
+  muted?: boolean
 }
 
 export interface ChatConversation {
@@ -75,6 +76,7 @@ export interface ChatEvent {
   last_read_message_id?: number
   reaction_emoji?: string
   reaction_active?: boolean
+  muted?: boolean
   created_at?: number
 }
 
@@ -108,4 +110,8 @@ export interface MarkReadPayload {
 
 export interface AddMemberPayload {
   user_id: number
+}
+
+export interface SetMemberMutedPayload {
+  muted: boolean
 }

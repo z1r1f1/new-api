@@ -36,14 +36,16 @@ func (service *Service) decorateConversation(conversation *model.ChatConversatio
 	userByID := toUserSummaryMap(users)
 	memberSummaries := make([]*UserSummary, 0, len(memberIDs))
 	var peer *UserSummary
-	for _, memberID := range memberIDs {
-		user := userByID[memberID]
+	for _, member := range members {
+		user := userByID[member.UserId]
 		if user == nil {
 			continue
 		}
-		memberSummaries = append(memberSummaries, user)
-		if memberID != currentUserID && peer == nil {
-			peer = user
+		memberSummary := *user
+		memberSummary.Muted = member.Muted
+		memberSummaries = append(memberSummaries, &memberSummary)
+		if member.UserId != currentUserID && peer == nil {
+			peer = &memberSummary
 		}
 	}
 

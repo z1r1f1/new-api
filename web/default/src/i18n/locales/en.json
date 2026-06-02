@@ -1788,7 +1788,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Related Projects",
     "footer.defaultCopyright": "All rights reserved.",
-    "footer.new\u0061pi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
+    "footer.newapi.projectAttributionSuffix": "All rights reserved. Designed and developed by the project contributors.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment",
     "For private deployments, format: https://fastgpt.run/api/openapi": "For private deployments, format: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Force a syntactically valid JSON response",
@@ -4868,6 +4868,21 @@
     "How many Linux DO Credit points to charge for each US dollar of balance": "How many Linux DO Credit points to charge for each US dollar of balance",
     "Smallest USD amount users can recharge": "Smallest USD amount users can recharge",
     "Exchange Rate": "Exchange Rate",
-    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}",
+    "Admin actions": "Admin actions",
+    "These operations are only available to admins.": "These operations are only available to admins.",
+    "Save group": "Save group",
+    "Enable user": "Enable user",
+    "Disable user": "Disable user",
+    "Mute in group": "Mute in group",
+    "Unmute in group": "Unmute in group",
+    "Muted in group": "Muted in group",
+    "User muted in this group": "User muted in this group",
+    "User unmuted in this group": "User unmuted in this group",
+    "Failed to update member mute status": "Failed to update member mute status",
+    "You cannot manage users with the same or higher role.": "You cannot manage users with the same or higher role.",
+    "Are you sure you want to {{action}} this user?": "Are you sure you want to {{action}} this user?",
+    "User disabled": "User disabled",
+    "User enabled": "User enabled"
   }
 }

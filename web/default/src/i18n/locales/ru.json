@@ -1788,7 +1788,7 @@
     "footer.columns.related.links.oneApi": "Один API",
     "footer.columns.related.title": "Связанные проекты",
     "footer.defaultCopyright": "Все права защищены.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
+    "footer.newapi.projectAttributionSuffix": "Все права защищены. Разработано участниками проекта.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Для каналов, добавленных после 10 мая 2025 г., не нужно удалять \".\" из имён моделей при развёртывании",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Для частных развертываний, формат: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Принудительно возвращать синтаксически корректный JSON",
@@ -4868,6 +4868,21 @@
     "How many Linux DO Credit points to charge for each US dollar of balance": "Сколько баллов Linux DO Credit списывать за каждый доллар США баланса",
     "Smallest USD amount users can recharge": "Минимальная сумма в USD, которую пользователи могут пополнить",
     "Exchange Rate": "Обменный курс",
-    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}",
+    "Admin actions": "Действия администратора",
+    "These operations are only available to admins.": "Эти операции доступны только администраторам.",
+    "Save group": "Сохранить группу",
+    "Enable user": "Включить пользователя",
+    "Disable user": "Отключить пользователя",
+    "Mute in group": "Запретить писать в группе",
+    "Unmute in group": "Снять запрет в группе",
+    "Muted in group": "Запрещено писать в группе",
+    "User muted in this group": "Пользователю запрещено писать в этой группе",
+    "User unmuted in this group": "Запрет для пользователя в этой группе снят",
+    "Failed to update member mute status": "Не удалось обновить статус запрета сообщений",
+    "You cannot manage users with the same or higher role.": "Нельзя управлять пользователями с такой же или более высокой ролью.",
+    "Are you sure you want to {{action}} this user?": "Вы уверены, что хотите {{action}} этого пользователя?",
+    "User disabled": "Пользователь отключен",
+    "User enabled": "Пользователь включен"
   }
 }

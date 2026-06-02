@@ -1788,7 +1788,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "Projets liés",
     "footer.defaultCopyright": "Tous droits réservés.",
-    "footer.new\u0061pi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
+    "footer.newapi.projectAttributionSuffix": "Tous droits réservés. Conçu et développé par les contributeurs du projet.",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "Pour les canaux ajoutés après le 10 mai 2025, pas besoin de supprimer \".\" des noms de modèles lors du déploiement",
     "For private deployments, format: https://fastgpt.run/api/openapi": "Pour les déploiements privés, format : https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "Imposer une réponse JSON syntaxiquement valide",
@@ -4868,6 +4868,21 @@
     "How many Linux DO Credit points to charge for each US dollar of balance": "Nombre de points Linux DO Credit à facturer pour chaque dollar US de solde",
     "Smallest USD amount users can recharge": "Montant minimal en USD que les utilisateurs peuvent recharger",
     "Exchange Rate": "Taux de change",
-    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}",
+    "Admin actions": "Actions administrateur",
+    "These operations are only available to admins.": "Ces opérations sont réservées aux administrateurs.",
+    "Save group": "Enregistrer le groupe",
+    "Enable user": "Activer l'utilisateur",
+    "Disable user": "Désactiver l'utilisateur",
+    "Mute in group": "Rendre muet dans le groupe",
+    "Unmute in group": "Réactiver dans le groupe",
+    "Muted in group": "Muet dans le groupe",
+    "User muted in this group": "Utilisateur rendu muet dans ce groupe",
+    "User unmuted in this group": "Utilisateur réactivé dans ce groupe",
+    "Failed to update member mute status": "Échec de la mise à jour du statut muet du membre",
+    "You cannot manage users with the same or higher role.": "Vous ne pouvez pas gérer des utilisateurs ayant un rôle identique ou supérieur.",
+    "Are you sure you want to {{action}} this user?": "Voulez-vous vraiment {{action}} cet utilisateur ?",
+    "User disabled": "Utilisateur désactivé",
+    "User enabled": "Utilisateur activé"
   }
 }

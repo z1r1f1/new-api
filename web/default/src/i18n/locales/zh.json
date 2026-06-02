@@ -1788,7 +1788,7 @@
     "footer.columns.related.links.oneApi": "One API",
     "footer.columns.related.title": "相关项目",
     "footer.defaultCopyright": "版权所有。",
-    "footer.new\u0061pi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
+    "footer.newapi.projectAttributionSuffix": "版权所有，由项目贡献者设计与开发。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "对于 2025 年 5 月 10 日之后添加的渠道，在部署时无需从模型名称中移除 \".\"",
     "For private deployments, format: https://fastgpt.run/api/openapi": "对于私有部署，格式为：https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "强制返回语法合法的 JSON",
@@ -4868,6 +4868,21 @@
     "How many Linux DO Credit points to charge for each US dollar of balance": "每 1 美元余额需要收取的 Linux DO Credit 积分数",
     "Smallest USD amount users can recharge": "用户可充值的最小美元金额",
     "Exchange Rate": "兑换比例",
-    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}",
+    "Admin actions": "管理员操作",
+    "These operations are only available to admins.": "这些操作仅管理员可用。",
+    "Save group": "保存分组",
+    "Enable user": "启用用户",
+    "Disable user": "禁用用户",
+    "Mute in group": "群内禁言",
+    "Unmute in group": "解除群内禁言",
+    "Muted in group": "已在群内禁言",
+    "User muted in this group": "已在此群内禁言用户",
+    "User unmuted in this group": "已解除此群内用户禁言",
+    "Failed to update member mute status": "更新成员禁言状态失败",
+    "You cannot manage users with the same or higher role.": "你不能管理同级或更高级别的用户。",
+    "Are you sure you want to {{action}} this user?": "确定要{{action}}此用户吗？",
+    "User disabled": "用户已禁用",
+    "User enabled": "用户已启用"
   }
 }

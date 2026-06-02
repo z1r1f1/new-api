@@ -27,6 +27,7 @@ func SetChatRouter(root *gin.Engine, apiRouter *gin.RouterGroup) {
 		chatRoute.POST("/conversations/:id/messages/:message_id/reactions", controller.ToggleChatMessageReaction)
 		chatRoute.POST("/conversations/:id/read", controller.MarkChatRead)
 		chatRoute.POST("/conversations/:id/members", controller.AddChatMember)
+		chatRoute.POST("/conversations/:id/members/:user_id/mute", middleware.AdminAuth(), controller.SetChatMemberMuted)
 		chatRoute.DELETE("/conversations/:id/members/:user_id", controller.RemoveChatMember)
 	}
 }

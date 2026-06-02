@@ -486,7 +486,8 @@ export function Messaging() {
         event.type === 'conversation.created' ||
         event.type === 'conversation.updated' ||
         event.type === 'member.added' ||
-        event.type === 'member.removed'
+        event.type === 'member.removed' ||
+        event.type === 'member.muted'
       ) {
         invalidateConversations()
       }
@@ -761,12 +762,19 @@ export function Messaging() {
       </div>
       <ChatUserProfileDialog
         user={profileUser}
+        conversation={activeConversation}
         open={profileDialogOpen}
         canViewDetails={canViewUserDetails}
         currentUserId={currentUserId}
+        currentUserRole={currentUserRole}
         openingDirect={Boolean(profileUser && openingUserId === profileUser.id)}
         onOpenChange={setProfileDialogOpen}
         onStartDirectChat={handleStartDirectChat}
+        onUserUpdated={() => {
+          invalidateUsers()
+          invalidateConversations()
+        }}
+        onConversationUpdated={invalidateConversations}
       />
       <ChatImagePreviewDialog
         image={previewImage}

@@ -14,6 +14,7 @@ type ChatConversationMember struct {
 	UserId         int    `json:"user_id" gorm:"uniqueIndex:idx_chat_conversation_member,priority:2;index;not null"`
 	MemberRole     string `json:"member_role" gorm:"type:varchar(16);not null;default:'member'"`
 	Active         bool   `json:"active" gorm:"default:true;index"`
+	Muted          bool   `json:"muted" gorm:"default:false;index"`
 	JoinedAt       int64  `json:"joined_at" gorm:"bigint;not null"`
 	LeftAt         int64  `json:"left_at" gorm:"bigint;default:0"`
 	CreatedAt      int64  `json:"created_at" gorm:"bigint;not null"`

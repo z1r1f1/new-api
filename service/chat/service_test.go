@@ -490,6 +490,52 @@ func TestServiceGroupMemberManagementRequiresOwner(t *testing.T) {
 	require.NoError(t, svc.RemoveMember(context.Background(), 1, conv.Id, 3))
 }
 
+func TestServiceAdminCanMuteGroupMemberAndBlockSending(t *testing.T) {
+	setupChatServiceTestDB(t)
+	seedChatServiceUser(t, 1, "admin", "Admin", common.RoleAdminUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 2, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+
+	publisher := &fakePublisher{}
+	svc := NewService(publisher)
+	conv, err := svc.CreateGroupConversation(context.Background(), 1, "team", []int{2})
+	require.NoError(t, err)
+	publisher.reset()
+
+	require.NoError(t, svc.SetMemberMuted(context.Background(), 1, common.RoleAdminUser, conv.Id, 2, true))
+
+	conversations, err := svc.ListConversations(context.Background(), 1)
+	require.NoError(t, err)
+	conversation := findConversationSummary(conversations, conv.Id)
+	require.NotNil(t, conversation)
+	mutedMember := findUserSummary(conversation.Members, 2)
+	require.NotNil(t, mutedMember)
+	assert.True(t, mutedMember.Muted)
+
+	_, err = svc.SendMessage(context.Background(), 2, conv.Id, "muted", "client-muted")
+	require.ErrorIs(t, err, ErrForbidden)
+
+	messages, err := model.ListConversationMessages(conv.Id, 10, 0)
+	require.NoError(t, err)
+	assert.Empty(t, messages)
+
+	require.NoError(t, svc.SetMemberMuted(context.Background(), 1, common.RoleAdminUser, conv.Id, 2, false))
+	unmutedMessage, err := svc.SendMessage(context.Background(), 2, conv.Id, "unmuted", "client-unmuted")
+	require.NoError(t, err)
+	assert.Equal(t, "alice", unmutedMessage.SenderUsername)
+}
+
+func TestServiceSetMemberMutedRequiresAdminRole(t *testing.T) {
+	setupChatServiceTestDB(t)
+	seedChatServiceUser(t, 1, "admin", "Admin", common.RoleAdminUser, common.UserStatusEnabled)
+	seedChatServiceUser(t, 2, "alice", "Alice", common.RoleCommonUser, common.UserStatusEnabled)
+
+	svc := NewService(&fakePublisher{})
+	conv, err := svc.CreateGroupConversation(context.Background(), 1, "team", []int{2})
+	require.NoError(t, err)
+
+	require.ErrorIs(t, svc.SetMemberMuted(context.Background(), 2, common.RoleCommonUser, conv.Id, 1, true), ErrForbidden)
+}
+
 func TestServiceRejectsMemberManagementOnDirectConversation(t *testing.T) {
 	setupChatServiceTestDB(t)
 	seedChatServiceUser(t, 1, "admin", "Admin", common.RoleAdminUser, common.UserStatusEnabled)
@@ -509,4 +555,22 @@ func userSummaryIDs(users []*UserSummary) []int {
 		ids = append(ids, user.Id)
 	}
 	return ids
+}
+
+func findUserSummary(users []*UserSummary, id int) *UserSummary {
+	for _, user := range users {
+		if user.Id == id {
+			return user
+		}
+	}
+	return nil
+}
+
+func findConversationSummary(conversations []*ConversationResponse, id int) *ConversationResponse {
+	for _, conversation := range conversations {
+		if conversation.Id == id {
+			return conversation
+		}
+	}
+	return nil
 }

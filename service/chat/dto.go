@@ -7,6 +7,7 @@ type UserSummary struct {
 	Username    string `json:"username"`
 	DisplayName string `json:"display_name"`
 	Role        int    `json:"role"`
+	Muted       bool   `json:"muted,omitempty"`
 }
 
 type ConversationResponse struct {

@@ -1788,7 +1788,7 @@
     "footer.columns.related.links.oneApi": "1つのAPI",
     "footer.columns.related.title": "関連プロジェクト",
     "footer.defaultCopyright": "すべての権利を留保します。",
-    "footer.new\u0061pi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
+    "footer.newapi.projectAttributionSuffix": "すべての権利を留保します。プロジェクトコントリビューターにより設計・開発されています。",
     "For channels added after May 10, 2025, no need to remove \".\" from model names during deployment": "2025 年 5 月 10 日以降に追加されたチャネルの場合、デプロイ時にモデル名から「.」を削除する必要はありません",
     "For private deployments, format: https://fastgpt.run/api/openapi": "プライベートデプロイメントの場合、形式: https://fastgpt.run/api/openapi",
     "Force a syntactically valid JSON response": "構文的に有効な JSON 応答を強制",
@@ -4868,6 +4868,21 @@
     "How many Linux DO Credit points to charge for each US dollar of balance": "残高 1 米ドルあたりに請求する Linux DO Credit ポイント数",
     "Smallest USD amount users can recharge": "ユーザーがチャージできる最小 USD 金額",
     "Exchange Rate": "交換レート",
-    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}"
+    "LDC:USD = {{ratio}}": "LDC:USD = {{ratio}}",
+    "Admin actions": "管理者操作",
+    "These operations are only available to admins.": "これらの操作は管理者のみ利用できます。",
+    "Save group": "グループを保存",
+    "Enable user": "ユーザーを有効化",
+    "Disable user": "ユーザーを無効化",
+    "Mute in group": "グループでミュート",
+    "Unmute in group": "グループのミュート解除",
+    "Muted in group": "グループでミュート中",
+    "User muted in this group": "このグループでユーザーをミュートしました",
+    "User unmuted in this group": "このグループでユーザーのミュートを解除しました",
+    "Failed to update member mute status": "メンバーのミュート状態を更新できませんでした",
+    "You cannot manage users with the same or higher role.": "同じまたは上位のロールのユーザーは管理できません。",
+    "Are you sure you want to {{action}} this user?": "このユーザーを{{action}}してもよろしいですか？",
+    "User disabled": "ユーザーを無効化しました",
+    "User enabled": "ユーザーを有効化しました"
   }
 }

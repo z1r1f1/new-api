@@ -17,6 +17,7 @@ const (
 	EventTypeMessageRevoked         = "message.revoked"
 	EventTypeMemberAdded            = "member.added"
 	EventTypeMemberRemoved          = "member.removed"
+	EventTypeMemberMuted            = "member.muted"
 	EventTypePresenceUpdated        = "presence.updated"
 	EventTypeTypingUpdated          = "typing.updated"
 )
@@ -31,6 +32,7 @@ type Event struct {
 	LastReadMessageID int                   `json:"last_read_message_id,omitempty"`
 	ReactionEmoji     string                `json:"reaction_emoji,omitempty"`
 	ReactionActive    *bool                 `json:"reaction_active,omitempty"`
+	Muted             *bool                 `json:"muted,omitempty"`
 	CreatedAt         int64                 `json:"created_at,omitempty"`
 }
 

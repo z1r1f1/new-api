@@ -27,6 +27,7 @@ import type {
   CreateGroupConversationPayload,
   MarkReadPayload,
   SendMessagePayload,
+  SetMemberMutedPayload,
   ToggleMessageReactionPayload,
 } from './types'
 
@@ -138,6 +139,18 @@ export async function removeChatMember(
 ): Promise<ApiResponse<null>> {
   const res = await api.delete(
     `/api/chat/conversations/${conversationId}/members/${userId}`
+  )
+  return res.data
+}
+
+export async function setChatMemberMuted(
+  conversationId: number,
+  userId: number,
+  payload: SetMemberMutedPayload
+): Promise<ApiResponse<null>> {
+  const res = await api.post(
+    `/api/chat/conversations/${conversationId}/members/${userId}/mute`,
+    payload
   )
   return res.data
 }

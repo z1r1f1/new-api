@@ -39,6 +39,10 @@ type addChatMemberRequest struct {
 	UserId int `json:"user_id"`
 }
 
+type setChatMemberMutedRequest struct {
+	Muted bool `json:"muted"`
+}
+
 func ListChatUsers(c *gin.Context) {
 	service, ok := getChatService(c)
 	if !ok {
@@ -310,6 +314,38 @@ func RemoveChatMember(c *gin.Context) {
 		return
 	}
 	if err := service.RemoveMember(c.Request.Context(), userId, conversationId, targetUserId); err != nil {
+		writeChatError(c, err)
+		return
+	}
+	chatJSON(c, http.StatusOK, true, "", nil)
+}
+
+func SetChatMemberMuted(c *gin.Context) {
+	service, ok := getChatService(c)
+	if !ok {
+		return
+	}
+	userId, ok := currentChatUserID(c)
+	if !ok {
+		chatJSON(c, http.StatusUnauthorized, false, "not logged in", nil)
+		return
+	}
+	conversationId, ok := parseChatPathInt(c, "id")
+	if !ok {
+		chatJSON(c, http.StatusBadRequest, false, "invalid conversation id", nil)
+		return
+	}
+	targetUserId, ok := parseChatPathInt(c, "user_id")
+	if !ok {
+		chatJSON(c, http.StatusBadRequest, false, "invalid user id", nil)
+		return
+	}
+	var req setChatMemberMutedRequest
+	if err := common.DecodeJson(c.Request.Body, &req); err != nil {
+		chatJSON(c, http.StatusBadRequest, false, "invalid request", nil)
+		return
+	}
+	if err := service.SetMemberMuted(c.Request.Context(), userId, c.GetInt("role"), conversationId, targetUserId, req.Muted); err != nil {
 		writeChatError(c, err)
 		return
 	}
