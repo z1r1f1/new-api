@@ -20,7 +20,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useQueryClient, useIsFetching } from '@tanstack/react-query'
 import { useNavigate, getRouteApi } from '@tanstack/react-router'
 import { type Table } from '@tanstack/react-table'
-import { Eye, EyeOff } from 'lucide-react'
+import { AlertCircle, Eye, EyeOff } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useIsAdmin } from '@/hooks/use-admin'
 import { Button } from '@/components/ui/button'
@@ -39,7 +39,11 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { DataTableToolbar } from '@/components/data-table'
-import { LOG_TYPES } from '../constants'
+import {
+  LOG_TYPE_ALL_VALUE,
+  LOG_TYPE_ENUM,
+  LOG_TYPE_FILTERS,
+} from '../constants'
 import { buildSearchParams } from '../lib/filter'
 import { getDefaultTimeRange } from '../lib/utils'
 import type { CommonLogFilters } from '../types'
@@ -50,6 +54,7 @@ import { useUsageLogsContext } from './usage-logs-provider'
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 const logTypeValues = ['0', '1', '2', '3', '4', '5', '6'] as const
 type LogTypeValue = (typeof logTypeValues)[number]
+const errorLogTypeValue = String(LOG_TYPE_ENUM.ERROR) as LogTypeValue
 function isLogTypeValue(value: string): value is LogTypeValue {
   return (logTypeValues as readonly string[]).includes(value)
 }
@@ -103,7 +108,14 @@ export function CommonLogsFilterBar<TData>(
 
     const typeArr = searchParams.type
     if (Array.isArray(typeArr) && typeArr.length === 1) {
-      setLogType(typeArr[0])
+      const nextType = typeArr[0]
+      setLogType(
+        nextType !== LOG_TYPE_ALL_VALUE && isLogTypeValue(nextType)
+          ? nextType
+          : ''
+      )
+    } else {
+      setLogType('')
     }
   }, [
     searchParams.startTime,
@@ -196,6 +208,7 @@ export function CommonLogsFilterBar<TData>(
 
   const inputClass = 'w-full sm:w-[140px] lg:w-[160px]'
   const sensitiveType = sensitiveVisible ? 'text' : 'password'
+  const errorOnlyActive = logType === errorLogTypeValue
 
   const statsBar = (
     <div className='flex flex-wrap items-center gap-2'>
@@ -254,15 +267,16 @@ export function CommonLogsFilterBar<TData>(
             className={inputClass}
           />
           <Select
-            items={[
-              { value: 'all', label: t('All Types') },
-              ...LOG_TYPES.map((type) => ({
-                value: String(type.value),
-                label: t(type.label),
-              })),
-            ]}
-            value={logType}
+            items={LOG_TYPE_FILTERS.map((type) => ({
+              value: type.value,
+              label: t(type.label),
+            }))}
+            value={logType || LOG_TYPE_ALL_VALUE}
             onValueChange={(value) => {
+              if (value === LOG_TYPE_ALL_VALUE) {
+                setLogType('')
+                return
+              }
               setLogType(value !== null && isLogTypeValue(value) ? value : '')
             }}
           >
@@ -271,15 +285,29 @@ export function CommonLogsFilterBar<TData>(
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false}>
               <SelectGroup>
-                <SelectItem value='all'>{t('All Types')}</SelectItem>
-                {LOG_TYPES.map((type) => (
-                  <SelectItem key={type.value} value={String(type.value)}>
+                {LOG_TYPE_FILTERS.map((type) => (
+                  <SelectItem key={type.value} value={type.value}>
                     {t(type.label)}
                   </SelectItem>
                 ))}
               </SelectGroup>
             </SelectContent>
           </Select>
+          <Button
+            type='button'
+            variant={errorOnlyActive ? 'default' : 'outline'}
+            size='sm'
+            className='h-9 w-full gap-1.5 sm:w-auto'
+            aria-pressed={errorOnlyActive}
+            onClick={() => {
+              setLogType((prev) =>
+                prev === errorLogTypeValue ? '' : errorLogTypeValue
+              )
+            }}
+          >
+            <AlertCircle className='size-4' />
+            {t('Error Requests')}
+          </Button>
         </>
       }
       expandable={

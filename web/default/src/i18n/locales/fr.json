@@ -1516,6 +1516,7 @@
     "Epay secret key": "Clé secrète Epay",
     "Equals": "Égal à",
     "Error": "Erreur",
+    "Error Requests": "Requêtes en erreur",
     "Error Code (optional)": "Code d'erreur (optionnel)",
     "Error Message": "Message d'erreur",
     "Error Message (required)": "Message d'erreur (requis)",
