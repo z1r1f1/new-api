@@ -72,6 +72,11 @@ func applySystemPromptIfNeeded(c *gin.Context, info *relaycommon.RelayInfo, requ
 func chatCompletionsViaResponses(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.Adaptor, request *dto.GeneralOpenAIRequest) (*dto.Usage, *types.NewAPIError) {
 	if request != nil {
 		service.ApplyOpenAICompatRequestParamsFromRawBody(request, rawJSONBodyForResponsesCompat(c), info.RequestHeaders)
+
+	// Backfill info with compat-extracted reasoning effort that was not available during GenRelayInfo
+	if info.ReasoningEffort == "" && request.ReasoningEffort != "" {
+		info.ReasoningEffort = request.ReasoningEffort
+	}
 	}
 
 	chatJSON, err := common.Marshal(request)

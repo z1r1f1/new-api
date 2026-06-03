@@ -66,6 +66,11 @@ func ResponsesHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *
 	}
 	service.ApplyOpenAIResponsesCompatRequestParamsFromRawBody(request, rawJSONBodyForResponsesCompat(c), info.RequestHeaders)
 
+	// Backfill info with compat-extracted reasoning effort that was not available during GenRelayInfo
+	if info.ReasoningEffort == "" && request.Reasoning != nil && request.Reasoning.Effort != "" {
+		info.ReasoningEffort = request.Reasoning.Effort
+	}
+
 	adaptor := GetAdaptor(info.ApiType)
 	if adaptor == nil {
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
