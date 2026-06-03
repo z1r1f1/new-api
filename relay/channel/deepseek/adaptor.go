@@ -97,25 +97,72 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 		modelName = info.UpstreamModelName
 	}
 	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
-	if !ok {
+	if ok {
+		thinking, err := common.Marshal(map[string]string{
+			"type": thinkingType,
+		})
+		if err != nil {
+			return fmt.Errorf("error marshalling thinking: %w", err)
+		}
+		request.Model = baseModel
+		request.THINKING = thinking
+		request.ReasoningEffort = effort
+		if info != nil {
+			if info.ChannelMeta != nil {
+				info.UpstreamModelName = baseModel
+			}
+			info.ReasoningEffort = effort
+		}
 		return nil
 	}
-	thinking, err := common.Marshal(map[string]string{
-		"type": thinkingType,
-	})
-	if err != nil {
-		return fmt.Errorf("error marshalling thinking: %w", err)
-	}
-	request.Model = baseModel
-	request.THINKING = thinking
-	request.ReasoningEffort = effort
-	if info != nil {
-		if info.ChannelMeta != nil {
-			info.UpstreamModelName = baseModel
-		}
-		info.ReasoningEffort = effort
-	}
+
+	// No V4 suffix — normalize explicit thinking / reasoning params for DeepSeek upstream and log display.
+	normalizeDeepSeekExplicitThinking(info, request)
 	return nil
+}
+
+// normalizeDeepSeekExplicitThinking consumes enable_thinking and normalises
+// thinking / reasoning_effort into the shape that DeepSeek upstream expects.
+// It also records the effective effort into info.ReasoningEffort for the log UI.
+func normalizeDeepSeekExplicitThinking(info *relaycommon.RelayInfo, request *dto.GeneralOpenAIRequest) {
+	// 1. enable_thinking (Ali Qwen / generic compat) → thinking.type
+	if request.EnableThinking != nil {
+		var raw interface{}
+		if err := common.Unmarshal(request.EnableThinking, &raw); err == nil {
+			switch v := raw.(type) {
+			case bool:
+				if v {
+					setDeepSeekThinkingType(request, "enabled")
+				} else {
+					setDeepSeekThinkingType(request, "disabled")
+				}
+			case string:
+				setDeepSeekThinkingType(request, v)
+			}
+		}
+		request.EnableThinking = nil // consumed — upstream does not expect this key
+	}
+
+	// 2. Existing thinking object — capture type for logging
+	if request.THINKING != nil && info.ReasoningEffort == "" {
+		var tm map[string]interface{}
+		if err := common.Unmarshal(request.THINKING, &tm); err == nil {
+			if t, ok := tm["type"].(string); ok {
+				info.ReasoningEffort = t
+			}
+		}
+	}
+
+	// 3. Top-level reasoning_effort — capture for logging
+	if info.ReasoningEffort == "" && request.ReasoningEffort != "" {
+		info.ReasoningEffort = request.ReasoningEffort
+	}
+}
+
+// setDeepSeekThinkingType marshals a {"type": t} value into request.THINKING.
+func setDeepSeekThinkingType(request *dto.GeneralOpenAIRequest, t string) {
+	raw, _ := common.Marshal(map[string]string{"type": t})
+	request.THINKING = raw
 }
 
 func (a *Adaptor) ConvertRerankRequest(c *gin.Context, relayMode int, request dto.RerankRequest) (any, error) {

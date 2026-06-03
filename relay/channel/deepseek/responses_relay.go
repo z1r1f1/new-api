@@ -114,6 +114,17 @@ func deepSeekResponsesToChatRequest(request dto.OpenAIResponsesRequest, history 
 	if request.Stream != nil && *request.Stream {
 		chatReq.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 	}
+
+	// Propagate reasoning / thinking params that the compat layer already
+	// extracted from the raw JSON body (e.g. reasoning_effort, enable_thinking).
+	// The suffix handler in adaptor.go will then normalise them for DeepSeek.
+	if request.Reasoning != nil && request.Reasoning.Effort != "" {
+		chatReq.ReasoningEffort = request.Reasoning.Effort
+	}
+	if request.EnableThinking != nil {
+		chatReq.EnableThinking = request.EnableThinking
+	}
+
 	return chatReq, cloneDeepSeekMessages(messages), nil
 }
 
