@@ -69,6 +69,12 @@ func convertDeepSeekResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo
 	if c != nil {
 		c.Set(deepSeekResponsesRelayContextKey, state)
 	}
+
+	// Capture reasoning_effort from the Responses request for logging when not already set by V4 thinking suffix
+	if info.ReasoningEffort == "" && request.Reasoning != nil && request.Reasoning.Effort != "" {
+		info.ReasoningEffort = request.Reasoning.Effort
+	}
+
 	return chatReq, nil
 }
 

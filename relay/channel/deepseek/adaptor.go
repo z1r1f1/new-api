@@ -83,6 +83,11 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 
+	// Capture reasoning_effort from request body for logging when not already set by V4 thinking suffix
+	if info.ReasoningEffort == "" && request.ReasoningEffort != "" {
+		info.ReasoningEffort = request.ReasoningEffort
+	}
+
 	return request, nil
 }
 
