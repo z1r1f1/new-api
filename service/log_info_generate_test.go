@@ -268,3 +268,49 @@ func TestGenerateTextOtherInfoRecordsRequestProtocol(t *testing.T) {
 		t.Fatalf("expected request_protocol=websocket, got %#v", wsOther["request_protocol"])
 	}
 }
+
+func TestGenerateTextOtherInfoRecordsSafeRequestHeadersInAdminInfo(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"gpt-5.5"}`))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+	ctx.Request.Header.Set("User-Agent", "codex-test")
+	ctx.Request.Header.Set("X-Client-Request-Id", "req-1")
+	ctx.Request.Header.Set("Authorization", "Bearer secret")
+	ctx.Request.Header.Set("Cookie", "sid=secret")
+	ctx.Request.Header.Set("Api-Key", "secret")
+	ctx.Request.Header.Set("X-Session-Token", "secret")
+	now := time.Now()
+
+	other := GenerateTextOtherInfo(ctx, &relaycommon.RelayInfo{
+		StartTime:         now,
+		FirstResponseTime: now,
+		ChannelMeta:       &relaycommon.ChannelMeta{},
+	}, 1, 1, 1, 0, 0, 0, -1)
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected admin_info map, got %#v", other["admin_info"])
+	}
+	headers, ok := adminInfo["request_headers"].(map[string]string)
+	if !ok {
+		t.Fatalf("expected admin request_headers map, got %#v", adminInfo["request_headers"])
+	}
+	if headers["Content-Type"] != "application/json" {
+		t.Fatalf("expected Content-Type header, got %#v", headers)
+	}
+	if headers["User-Agent"] != "codex-test" {
+		t.Fatalf("expected User-Agent header, got %#v", headers)
+	}
+	if headers["X-Client-Request-Id"] != "req-1" {
+		t.Fatalf("expected X-Client-Request-Id header, got %#v", headers)
+	}
+	for _, sensitive := range []string{"Authorization", "Cookie", "Api-Key", "X-Session-Token"} {
+		if _, ok := headers[sensitive]; ok {
+			t.Fatalf("expected sensitive header %s to be filtered, got %#v", sensitive, headers)
+		}
+	}
+	if _, ok := other["request_headers"]; ok {
+		t.Fatalf("request_headers must stay under admin_info, got top-level %#v", other["request_headers"])
+	}
+}

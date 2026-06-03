@@ -85,6 +85,7 @@ func ProcessChannelError(c *gin.Context, channelError types.ChannelError, err *t
 			adminInfo["is_multi_key"] = true
 			adminInfo["multi_key_index"] = common.GetContextKeyInt(c, constant.ContextKeyChannelMultiKeyIndex)
 		}
+		AppendRequestHeadersAdminInfo(c, adminInfo)
 		AppendChannelAffinityAdminInfo(c, adminInfo)
 		other["admin_info"] = adminInfo
 		AppendChatGPTWebTimingInfo(c, other)

@@ -147,6 +147,11 @@ func ChargeViolationFeeIfNeeded(ctx *gin.Context, relayInfo *relaycommon.RelayIn
 		"violation_fee_marker": CSAMViolationMarker,
 	}
 
+	adminInfo := make(map[string]interface{})
+	AppendRequestHeadersAdminInfo(ctx, adminInfo)
+	if len(adminInfo) > 0 {
+		other["admin_info"] = adminInfo
+	}
 	model.RecordConsumeLog(ctx, relayInfo.UserId, model.RecordConsumeLogParams{
 		ChannelId:      relayInfo.ChannelId,
 		ModelName:      relayInfo.OriginModelName,

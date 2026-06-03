@@ -4884,6 +4884,7 @@
     "You cannot manage users with the same or higher role.": "Vous ne pouvez pas gérer des utilisateurs ayant un rôle identique ou supérieur.",
     "Are you sure you want to {{action}} this user?": "Voulez-vous vraiment {{action}} cet utilisateur ?",
     "User disabled": "Utilisateur désactivé",
-    "User enabled": "Utilisateur activé"
+    "User enabled": "Utilisateur activé",
+    "Request Headers": "En-têtes de requête"
   }
 }

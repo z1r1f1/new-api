@@ -4884,6 +4884,7 @@
     "You cannot manage users with the same or higher role.": "Нельзя управлять пользователями с такой же или более высокой ролью.",
     "Are you sure you want to {{action}} this user?": "Вы уверены, что хотите {{action}} этого пользователя?",
     "User disabled": "Пользователь отключен",
-    "User enabled": "Пользователь включен"
+    "User enabled": "Пользователь включен",
+    "Request Headers": "Заголовки запроса"
   }
 }

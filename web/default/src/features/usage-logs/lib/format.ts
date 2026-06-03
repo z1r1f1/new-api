@@ -124,6 +124,21 @@ export function formatChannelAffinityKeySource(
   return sourceType || sourceTarget
 }
 
+export function getVisibleAdminRequestHeaders(
+  adminInfo: LogOtherData['admin_info'] | null | undefined,
+  isAdmin: boolean
+): Array<{ key: string; value: string }> {
+  if (!isAdmin || !adminInfo?.request_headers) return []
+
+  return Object.entries(adminInfo.request_headers)
+    .map(([key, value]) => ({
+      key: key.trim(),
+      value: String(value ?? '').trim(),
+    }))
+    .filter((header) => header.key !== '' && header.value !== '')
+    .sort((a, b) => a.key.localeCompare(b.key))
+}
+
 /**
  * Parse the 'other' field from JSON string to object
  */

@@ -76,6 +76,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 		adminInfo["local_count_tokens"] = isLocalCountTokens
 	}
 
+	AppendRequestHeadersAdminInfo(ctx, adminInfo)
 	AppendChannelAffinityAdminInfo(ctx, adminInfo)
 
 	other["admin_info"] = adminInfo

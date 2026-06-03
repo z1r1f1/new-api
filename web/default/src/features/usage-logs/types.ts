@@ -102,6 +102,7 @@ export interface LogOtherData {
     use_channel?: number[]
     local_count_tokens?: boolean
     channel_affinity?: ChannelAffinityInfo
+    request_headers?: Record<string, string>
     // Top-up audit fields (type=1, admin only)
     payment_method?: string
     callback_payment_method?: string

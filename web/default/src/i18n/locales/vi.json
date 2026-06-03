@@ -4884,6 +4884,7 @@
     "You cannot manage users with the same or higher role.": "Bạn không thể quản lý người dùng có vai trò ngang bằng hoặc cao hơn.",
     "Are you sure you want to {{action}} this user?": "Bạn có chắc muốn {{action}} người dùng này không?",
     "User disabled": "Đã tắt người dùng",
-    "User enabled": "Đã bật người dùng"
+    "User enabled": "Đã bật người dùng",
+    "Request Headers": "Header yêu cầu"
   }
 }

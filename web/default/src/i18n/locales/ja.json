@@ -4884,6 +4884,7 @@
     "You cannot manage users with the same or higher role.": "同じまたは上位のロールのユーザーは管理できません。",
     "Are you sure you want to {{action}} this user?": "このユーザーを{{action}}してもよろしいですか？",
     "User disabled": "ユーザーを無効化しました",
-    "User enabled": "ユーザーを有効化しました"
+    "User enabled": "ユーザーを有効化しました",
+    "Request Headers": "リクエストヘッダー"
   }
 }

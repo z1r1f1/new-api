@@ -59,6 +59,7 @@ import {
   getFirstResponseTimeColor,
   getResponseTimeColor,
   getRequestConversionChain,
+  getVisibleAdminRequestHeaders,
   shouldShowRequestConversion,
 } from '../../lib/format'
 import {
@@ -480,6 +481,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
       ? t('Native format')
       : conversionChain.join(' -> ')
   const showConversion = shouldShowRequestConversion(other, props.log.type)
+  const requestHeaderRows = getVisibleAdminRequestHeaders(
+    adminInfo,
+    props.isAdmin
+  )
 
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
@@ -712,6 +717,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
                     </div>
                   </div>
                 </div>
+              </DetailSection>
+            )}
+
+            {/* Request headers (admin only) */}
+            {requestHeaderRows.length > 0 && (
+              <DetailSection
+                icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
+                label={t('Request Headers')}
+              >
+                {requestHeaderRows.map((header) => (
+                  <DetailRow
+                    key={header.key}
+                    label={header.key}
+                    value={header.value}
+                    mono
+                  />
+                ))}
               </DetailSection>
             )}
 

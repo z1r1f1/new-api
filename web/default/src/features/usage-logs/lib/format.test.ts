@@ -4,6 +4,7 @@ import {
   detectUnixTimestampUnit,
   formatChannelAffinityKeySource,
   formatLogTimestampToDate,
+  getVisibleAdminRequestHeaders,
   shouldShowRequestConversion,
 } from './format'
 
@@ -73,5 +74,53 @@ describe('channel affinity key source formatting', () => {
   test('returns an empty string when no source metadata exists', () => {
     assert.equal(formatChannelAffinityKeySource({}), '')
     assert.equal(formatChannelAffinityKeySource(null), '')
+  })
+})
+
+describe('admin request header visibility formatting', () => {
+  test('returns sorted request headers for admins only', () => {
+    assert.deepEqual(
+      getVisibleAdminRequestHeaders(
+        {
+          request_headers: {
+            'X-Request-Id': 'req-1',
+            'Content-Type': 'application/json',
+          },
+        },
+        true
+      ),
+      [
+        { key: 'Content-Type', value: 'application/json' },
+        { key: 'X-Request-Id', value: 'req-1' },
+      ]
+    )
+
+    assert.deepEqual(
+      getVisibleAdminRequestHeaders(
+        {
+          request_headers: {
+            'X-Request-Id': 'req-1',
+          },
+        },
+        false
+      ),
+      []
+    )
+  })
+
+  test('filters blank request header keys and values', () => {
+    assert.deepEqual(
+      getVisibleAdminRequestHeaders(
+        {
+          request_headers: {
+            '': 'empty-key',
+            'X-Blank': '   ',
+            'X-Ok': 'ok',
+          },
+        },
+        true
+      ),
+      [{ key: 'X-Ok', value: 'ok' }]
+    )
   })
 })

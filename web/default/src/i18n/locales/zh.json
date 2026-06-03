@@ -4884,6 +4884,7 @@
     "You cannot manage users with the same or higher role.": "你不能管理同级或更高级别的用户。",
     "Are you sure you want to {{action}} this user?": "确定要{{action}}此用户吗？",
     "User disabled": "用户已禁用",
-    "User enabled": "用户已启用"
+    "User enabled": "用户已启用",
+    "Request Headers": "请求头"
   }
 }

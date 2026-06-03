@@ -50,6 +50,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
 	}
+	adminInfo := make(map[string]interface{})
+	AppendRequestHeadersAdminInfo(c, adminInfo)
+	if len(adminInfo) > 0 {
+		other["admin_info"] = adminInfo
+	}
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
 		ChannelId: info.ChannelId,
 		ModelName: info.OriginModelName,
