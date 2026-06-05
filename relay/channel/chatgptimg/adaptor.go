@@ -1050,6 +1050,23 @@ func retryChatStreamStaleRoute(ctx context.Context, client *Client, req chatRequ
 			break
 		}
 	}
+	// Recover output from handoff / deep research events when the stream
+	// delivers zero delta text (gpt-5.5 and newer models send handoff
+	// events even for fresh conversations).
+	if outputText == "" && state.ConversationID != "" {
+		var recovered string
+		if req.DeepResearch && state.HasDeepResearchInternalEvent {
+			recovered = recoverDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
+		} else if state.HasStreamHandoff {
+			recovered = recoverHandoffTextFromConversation(ctx, client, state.ConversationID, timing)
+		} else {
+			recovered = recoverChatCompletionTextFromConversation(ctx, client, state.ConversationID, timing)
+		}
+		if recovered != "" {
+			outputText = recovered
+			writeResponsesTextDelta(pw, recovered)
+		}
+	}
 	if timing != nil {
 		timing.Set("session_route_retry_output_chars", len(outputText))
 	}
@@ -3572,6 +3589,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 				retryContent := retryChatStreamStaleRoute(ctx, client, req, pw, model, timing)
 				if retryContent != "" {
 					state.Content = retryContent
+					streamedContent = retryContent
 				}
 			}
 		}
@@ -3754,6 +3772,7 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 				retryContent := retryChatStreamStaleRoute(ctx, client, req, pw, model, timing)
 				if retryContent != "" {
 					state.Content = retryContent
+					outputText = retryContent
 				}
 			}
 		}
