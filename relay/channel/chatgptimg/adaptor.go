@@ -1055,10 +1055,13 @@ func retryChatStreamStaleRoute(ctx context.Context, client *Client, req chatRequ
 	// events even for fresh conversations).
 	if outputText == "" && state.ConversationID != "" {
 		var recovered string
+		if timing != nil {
+			timing.Set("session_route_retry_conversation_hash", chatGPTWebShortHash(state.ConversationID))
+		}
 		if req.DeepResearch && state.HasDeepResearchInternalEvent {
-			recovered = recoverDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
+			recovered = recoverRetryDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
 		} else if state.HasStreamHandoff {
-			recovered = recoverHandoffTextFromConversation(ctx, client, state.ConversationID, timing)
+			recovered = recoverRetryHandoffTextFromConversation(ctx, client, state.ConversationID, timing)
 		} else {
 			recovered = recoverChatCompletionTextFromConversation(ctx, client, state.ConversationID, timing)
 		}
@@ -1602,7 +1605,7 @@ func (a *Adaptor) doChatRequest(c *gin.Context, info *relaycommon.RelayInfo, bod
 		if err != nil {
 			return nil, err
 		}
-		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, info, requestPublicBaseURLForImages(c, info), route, timing), nil
+		return buildStreamingChatResponse(c.Request.Context(), client, started.Stream, req, started.Prompt, started.Baseline, started.FallbackFullContext, info, requestPublicBaseURLForImages(c, info), route, timing), nil
 	}
 	content, conversationID, usedPrompt, baseline, sseImageRefs, hasImageGeneration, err := runChatCompletion(c.Request.Context(), client, req, prompt, playgroundDebugCapture(c), timing)
 	if err != nil {
@@ -2287,9 +2290,10 @@ func balancedJSONObjectCandidates(content string) []string {
 }
 
 type chatStreamStart struct {
-	Stream   <-chan SSEEvent
-	Baseline imageBaseline
-	Prompt   string
+	Stream              <-chan SSEEvent
+	Baseline            imageBaseline
+	Prompt              string
+	FallbackFullContext bool
 }
 
 func runChatCompletion(ctx context.Context, client *Client, req chatRequest, prompt string, captureRequestBody func([]byte), timings ...*service.ChatGPTWebTiming) (string, string, string, imageBaseline, []string, bool, error) {
@@ -2318,9 +2322,9 @@ func runChatCompletion(ctx context.Context, client *Client, req chatRequest, pro
 	if strings.TrimSpace(result.Content) == "" && len(sseImageRefs) == 0 {
 		recovered := ""
 		if req.DeepResearch && result.HasDeepResearchInternalEvent {
-			recovered = recoverDeepResearchTextFromConversation(ctx, client, result.ConversationID, timing)
+			recovered = recoverDeepResearchTextFromConversationWithNotFoundMode(ctx, client, result.ConversationID, !started.FallbackFullContext, timing)
 		} else if result.HasStreamHandoff {
-			recovered = recoverHandoffTextFromConversation(ctx, client, result.ConversationID, timing)
+			recovered = recoverHandoffTextFromConversationWithNotFoundMode(ctx, client, result.ConversationID, !started.FallbackFullContext, timing)
 		} else {
 			recovered = recoverChatCompletionTextFromConversation(ctx, client, result.ConversationID, timing)
 		}
@@ -2381,28 +2385,66 @@ func recoverChatCompletionTextFromConversation(ctx context.Context, client *Clie
 }
 
 func recoverDeepResearchTextFromConversation(ctx context.Context, client *Client, conversationID string, timings ...*service.ChatGPTWebTiming) string {
-	return recoverChatCompletionTextFromConversationWithWait(ctx, client, conversationID, chatGPTWebDeepResearchRecoverMaxWait, chatGPTWebDeepResearchRecoverInterval, timings...)
+	return recoverDeepResearchTextFromConversationWithNotFoundMode(ctx, client, conversationID, true, timings...)
+}
+
+func recoverDeepResearchTextFromConversationWithNotFoundMode(ctx context.Context, client *Client, conversationID string, failFastNotFound bool, timings ...*service.ChatGPTWebTiming) string {
+	return recoverChatCompletionTextFromConversationWithWaitOptions(ctx, client, conversationID, chatGPTWebDeepResearchRecoverMaxWait, chatGPTWebDeepResearchRecoverInterval, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: failFastNotFound,
+		TimingPrefix:     chatGPTWebDefaultTextRecoveryTimingPrefix,
+	}, timings...)
 }
 
 func recoverHandoffTextFromConversation(ctx context.Context, client *Client, conversationID string, timings ...*service.ChatGPTWebTiming) string {
-	return recoverChatCompletionTextFromConversationWithWait(ctx, client, conversationID, chatGPTWebHandoffRecoverMaxWait, chatGPTWebHandoffRecoverInterval, timings...)
+	return recoverHandoffTextFromConversationWithNotFoundMode(ctx, client, conversationID, true, timings...)
+}
+
+func recoverHandoffTextFromConversationWithNotFoundMode(ctx context.Context, client *Client, conversationID string, failFastNotFound bool, timings ...*service.ChatGPTWebTiming) string {
+	return recoverChatCompletionTextFromConversationWithWaitOptions(ctx, client, conversationID, chatGPTWebHandoffRecoverMaxWait, chatGPTWebHandoffRecoverInterval, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: failFastNotFound,
+		TimingPrefix:     chatGPTWebDefaultTextRecoveryTimingPrefix,
+	}, timings...)
+}
+
+func recoverRetryHandoffTextFromConversation(ctx context.Context, client *Client, conversationID string, timings ...*service.ChatGPTWebTiming) string {
+	return recoverChatCompletionTextFromConversationWithWaitOptions(ctx, client, conversationID, chatGPTWebHandoffRecoverMaxWait, chatGPTWebHandoffRecoverInterval, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: false,
+		TimingPrefix:     "session_route_retry",
+	}, timings...)
+}
+
+func recoverRetryDeepResearchTextFromConversation(ctx context.Context, client *Client, conversationID string, timings ...*service.ChatGPTWebTiming) string {
+	return recoverChatCompletionTextFromConversationWithWaitOptions(ctx, client, conversationID, chatGPTWebDeepResearchRecoverMaxWait, chatGPTWebDeepResearchRecoverInterval, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: false,
+		TimingPrefix:     "session_route_retry",
+	}, timings...)
 }
 
 func recoverChatCompletionTextFromConversationWithWait(ctx context.Context, client *Client, conversationID string, maxWait, interval time.Duration, timings ...*service.ChatGPTWebTiming) string {
+	return recoverChatCompletionTextFromConversationWithWaitOptions(ctx, client, conversationID, maxWait, interval, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: true,
+		TimingPrefix:     chatGPTWebDefaultTextRecoveryTimingPrefix,
+	}, timings...)
+}
+
+type chatCompletionTextRecoveryOptions struct {
+	FailFastNotFound bool
+	TimingPrefix     string
+}
+
+const chatGPTWebDefaultTextRecoveryTimingPrefix = "chat_text"
+
+func recoverChatCompletionTextFromConversationWithWaitOptions(ctx context.Context, client *Client, conversationID string, maxWait, interval time.Duration, opts chatCompletionTextRecoveryOptions, timings ...*service.ChatGPTWebTiming) string {
 	timing := firstChatGPTWebTiming(timings...)
 	conversationID = strings.TrimSpace(conversationID)
 	if client == nil || conversationID == "" {
 		return ""
 	}
-	if timing != nil {
-		timing.Set("chat_text_mapping_conversation_hash", chatGPTWebShortHash(conversationID))
-	}
-	return recoverChatCompletionTextWithFetcher(ctx, func(fetchCtx context.Context) (string, error) {
+	setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_conversation_hash", chatGPTWebShortHash(conversationID))
+	return recoverChatCompletionTextWithFetcherOptions(ctx, func(fetchCtx context.Context) (string, error) {
 		recoverStart := time.Now()
 		mapping, err := client.GetConversationMapping(fetchCtx, conversationID)
-		if timing != nil {
-			timing.ObserveSince("chat_text_mapping_ms", recoverStart)
-		}
+		observeChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_ms", recoverStart)
 		if err != nil {
 			return "", err
 		}
@@ -2416,12 +2458,19 @@ func recoverChatCompletionTextFromConversationWithWait(ctx context.Context, clie
 			return chatGPTWebDeepResearchEmbeddedUIMessage, nil
 		}
 		return "", nil
-	}, maxWait, interval, timing)
+	}, maxWait, interval, timing, opts)
 }
 
 type chatCompletionTextFetcher func(context.Context) (string, error)
 
 func recoverChatCompletionTextWithFetcher(ctx context.Context, fetch chatCompletionTextFetcher, maxWait, interval time.Duration, timing *service.ChatGPTWebTiming) string {
+	return recoverChatCompletionTextWithFetcherOptions(ctx, fetch, maxWait, interval, timing, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: true,
+		TimingPrefix:     chatGPTWebDefaultTextRecoveryTimingPrefix,
+	})
+}
+
+func recoverChatCompletionTextWithFetcherOptions(ctx context.Context, fetch chatCompletionTextFetcher, maxWait, interval time.Duration, timing *service.ChatGPTWebTiming, opts chatCompletionTextRecoveryOptions) string {
 	if fetch == nil {
 		return ""
 	}
@@ -2442,36 +2491,31 @@ func recoverChatCompletionTextWithFetcher(ctx context.Context, fetch chatComplet
 	for {
 		attempts++
 		text, err := fetch(recoverCtx)
-		if timing != nil {
-			timing.Set("chat_text_mapping_attempts", attempts)
-		}
+		setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_attempts", attempts)
 		if err != nil {
-			if timing != nil {
-				timing.Set("chat_text_mapping_error", common.MaskSensitiveInfo(err.Error()))
-			}
-			// Permanent 404 — conversation was deleted/expired upstream.
-			// Fail fast instead of retrying until context deadline.
+			setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_error", common.MaskSensitiveInfo(err.Error()))
+			// A 404 is permanent for old cached conversations, but newly-created
+			// ChatGPT Web handoff conversations can be briefly unreadable from the
+			// mapping endpoint. Callers that know they are recovering a fresh
+			// fallback conversation can disable fail-fast and let the bounded
+			// polling window handle the transient 404.
 			var upstreamErr *UpstreamError
 			if errors.As(err, &upstreamErr) && upstreamErr.IsNotFound() {
-				if timing != nil {
-					timing.Set("chat_text_mapping_recovered", false)
-					timing.Set("chat_text_mapping_not_found", true)
-					timing.ObserveSince("chat_text_recovery_ms", start)
+				setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_not_found", true)
+				if opts.FailFastNotFound || maxWait <= 0 {
+					setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_recovered", false)
+					observeChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "recovery_ms", start)
+					return ""
 				}
-				return ""
 			}
 		} else if strings.TrimSpace(text) != "" {
-			if timing != nil {
-				timing.Set("chat_text_mapping_recovered", true)
-				timing.ObserveSince("chat_text_recovery_ms", start)
-			}
+			setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_recovered", true)
+			observeChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "recovery_ms", start)
 			return text
 		}
 		if maxWait <= 0 {
-			if timing != nil {
-				timing.Set("chat_text_mapping_recovered", false)
-				timing.ObserveSince("chat_text_recovery_ms", start)
-			}
+			setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_recovered", false)
+			observeChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "recovery_ms", start)
 			return ""
 		}
 		timer := time.NewTimer(interval)
@@ -2480,16 +2524,36 @@ func recoverChatCompletionTextWithFetcher(ctx context.Context, fetch chatComplet
 			if !timer.Stop() {
 				<-timer.C
 			}
-			if timing != nil {
-				timing.Set("chat_text_mapping_recovered", false)
-				timing.Set("chat_text_mapping_timeout", true)
-				timing.Set("chat_text_mapping_context_error", recoverCtx.Err().Error())
-				timing.ObserveSince("chat_text_recovery_ms", start)
-			}
+			setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_recovered", false)
+			setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_timeout", true)
+			setChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "mapping_context_error", recoverCtx.Err().Error())
+			observeChatGPTWebRecoveryTiming(timing, opts.TimingPrefix, "recovery_ms", start)
 			return ""
 		case <-timer.C:
 		}
 	}
+}
+
+func setChatGPTWebRecoveryTiming(timing *service.ChatGPTWebTiming, prefix, suffix string, value any) {
+	if timing == nil || suffix == "" {
+		return
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = chatGPTWebDefaultTextRecoveryTimingPrefix
+	}
+	timing.Set(prefix+"_"+suffix, value)
+}
+
+func observeChatGPTWebRecoveryTiming(timing *service.ChatGPTWebTiming, prefix, suffix string, start time.Time) {
+	if timing == nil || suffix == "" {
+		return
+	}
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" {
+		prefix = chatGPTWebDefaultTextRecoveryTimingPrefix
+	}
+	timing.ObserveSince(prefix+"_"+suffix, start)
 }
 
 func collectChatGeneratedImageMarkdown(ctx context.Context, client *Client, conversationID string, baseline imageBaseline, allowPoll bool, actualImageGeneration bool, info *relaycommon.RelayInfo, prompt, modelName, publicBaseURL string, timings ...*service.ChatGPTWebTiming) (string, error) {
@@ -3327,7 +3391,8 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 		convID = continuation.ConvID
 	}
 	actualPrompt := prompt
-	if !continuation.Available && strings.TrimSpace(req.ConversationID) != "" && strings.TrimSpace(req.FallbackPrompt) != "" {
+	fallbackFullContext := !continuation.Available && strings.TrimSpace(req.ConversationID) != "" && strings.TrimSpace(req.FallbackPrompt) != ""
+	if fallbackFullContext {
 		actualPrompt = strings.TrimSpace(req.FallbackPrompt)
 	}
 	if timing != nil && strings.TrimSpace(req.ConversationID) != "" && strings.TrimSpace(req.FallbackPrompt) != "" {
@@ -3401,7 +3466,7 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 					timing.Set("conversation_continuation", false)
 					timing.Set("session_route_fallback_full_context", true)
 				}
-				return &chatStreamStart{Stream: stream, Baseline: imageBaseline{}, Prompt: fallbackPrompt}, nil
+				return &chatStreamStart{Stream: stream, Baseline: imageBaseline{}, Prompt: fallbackPrompt, FallbackFullContext: true}, nil
 			}
 			if timing != nil {
 				timing.Set("session_route_retry_success", false)
@@ -3409,7 +3474,7 @@ func startChatStream(ctx context.Context, client *Client, req chatRequest, promp
 		}
 		return nil, err
 	}
-	return &chatStreamStart{Stream: stream, Baseline: continuation.Baseline, Prompt: actualPrompt}, nil
+	return &chatStreamStart{Stream: stream, Baseline: continuation.Baseline, Prompt: actualPrompt, FallbackFullContext: fallbackFullContext}, nil
 }
 
 func shouldRetryChatStreamWithFullContext(err error, continuationAvailable bool, req chatRequest) bool {
@@ -3487,13 +3552,13 @@ func chatGPTWebModelUsesThinking(model string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(model)), "thinking")
 }
 
-func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, route chatGPTWebSessionRoute, timings ...*service.ChatGPTWebTiming) *http.Response {
+func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, fallbackFullContext bool, info *relaycommon.RelayInfo, publicBaseURL string, route chatGPTWebSessionRoute, timings ...*service.ChatGPTWebTiming) *http.Response {
 	timing := firstChatGPTWebTiming(timings...)
 	pr, pw := io.Pipe()
 	if isResponsesRelay(info) {
-		go streamResponsesCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, route, pw, timing)
+		go streamResponsesCompletion(ctx, client, stream, req, prompt, baseline, fallbackFullContext, info, publicBaseURL, route, pw, timing)
 	} else {
-		go streamChatCompletion(ctx, client, stream, req, prompt, baseline, info, publicBaseURL, route, pw, timing)
+		go streamChatCompletion(ctx, client, stream, req, prompt, baseline, fallbackFullContext, info, publicBaseURL, route, pw, timing)
 	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
@@ -3502,7 +3567,7 @@ func buildStreamingChatResponse(ctx context.Context, client *Client, stream <-ch
 	}
 }
 
-func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, route chatGPTWebSessionRoute, pw *io.PipeWriter, timings ...*service.ChatGPTWebTiming) {
+func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, fallbackFullContext bool, info *relaycommon.RelayInfo, publicBaseURL string, route chatGPTWebSessionRoute, pw *io.PipeWriter, timings ...*service.ChatGPTWebTiming) {
 	timing := firstChatGPTWebTiming(timings...)
 	defer pw.Close()
 	streamStart := time.Now()
@@ -3572,15 +3637,15 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	if strings.TrimSpace(state.Content) == "" && len(sseImageRefs) == 0 {
 		recovered := ""
 		if req.DeepResearch && state.HasDeepResearchInternalEvent {
-			recovered = recoverDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
+			recovered = recoverDeepResearchTextFromConversationWithNotFoundMode(ctx, client, state.ConversationID, !fallbackFullContext, timing)
 		} else if state.HasStreamHandoff {
-			recovered = recoverHandoffTextFromConversation(ctx, client, state.ConversationID, timing)
+			recovered = recoverHandoffTextFromConversationWithNotFoundMode(ctx, client, state.ConversationID, !fallbackFullContext, timing)
 		} else {
 			recovered = recoverChatCompletionTextFromConversation(ctx, client, state.ConversationID, timing)
 		}
 		if recovered != "" {
 			state.Content = recovered
-		} else if route.Reused && strings.TrimSpace(state.Content) == "" {
+		} else if route.Reused && !fallbackFullContext && strings.TrimSpace(state.Content) == "" {
 			// Stale session route — upstream conversation no longer exists.
 			// Clear cache so the next request creates a fresh conversation.
 			clearChatGPTWebSessionRoute(route.Key)
@@ -3673,7 +3738,7 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 	}
 }
 
-func streamResponsesCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, info *relaycommon.RelayInfo, publicBaseURL string, route chatGPTWebSessionRoute, pw *io.PipeWriter, timings ...*service.ChatGPTWebTiming) {
+func streamResponsesCompletion(ctx context.Context, client *Client, stream <-chan SSEEvent, req chatRequest, prompt string, baseline imageBaseline, fallbackFullContext bool, info *relaycommon.RelayInfo, publicBaseURL string, route chatGPTWebSessionRoute, pw *io.PipeWriter, timings ...*service.ChatGPTWebTiming) {
 	timing := firstChatGPTWebTiming(timings...)
 	defer pw.Close()
 	streamStart := time.Now()
@@ -3755,15 +3820,15 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 	if strings.TrimSpace(state.Content) == "" && len(sseImageRefs) == 0 {
 		recovered := ""
 		if req.DeepResearch && state.HasDeepResearchInternalEvent {
-			recovered = recoverDeepResearchTextFromConversation(ctx, client, state.ConversationID, timing)
+			recovered = recoverDeepResearchTextFromConversationWithNotFoundMode(ctx, client, state.ConversationID, !fallbackFullContext, timing)
 		} else if state.HasStreamHandoff {
-			recovered = recoverHandoffTextFromConversation(ctx, client, state.ConversationID, timing)
+			recovered = recoverHandoffTextFromConversationWithNotFoundMode(ctx, client, state.ConversationID, !fallbackFullContext, timing)
 		} else {
 			recovered = recoverChatCompletionTextFromConversation(ctx, client, state.ConversationID, timing)
 		}
 		if recovered != "" {
 			state.Content = recovered
-		} else if route.Reused && strings.TrimSpace(state.Content) == "" {
+		} else if route.Reused && !fallbackFullContext && strings.TrimSpace(state.Content) == "" {
 			// Stale session route — upstream conversation no longer exists.
 			// Clear cache so the next request creates a fresh conversation.
 			clearChatGPTWebSessionRoute(route.Key)

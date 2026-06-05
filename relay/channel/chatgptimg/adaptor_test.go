@@ -1277,7 +1277,7 @@ func TestStreamResponsesCompletionEmitsResponsesEvents(t *testing.T) {
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamResponsesCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamResponsesCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1315,7 +1315,7 @@ func TestStreamResponsesCompletionConvertsToolJSONToFunctionCall(t *testing.T) {
 	}
 
 	pr, pw := io.Pipe()
-	go streamResponsesCompletion(context.Background(), nil, stream, req, "read file", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamResponsesCompletion(context.Background(), nil, stream, req, "read file", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1366,7 +1366,7 @@ func TestStreamChatCompletionUsesSSEImageRefsAsConversationPollHint(t *testing.T
 	client := &Client{opts: ClientOptions{BaseURL: server.URL}, hc: server.Client()}
 	pr, pw := io.Pipe()
 	req := chatRequest{Model: "gpt-5.5-pro", Messages: []dto.Message{{Role: "user", Content: "生成一张小猫图片"}}}
-	go streamChatCompletion(context.Background(), client, stream, req, "User: 生成一张小猫图片", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamChatCompletion(context.Background(), client, stream, req, "User: 生成一张小猫图片", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1391,7 +1391,7 @@ func TestStreamChatCompletionUsesRealConversationIDOnly(t *testing.T) {
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1414,7 +1414,7 @@ func TestStreamChatCompletionSuppressesDeepResearchInternalPayload(t *testing.T)
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test", DeepResearch: true}, "做深度研究", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test", DeepResearch: true}, "做深度研究", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1437,7 +1437,7 @@ func TestStreamChatCompletionSuppressesDeepResearchInternalSnapshotPayload(t *te
 	close(stream)
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test", DeepResearch: true}, "做深度研究", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamChatCompletion(context.Background(), nil, stream, chatRequest{Model: "claude-test", DeepResearch: true}, "做深度研究", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1490,6 +1490,77 @@ func TestRecoverChatCompletionTextWithFetcherRetriesTransientMappingError(t *tes
 	}
 	if attempts != 2 {
 		t.Fatalf("expected 2 polling attempts, got %d", attempts)
+	}
+}
+
+func TestRecoverChatCompletionTextWithFetcherFailsFastUpstreamNotFoundByDefault(t *testing.T) {
+	attempts := 0
+	timing := service.NewChatGPTWebTiming()
+	got := recoverChatCompletionTextWithFetcher(context.Background(), func(context.Context) (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "", &UpstreamError{Status: http.StatusNotFound, Message: "conversation get failed"}
+		}
+		return "should not be reached", nil
+	}, time.Second, time.Millisecond, timing)
+
+	if got != "" {
+		t.Fatalf("expected no text for fail-fast not found, got %q", got)
+	}
+	if attempts != 1 {
+		t.Fatalf("expected fail-fast after 1 attempt, got %d", attempts)
+	}
+	snapshot := timing.Snapshot()
+	if snapshot["chat_text_mapping_not_found"] != true || snapshot["chat_text_mapping_recovered"] != false {
+		t.Fatalf("expected not-found fail-fast timing, got %#v", snapshot)
+	}
+}
+
+func TestRecoverFreshHandoffTextRetriesUpstreamNotFound(t *testing.T) {
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/conversation/conv-fresh-handoff" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		attempts++
+		if attempts < 3 {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"current_node": "assistant-1",
+			"mapping": {
+				"assistant-1": {
+					"message": {
+						"author": {"role":"assistant"},
+						"content": {"parts": ["fresh handoff recovered text"]}
+					}
+				}
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := &Client{
+		opts: ClientOptions{BaseURL: server.URL, AuthToken: "test-token"},
+		hc:   server.Client(),
+	}
+	timing := service.NewChatGPTWebTiming()
+	got := recoverChatCompletionTextFromConversationWithWaitOptions(context.Background(), client, "conv-fresh-handoff", time.Second, time.Millisecond, chatCompletionTextRecoveryOptions{
+		FailFastNotFound: false,
+		TimingPrefix:     "session_route_retry",
+	}, timing)
+
+	if got != "fresh handoff recovered text" {
+		t.Fatalf("expected fresh handoff text after transient 404, got %q", got)
+	}
+	if attempts != 3 {
+		t.Fatalf("expected 3 mapping attempts, got %d", attempts)
+	}
+	snapshot := timing.Snapshot()
+	if snapshot["session_route_retry_mapping_not_found"] != true || snapshot["session_route_retry_mapping_recovered"] != true {
+		t.Fatalf("expected retry mapping timing, got %#v", snapshot)
 	}
 }
 
@@ -1559,7 +1630,7 @@ func TestStreamChatCompletionRecoversTextAfterStreamHandoff(t *testing.T) {
 		hc:   server.Client(),
 	}
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), client, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamChatCompletion(context.Background(), client, stream, chatRequest{Model: "claude-test"}, "hello", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {
@@ -1585,7 +1656,7 @@ func TestStreamChatCompletionConvertsToolJSONToToolCalls(t *testing.T) {
 	}
 
 	pr, pw := io.Pipe()
-	go streamChatCompletion(context.Background(), nil, stream, req, "read file", imageBaseline{}, nil, "", chatGPTWebSessionRoute{}, pw)
+	go streamChatCompletion(context.Background(), nil, stream, req, "read file", imageBaseline{}, false, nil, "", chatGPTWebSessionRoute{}, pw)
 
 	out, err := io.ReadAll(pr)
 	if err != nil {

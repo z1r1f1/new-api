@@ -2127,6 +2127,19 @@ case "response.output_item.done":
   `[DONE]` before text deltas are delivered. Treat this as an asynchronous
   handoff, poll conversation mapping briefly, and stream the recovered assistant
   text when it appears.
+- If a reused session route cannot load its cached `conversation_id`,
+  `startChatStream` sends the fallback full prompt as a fresh conversation.
+  Mapping `404` for that fresh handoff conversation is transient and must be
+  polled within the bounded handoff window instead of failing fast.
+- Mapping `404` for an old cached conversation that was actually reused remains
+  stale-route evidence: clear the session route and retry once with the fallback
+  full prompt. Do not run this duplicate retry when the current stream already
+  used fallback full context and created a fresh conversation.
+- Retry/fresh recovery timing must stay non-sensitive and distinguish original
+  mapping attempts from retry attempts with fields such as
+  `session_route_retry_conversation_hash`,
+  `session_route_retry_mapping_attempts`, and
+  `session_route_retry_mapping_recovered`.
 
 #### 4. Validation & Error Matrix
 
@@ -2151,6 +2164,11 @@ case "response.output_item.done":
   return the report message text.
 - `stream_handoff` with no text deltas -> wait briefly for conversation mapping
   and return the recovered assistant text instead of an empty completion.
+- Fresh fallback handoff mapping returns `404` for several polls and later
+  contains assistant text -> keep polling and return that text.
+- Old cached conversation mapping returns `404` before fallback full context was
+  used -> fail fast, clear the cached route, and retry once with the fallback
+  prompt.
 
 #### 5. Good/Base/Bad Cases
 
@@ -2172,6 +2190,11 @@ case "response.output_item.done":
   content line suppression.
 - `relay/channel/chatgptimg`: regression test that ordinary explanatory text
   containing the connector marker is preserved.
+- `relay/channel/chatgptimg`: regression test proving default old-conversation
+  recovery still fail-fasts on upstream `404`.
+- `relay/channel/chatgptimg`: regression test proving fresh handoff recovery
+  retries upstream `404` and recovers assistant text once mapping becomes
+  readable.
 
 #### 7. Wrong vs Correct
 
