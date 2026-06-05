@@ -2381,6 +2381,17 @@ func recoverChatCompletionTextWithFetcher(ctx context.Context, fetch chatComplet
 			if timing != nil {
 				timing.Set("chat_text_mapping_error", common.MaskSensitiveInfo(err.Error()))
 			}
+			// Permanent 404 — conversation was deleted/expired upstream.
+			// Fail fast instead of retrying until context deadline.
+			var upstreamErr *UpstreamError
+			if errors.As(err, &upstreamErr) && upstreamErr.IsNotFound() {
+				if timing != nil {
+					timing.Set("chat_text_mapping_recovered", false)
+					timing.Set("chat_text_mapping_not_found", true)
+					timing.ObserveSince("chat_text_recovery_ms", start)
+				}
+				return ""
+			}
 		} else if strings.TrimSpace(text) != "" {
 			if timing != nil {
 				timing.Set("chat_text_mapping_recovered", true)
@@ -3501,6 +3512,10 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 		}
 		if recovered != "" {
 			state.Content = recovered
+		} else if route.Reused && strings.TrimSpace(state.Content) == "" {
+			// Stale session route — upstream conversation no longer exists.
+			// Clear cache so the next request creates a fresh conversation.
+			clearChatGPTWebSessionRoute(route.Key)
 		}
 	}
 	if strings.TrimSpace(state.Content) == "" && req.DeepResearch && state.HasDeepResearchInternalEvent {
@@ -3672,6 +3687,10 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 		}
 		if recovered != "" {
 			state.Content = recovered
+		} else if route.Reused && strings.TrimSpace(state.Content) == "" {
+			// Stale session route — upstream conversation no longer exists.
+			// Clear cache so the next request creates a fresh conversation.
+			clearChatGPTWebSessionRoute(route.Key)
 		}
 	}
 	if strings.TrimSpace(state.Content) == "" && req.DeepResearch && state.HasDeepResearchInternalEvent {

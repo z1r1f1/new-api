@@ -360,6 +360,9 @@ func (e *UpstreamError) IsRateLimited() bool {
 func (e *UpstreamError) IsUnauthorized() bool {
 	return e != nil && (e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden)
 }
+func (e *UpstreamError) IsNotFound() bool {
+	return e != nil && e.Status == http.StatusNotFound
+}
 
 type ImageQuotaInfo struct {
 	DefaultModelSlug            string   `json:"default_model_slug,omitempty"`
