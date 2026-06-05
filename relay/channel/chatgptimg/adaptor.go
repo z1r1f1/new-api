@@ -1005,6 +1005,57 @@ func applyChatGPTWebImageSessionRoute(req *generationRequest, route *chatGPTWebS
 	}
 }
 
+// retryChatStreamStaleRoute restarts the chat with the fallback prompt (no
+// conversation_id) when the cached upstream conversation was deleted.
+// It writes output events directly to the existing pw and returns the
+// recovered content text.
+func retryChatStreamStaleRoute(ctx context.Context, client *Client, req chatRequest, pw *io.PipeWriter, model string, timing *service.ChatGPTWebTiming) string {
+	fallbackPrompt := strings.TrimSpace(req.FallbackPrompt)
+	if fallbackPrompt == "" || client == nil {
+		if timing != nil {
+			timing.Set("session_route_retry_no_fallback", true)
+		}
+		return ""
+	}
+	if timing != nil {
+		timing.Set("session_route_retry_fallback", true)
+	}
+	retryReq := req
+	retryReq.ConversationID = ""
+	retryReq.sessionRouteKey = ""
+	retryCtx, retryCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer retryCancel()
+	retryStarted, err := startChatStream(retryCtx, client, retryReq, fallbackPrompt, nil, timing)
+	if err != nil {
+		if timing != nil {
+			timing.Set("session_route_retry_error", common.MaskSensitiveInfo(err.Error()))
+		}
+		return ""
+	}
+	outputText := ""
+	state := &ChatSSEState{}
+	for ev := range retryStarted.Stream {
+		delta, done, collectErr := CollectChatSSEEvent(ev, state)
+		if collectErr != nil {
+			if timing != nil {
+				timing.Set("session_route_retry_stream_error", common.MaskSensitiveInfo(collectErr.Error()))
+			}
+			break
+		}
+		if delta != "" {
+			outputText += delta
+			writeResponsesTextDelta(pw, delta)
+		}
+		if done {
+			break
+		}
+	}
+	if timing != nil {
+		timing.Set("session_route_retry_output_chars", len(outputText))
+	}
+	return outputText
+}
+
 func recordChatGPTWebSessionRoute(route chatGPTWebSessionRoute, conversationID string, timings ...*service.ChatGPTWebTiming) {
 	timing := firstChatGPTWebTiming(timings...)
 	conversationID = normalizeChatGPTWebConversationID(conversationID)
@@ -3516,6 +3567,13 @@ func streamChatCompletion(ctx context.Context, client *Client, stream <-chan SSE
 			// Stale session route — upstream conversation no longer exists.
 			// Clear cache so the next request creates a fresh conversation.
 			clearChatGPTWebSessionRoute(route.Key)
+			// Retry with fallback full prompt on the current request.
+			if strings.TrimSpace(req.FallbackPrompt) != "" {
+				retryContent := retryChatStreamStaleRoute(ctx, client, req, pw, model, timing)
+				if retryContent != "" {
+					state.Content = retryContent
+				}
+			}
 		}
 	}
 	if strings.TrimSpace(state.Content) == "" && req.DeepResearch && state.HasDeepResearchInternalEvent {
@@ -3691,6 +3749,13 @@ func streamResponsesCompletion(ctx context.Context, client *Client, stream <-cha
 			// Stale session route — upstream conversation no longer exists.
 			// Clear cache so the next request creates a fresh conversation.
 			clearChatGPTWebSessionRoute(route.Key)
+			// Retry with fallback full prompt on the current request.
+			if strings.TrimSpace(req.FallbackPrompt) != "" {
+				retryContent := retryChatStreamStaleRoute(ctx, client, req, pw, model, timing)
+				if retryContent != "" {
+					state.Content = retryContent
+				}
+			}
 		}
 	}
 	if strings.TrimSpace(state.Content) == "" && req.DeepResearch && state.HasDeepResearchInternalEvent {
