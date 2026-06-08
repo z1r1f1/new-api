@@ -4885,6 +4885,11 @@
     "Are you sure you want to {{action}} this user?": "Вы уверены, что хотите {{action}} этого пользователя?",
     "User disabled": "Пользователь отключен",
     "User enabled": "Пользователь включен",
-    "Request Headers": "Заголовки запроса"
+    "Request Headers": "Заголовки запроса",
+    "Credential files": "Файлы учетных данных",
+    "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.": "Выберите JSON- или ZIP-файлы учетных данных, экспортированные из инструментов учетных данных. Настройки страницы выше будут применены к каждому импортированному каналу.",
+    "Selected {{count}} credential file(s)": "Выбрано файлов учетных данных: {{count}}",
+    "Parsed and created {{count}} channel(s)": "Обработано и создано каналов: {{count}}",
+    "Only JSON and ZIP credential files are supported": "Поддерживаются только JSON- и ZIP-файлы учетных данных"
   }
 }

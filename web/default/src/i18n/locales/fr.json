@@ -4885,6 +4885,11 @@
     "Are you sure you want to {{action}} this user?": "Voulez-vous vraiment {{action}} cet utilisateur ?",
     "User disabled": "Utilisateur désactivé",
     "User enabled": "Utilisateur activé",
-    "Request Headers": "En-têtes de requête"
+    "Request Headers": "En-têtes de requête",
+    "Credential files": "Fichiers d’identifiants",
+    "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.": "Choisissez des fichiers d’identifiants JSON ou ZIP exportés depuis les outils d’identifiants. Les paramètres ci-dessus seront appliqués à chaque canal importé.",
+    "Selected {{count}} credential file(s)": "{{count}} fichier(s) d’identifiants sélectionné(s)",
+    "Parsed and created {{count}} channel(s)": "{{count}} canal(aux) analysé(s) et créé(s)",
+    "Only JSON and ZIP credential files are supported": "Seuls les fichiers d’identifiants JSON et ZIP sont pris en charge"
   }
 }

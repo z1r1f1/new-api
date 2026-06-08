@@ -4885,6 +4885,11 @@
     "Are you sure you want to {{action}} this user?": "Are you sure you want to {{action}} this user?",
     "User disabled": "User disabled",
     "User enabled": "User enabled",
-    "Request Headers": "Request Headers"
+    "Request Headers": "Request Headers",
+    "Credential files": "Credential files",
+    "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.": "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.",
+    "Selected {{count}} credential file(s)": "Selected {{count}} credential file(s)",
+    "Parsed and created {{count}} channel(s)": "Parsed and created {{count}} channel(s)",
+    "Only JSON and ZIP credential files are supported": "Only JSON and ZIP credential files are supported"
   }
 }

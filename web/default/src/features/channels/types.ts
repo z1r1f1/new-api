@@ -179,6 +179,14 @@ export interface CopyChannelResponse {
   }
 }
 
+export interface ImportChannelsResponse {
+  success: boolean
+  message?: string
+  data?: {
+    count: number
+  }
+}
+
 // ============================================================================
 // Multi-Key Management Types
 // ============================================================================

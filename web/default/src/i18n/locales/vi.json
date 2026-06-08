@@ -4885,6 +4885,11 @@
     "Are you sure you want to {{action}} this user?": "Bạn có chắc muốn {{action}} người dùng này không?",
     "User disabled": "Đã tắt người dùng",
     "User enabled": "Đã bật người dùng",
-    "Request Headers": "Header yêu cầu"
+    "Request Headers": "Header yêu cầu",
+    "Credential files": "Tệp thông tin xác thực",
+    "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.": "Chọn các tệp thông tin xác thực JSON hoặc ZIP được xuất từ công cụ thông tin xác thực. Các thiết lập phía trên sẽ được áp dụng cho mọi kênh được nhập.",
+    "Selected {{count}} credential file(s)": "Đã chọn {{count}} tệp thông tin xác thực",
+    "Parsed and created {{count}} channel(s)": "Đã phân tích và tạo {{count}} kênh",
+    "Only JSON and ZIP credential files are supported": "Chỉ hỗ trợ tệp thông tin xác thực JSON và ZIP"
   }
 }

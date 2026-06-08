@@ -1,10 +1,16 @@
 package controller
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -687,6 +693,405 @@ type AddChannelRequest struct {
 	MultiKeyMode              constant.MultiKeyMode `json:"multi_key_mode"`
 	BatchAddSetKeyPrefix2Name bool                  `json:"batch_add_set_key_prefix_2_name"`
 	Channel                   *model.Channel        `json:"channel"`
+}
+
+const (
+	maxChannelCredentialImportFiles                = 1000
+	maxChannelCredentialUploadBytes          int64 = 64 << 20
+	maxChannelCredentialFileBytes            int64 = 8 << 20
+	maxChannelCredentialZipUncompressedBytes       = 64 << 20
+)
+
+type channelCredentialImport struct {
+	Type   int
+	Name   string
+	Key    string
+	Source string
+}
+
+func normalizeChannelTypeName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	replacer := strings.NewReplacer("-", "", "_", "", " ", "", ".", "")
+	return replacer.Replace(name)
+}
+
+func parseChannelCredentialType(value any) (int, error) {
+	switch v := value.(type) {
+	case nil:
+		return constant.ChannelTypeCodex, nil
+	case int:
+		if v <= 0 {
+			return 0, fmt.Errorf("channel type must be positive")
+		}
+		return v, nil
+	case int64:
+		if v <= 0 {
+			return 0, fmt.Errorf("channel type must be positive")
+		}
+		return int(v), nil
+	case float64:
+		if v <= 0 || v != float64(int(v)) {
+			return 0, fmt.Errorf("channel type must be a positive integer")
+		}
+		return int(v), nil
+	case string:
+		trimmed := strings.TrimSpace(v)
+		if trimmed == "" {
+			return constant.ChannelTypeCodex, nil
+		}
+		if parsed, err := strconv.Atoi(trimmed); err == nil {
+			if parsed <= 0 {
+				return 0, fmt.Errorf("channel type must be positive")
+			}
+			return parsed, nil
+		}
+		normalized := normalizeChannelTypeName(trimmed)
+		for channelType, name := range constant.ChannelTypeNames {
+			if normalizeChannelTypeName(name) == normalized {
+				return channelType, nil
+			}
+		}
+		switch normalized {
+		case "chatgpt", "chatgptweb", "chatgptimage", "chatgptimages", "chatgptimg":
+			return constant.ChannelTypeChatGPTImage, nil
+		case "codex":
+			return constant.ChannelTypeCodex, nil
+		default:
+			return 0, fmt.Errorf("unsupported channel type %q", trimmed)
+		}
+	default:
+		return 0, fmt.Errorf("unsupported channel type value %T", value)
+	}
+}
+
+func credentialChannelType(raw map[string]any) (int, error) {
+	if raw == nil {
+		return 0, fmt.Errorf("credential JSON must be an object")
+	}
+	if value, ok := raw["channel_type"]; ok {
+		return parseChannelCredentialType(value)
+	}
+	if value, ok := raw["type"]; ok {
+		return parseChannelCredentialType(value)
+	}
+	return constant.ChannelTypeCodex, nil
+}
+
+func credentialAccountName(raw map[string]any, channelType int) string {
+	for _, field := range []string{"email", "account_name", "accountName", "username", "name", "account", "account_id"} {
+		if value, ok := raw[field]; ok && value != nil {
+			name := strings.TrimSpace(fmt.Sprintf("%v", value))
+			if name != "" {
+				return name
+			}
+		}
+	}
+	channelTypeName := strings.ToLower(constant.GetChannelTypeName(channelType))
+	if channelTypeName == "" || channelTypeName == "unknown" {
+		channelTypeName = "channel"
+	}
+	return fmt.Sprintf("%s-%s", channelTypeName, strings.ToLower(common.GetRandomString(6)))
+}
+
+func buildChannelCredentialImport(source string, raw map[string]any) (channelCredentialImport, error) {
+	channelType, err := credentialChannelType(raw)
+	if err != nil {
+		return channelCredentialImport{}, err
+	}
+	keyBytes, err := common.Marshal(raw)
+	if err != nil {
+		return channelCredentialImport{}, fmt.Errorf("credential JSON encoding failed: %w", err)
+	}
+	return channelCredentialImport{
+		Type:   channelType,
+		Name:   credentialAccountName(raw, channelType),
+		Key:    string(keyBytes),
+		Source: source,
+	}, nil
+}
+
+func parseChannelCredentialJSONDocument(source string, data []byte) ([]channelCredentialImport, error) {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("%s is empty", source)
+	}
+
+	rawCredentials := make([]map[string]any, 0)
+	switch trimmed[0] {
+	case '{':
+		var raw map[string]any
+		if err := common.Unmarshal(trimmed, &raw); err != nil {
+			return nil, fmt.Errorf("%s must be valid JSON: %w", source, err)
+		}
+		rawCredentials = append(rawCredentials, raw)
+	case '[':
+		if err := common.Unmarshal(trimmed, &rawCredentials); err != nil {
+			return nil, fmt.Errorf("%s must be a JSON object array: %w", source, err)
+		}
+	default:
+		return nil, fmt.Errorf("%s must be a JSON object or object array", source)
+	}
+
+	credentials := make([]channelCredentialImport, 0, len(rawCredentials))
+	for index, raw := range rawCredentials {
+		if len(raw) == 0 {
+			return nil, fmt.Errorf("%s credential #%d is empty", source, index+1)
+		}
+		credential, err := buildChannelCredentialImport(source, raw)
+		if err != nil {
+			return nil, fmt.Errorf("%s credential #%d invalid: %w", source, index+1, err)
+		}
+		credentials = append(credentials, credential)
+	}
+	if len(credentials) == 0 {
+		return nil, fmt.Errorf("%s contains no credentials", source)
+	}
+	return credentials, nil
+}
+
+func readZipCredentialFile(file *zip.File) ([]byte, error) {
+	if file.UncompressedSize64 > uint64(maxChannelCredentialFileBytes) {
+		return nil, fmt.Errorf("%s exceeds the %d byte per-file limit", file.Name, maxChannelCredentialFileBytes)
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(io.LimitReader(reader, maxChannelCredentialFileBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxChannelCredentialFileBytes {
+		return nil, fmt.Errorf("%s exceeds the %d byte per-file limit", file.Name, maxChannelCredentialFileBytes)
+	}
+	return data, nil
+}
+
+func parseChannelCredentialZip(source string, data []byte) ([]channelCredentialImport, error) {
+	reader, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a valid zip file: %w", source, err)
+	}
+
+	totalUncompressed := uint64(0)
+	jsonFileCount := 0
+	credentials := make([]channelCredentialImport, 0)
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() || strings.ToLower(filepath.Ext(file.Name)) != ".json" {
+			continue
+		}
+		jsonFileCount++
+		if jsonFileCount > maxChannelCredentialImportFiles {
+			return nil, fmt.Errorf("%s contains more than %d JSON credential files", source, maxChannelCredentialImportFiles)
+		}
+		totalUncompressed += file.UncompressedSize64
+		if totalUncompressed > maxChannelCredentialZipUncompressedBytes {
+			return nil, fmt.Errorf("%s exceeds the %d byte uncompressed limit", source, maxChannelCredentialZipUncompressedBytes)
+		}
+		fileData, err := readZipCredentialFile(file)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", file.Name, err)
+		}
+		fileCredentials, err := parseChannelCredentialJSONDocument(file.Name, fileData)
+		if err != nil {
+			return nil, err
+		}
+		credentials = append(credentials, fileCredentials...)
+	}
+	if len(credentials) == 0 {
+		return nil, fmt.Errorf("%s contains no JSON credential files", source)
+	}
+	return credentials, nil
+}
+
+func readMultipartCredentialFile(fileHeader *multipart.FileHeader) ([]byte, error) {
+	maxBytes := maxChannelCredentialFileBytes
+	if strings.ToLower(filepath.Ext(fileHeader.Filename)) == ".zip" {
+		maxBytes = maxChannelCredentialUploadBytes
+	}
+	if fileHeader.Size > maxBytes {
+		return nil, fmt.Errorf("%s exceeds the %d byte per-file limit", fileHeader.Filename, maxBytes)
+	}
+	file, err := fileHeader.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds the %d byte per-file limit", fileHeader.Filename, maxBytes)
+	}
+	return data, nil
+}
+
+func parseChannelCredentialFile(fileHeader *multipart.FileHeader) ([]channelCredentialImport, error) {
+	fileData, err := readMultipartCredentialFile(fileHeader)
+	if err != nil {
+		return nil, err
+	}
+	switch strings.ToLower(filepath.Ext(fileHeader.Filename)) {
+	case ".json":
+		return parseChannelCredentialJSONDocument(fileHeader.Filename, fileData)
+	case ".zip":
+		return parseChannelCredentialZip(fileHeader.Filename, fileData)
+	default:
+		return nil, fmt.Errorf("%s must be a .json or .zip file", fileHeader.Filename)
+	}
+}
+
+func parseChannelCredentialMultipartFiles(fileHeaders []*multipart.FileHeader) ([]channelCredentialImport, error) {
+	if len(fileHeaders) == 0 {
+		return nil, errors.New("credential files are required")
+	}
+	if len(fileHeaders) > maxChannelCredentialImportFiles {
+		return nil, fmt.Errorf("cannot import more than %d credential files at once", maxChannelCredentialImportFiles)
+	}
+
+	credentials := make([]channelCredentialImport, 0, len(fileHeaders))
+	for _, fileHeader := range fileHeaders {
+		fileCredentials, err := parseChannelCredentialFile(fileHeader)
+		if err != nil {
+			return nil, err
+		}
+		credentials = append(credentials, fileCredentials...)
+	}
+	if len(credentials) == 0 {
+		return nil, errors.New("credential files contain no importable credentials")
+	}
+	return credentials, nil
+}
+
+func defaultImportedChannelName(channelType int) string {
+	channelTypeName := strings.ToLower(constant.GetChannelTypeName(channelType))
+	if channelTypeName == "" || channelTypeName == "unknown" {
+		channelTypeName = "channel"
+	}
+	return fmt.Sprintf("%s-%s", channelTypeName, strings.ToLower(common.GetRandomString(6)))
+}
+
+func buildChannelsFromCredentialImports(template *model.Channel, credentials []channelCredentialImport) ([]model.Channel, error) {
+	if template == nil {
+		return nil, errors.New("channel template is required")
+	}
+	if len(credentials) == 0 {
+		return nil, errors.New("credential files contain no importable credentials")
+	}
+
+	channels := make([]model.Channel, 0, len(credentials))
+	for index, credential := range credentials {
+		if strings.TrimSpace(credential.Key) == "" {
+			return nil, fmt.Errorf("credential #%d key is empty", index+1)
+		}
+
+		localChannel := *template
+		localChannel.Id = 0
+		localChannel.Type = credential.Type
+		if localChannel.Type == 0 {
+			localChannel.Type = constant.ChannelTypeCodex
+		}
+		localChannel.Key = strings.TrimSpace(credential.Key)
+		localChannel.Name = strings.TrimSpace(credential.Name)
+		localChannel.CreatedTime = common.GetTimestamp()
+		localChannel.ChannelInfo = model.ChannelInfo{}
+
+		if localChannel.Type == constant.ChannelTypeCodex {
+			normalized, err := normalizeCodexKey(localChannel.Key)
+			if err != nil {
+				return nil, fmt.Errorf("%s invalid: %w", credential.Source, err)
+			}
+			localChannel.Key = normalized
+			localChannel.Name = getCodexChannelName(localChannel.Key, localChannel.Name)
+		} else if localChannel.Type == constant.ChannelTypeChatGPTImage {
+			normalized, err := chatgptimg.NormalizeOAuthKey(localChannel.Key)
+			if err != nil {
+				return nil, fmt.Errorf("%s invalid: %w", credential.Source, err)
+			}
+			localChannel.Key = normalized
+			localChannel.Name = chatgptimg.GetOAuthChannelName(localChannel.Key, localChannel.Name)
+		}
+		if strings.TrimSpace(localChannel.Name) == "" {
+			localChannel.Name = defaultImportedChannelName(localChannel.Type)
+		}
+
+		if err := validateChannel(&localChannel, true); err != nil {
+			return nil, fmt.Errorf("%s invalid: %w", credential.Source, err)
+		}
+		ensureCodexServiceTierPassthrough(&localChannel)
+		channels = append(channels, localChannel)
+	}
+	return channels, nil
+}
+
+func ImportChannels(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxChannelCredentialUploadBytes)
+	if err := c.Request.ParseMultipartForm(maxChannelCredentialUploadBytes); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "导入文件解析失败: " + err.Error(),
+		})
+		return
+	}
+
+	payload := strings.TrimSpace(c.PostForm("payload"))
+	if payload == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "payload is required",
+		})
+		return
+	}
+	addChannelRequest := AddChannelRequest{}
+	if err := common.Unmarshal([]byte(payload), &addChannelRequest); err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "payload must be valid JSON: " + err.Error(),
+		})
+		return
+	}
+	if addChannelRequest.Channel == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": "channel template is required",
+		})
+		return
+	}
+
+	var fileHeaders []*multipart.FileHeader
+	if c.Request.MultipartForm != nil {
+		fileHeaders = c.Request.MultipartForm.File["files"]
+	}
+	credentials, err := parseChannelCredentialMultipartFiles(fileHeaders)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	channels, err := buildChannelsFromCredentialImports(addChannelRequest.Channel, credentials)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"success": false,
+			"message": err.Error(),
+		})
+		return
+	}
+	if err := model.BatchInsertChannels(channels); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	service.ResetProxyClientCache()
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data": gin.H{
+			"count": len(channels),
+		},
+	})
 }
 
 func getVertexArrayKeys(keys string) ([]string, error) {

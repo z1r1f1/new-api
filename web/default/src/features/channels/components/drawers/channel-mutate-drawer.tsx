@@ -17,6 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import {
+  type ChangeEvent,
   type ReactNode,
   useEffect,
   useState,
@@ -115,6 +116,7 @@ import {
   getChannelKey,
   getGroups,
   getPrefillGroups,
+  importChannelsFromFiles,
   refreshCodexCredential,
   updateChannel,
 } from '../../api'
@@ -329,6 +331,9 @@ export function ChannelMutateDrawer({
   >(null)
   const [advancedSettingsOpen, setAdvancedSettingsOpen] = useState(false)
   const [paramOverrideEditorOpen, setParamOverrideEditorOpen] = useState(false)
+  const [credentialImportFiles, setCredentialImportFiles] = useState<File[]>(
+    []
+  )
 
   const isEditing = Boolean(currentRow)
   const channelId = currentRow?.id ?? null
@@ -426,6 +431,7 @@ export function ChannelMutateDrawer({
   // Helper computed values
   const isBatchMode =
     multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
+  const hasCredentialImportFiles = credentialImportFiles.length > 0
 
   // Get all models list
   const allModelsList = useMemo(
@@ -663,6 +669,7 @@ export function ChannelMutateDrawer({
         channelData.data.status_code_mapping || ''
     } else if (!isEditing) {
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+      setCredentialImportFiles([])
       setAdvancedSettingsOpen(false)
       initialModelsRef.current = []
       initialModelMappingRef.current = ''
@@ -739,6 +746,35 @@ export function ChannelMutateDrawer({
       )
     }
   }
+
+  const handleCredentialImportFilesChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files ? Array.from(event.target.files) : []
+      event.target.value = ''
+      if (files.length === 0) return
+
+      const unsupportedFiles = files.filter((file) => {
+        const fileName = file.name.toLowerCase()
+        return !fileName.endsWith('.json') && !fileName.endsWith('.zip')
+      })
+      if (unsupportedFiles.length > 0) {
+        toast.error(t('Only JSON and ZIP credential files are supported'))
+        return
+      }
+
+      setCredentialImportFiles(files)
+      toast.success(
+        t('Selected {{count}} credential file(s)', {
+          count: files.length,
+        })
+      )
+    },
+    [t]
+  )
+
+  const handleClearCredentialImportFiles = useCallback(() => {
+    setCredentialImportFiles([])
+  }, [])
 
   const fetchChannelKey = useCallback(async () => {
     if (!channelId) {
@@ -926,6 +962,7 @@ export function ChannelMutateDrawer({
   // Handle successful submission
   const handleSuccess = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: channelsQueryKeys.lists() })
+    setCredentialImportFiles([])
     onOpenChange(false)
     setOpen(null)
   }, [queryClient, onOpenChange, setOpen])
@@ -985,11 +1022,19 @@ export function ChannelMutateDrawer({
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
+      if (!hasCredentialImportFiles && !data.name?.trim()) {
+        form.setError('name', {
+          type: 'manual',
+          message: t('Channel name is required'),
+        })
+        return
+      }
+
       // Validate key is required when creating
-      if (!isEditing && !data.key?.trim()) {
+      if (!isEditing && !hasCredentialImportFiles && !data.key?.trim()) {
         form.setError('key', {
           type: 'manual',
-          message: 'API key is required',
+          message: t('API key is required'),
         })
         return
       }
@@ -1089,10 +1134,25 @@ export function ChannelMutateDrawer({
         } else {
           // Create new channel(s)
           const payload = transformFormDataToCreatePayload(data)
-          const response = await createChannel(payload)
-          if (response.success) {
-            toast.success(t(SUCCESS_MESSAGES.CREATED))
-            handleSuccess()
+          if (hasCredentialImportFiles) {
+            const response = await importChannelsFromFiles(
+              payload,
+              credentialImportFiles
+            )
+            if (response.success) {
+              toast.success(
+                t('Parsed and created {{count}} channel(s)', {
+                  count: response.data?.count ?? credentialImportFiles.length,
+                })
+              )
+              handleSuccess()
+            }
+          } else {
+            const response = await createChannel(payload)
+            if (response.success) {
+              toast.success(t(SUCCESS_MESSAGES.CREATED))
+              handleSuccess()
+            }
           }
         }
       } catch (error: unknown) {
@@ -1105,6 +1165,8 @@ export function ChannelMutateDrawer({
       isEditing,
       currentRow,
       isMultiKeyChannel,
+      hasCredentialImportFiles,
+      credentialImportFiles,
       form,
       handleSuccess,
       confirmMissingModelMappings,
@@ -1119,6 +1181,7 @@ export function ChannelMutateDrawer({
       onOpenChange(v)
       if (!v) {
         form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+        setCredentialImportFiles([])
         setAdvancedSettingsOpen(false)
       }
     },
@@ -2052,6 +2115,46 @@ export function ChannelMutateDrawer({
                     )
                   }}
                 />
+
+                {!isEditing && (
+                  <FormItem>
+                    <FormLabel>{t('Credential files')}</FormLabel>
+                    <FormControl>
+                      <Input
+                        type='file'
+                        accept='.json,application/json,.zip,application/zip,application/x-zip-compressed'
+                        multiple
+                        onChange={handleCredentialImportFilesChange}
+                      />
+                    </FormControl>
+                    <FormDescription>
+                      {t(
+                        'Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.'
+                      )}
+                    </FormDescription>
+                    {hasCredentialImportFiles && (
+                      <div className='bg-muted/40 flex flex-col gap-3 rounded-lg border border-dashed p-3 sm:flex-row sm:items-center sm:justify-between'>
+                        <div className='text-muted-foreground flex items-center gap-2 text-sm'>
+                          <FileText className='h-4 w-4' />
+                          <span>
+                            {t('Selected {{count}} credential file(s)', {
+                              count: credentialImportFiles.length,
+                            })}
+                          </span>
+                        </div>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='sm'
+                          onClick={handleClearCredentialImportFiles}
+                          className='w-fit'
+                        >
+                          {t('Clear')}
+                        </Button>
+                      </div>
+                    )}
+                  </FormItem>
+                )}
 
                 {currentType === 57 && (
                   <div className='bg-muted/20 space-y-3 rounded-lg border p-4'>

@@ -25,7 +25,7 @@ import type { Channel } from '../types'
 // ============================================================================
 
 export const channelFormSchema = z.object({
-  name: z.string().min(1, 'Channel name is required'),
+  name: z.string(),
   type: z.number().min(0, 'Channel type is required'),
   base_url: z.string().optional(),
   key: z.string(),

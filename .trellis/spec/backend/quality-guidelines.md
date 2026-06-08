@@ -65,6 +65,112 @@ Regression examples:
 
 Follow `.trellis/spec/backend/database-guidelines.md` and the project-level DB rules. New DB code must work on SQLite, MySQL, and PostgreSQL, or include explicit guarded branches.
 
+### Channel credential file import
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to channel creation, admin channel routes, credential import
+  parsing, or the default frontend create-channel drawer's file-import path.
+- Purpose: allow admins to create multiple channels from credential JSON/ZIP
+  files while applying the same page-configured channel settings to every
+  imported channel.
+
+#### 2. Signatures
+
+- Route: `POST /api/channel/import`
+- Content type: `multipart/form-data`
+- Form fields:
+  - `payload`: JSON string shaped like `AddChannelRequest`
+    (`mode`, `multi_key_mode`, `batch_add_set_key_prefix_2_name`, `channel`).
+  - repeated `files`: one `.zip`, one `.json`, or multiple `.json` files.
+- Response:
+  - success: `{"success": true, "message": "", "data": {"count": <number>}}`
+  - validation failure: dashboard/admin shape with `success=false` and a safe
+    `message`.
+
+#### 3. Contracts
+
+- JSON files may contain a single object or an array of objects.
+- ZIP files are parsed in memory; only `.json` entries are imported.
+- Channel type is read from `channel_type` first, then `type`; numeric values
+  and known channel names such as `codex` / `chatgptweb` are accepted.
+- Missing type defaults to `constant.ChannelTypeCodex`.
+- The imported channel name comes from credential account identity fields
+  (`email`, `account_name`, `accountName`, `username`, `name`, `account`,
+  `account_id`) with a generated fallback.
+- The credential JSON object is stored as the channel key; do not log or return
+  credential contents.
+- The template channel's page-configured settings are preserved for every
+  imported channel: models, group, test model, proxy/setting JSON, tag,
+  priority, status, model mapping, overrides, and other settings.
+- Each imported channel is validated with the same channel validation path used
+  by normal creation, then inserted through `model.BatchInsertChannels`.
+
+#### 4. Validation & Error Matrix
+
+- Missing `payload` -> `success=false`, `payload is required`.
+- Missing `files` -> `success=false`, credential files are required.
+- Non-JSON/non-ZIP file -> `success=false`, file type error with filename only.
+- Empty JSON -> `success=false`, source filename is empty.
+- JSON scalar/root string -> `success=false`, object or object-array error.
+- ZIP with no JSON entries -> `success=false`, no JSON credential files.
+- Invalid Codex credential without `access_token` or `account_id` ->
+  `success=false`, Codex validation error without token contents.
+- Oversized upload/file/ZIP uncompressed content -> `success=false`, size-limit
+  error without reading or logging credential contents.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: upload `500team.zip`, configure group `svip`, test model `gpt-5.5`,
+  and proxy in the page; every credential becomes one channel named from its
+  account email and using the type from the JSON (or Codex by default).
+- Good: upload multiple standalone JSON files; all are imported in one request.
+- Base: create-channel without selected files still uses `POST /api/channel`
+  and the existing single/batch/multi-to-single behavior.
+- Bad: parsing ZIP credentials in the browser or printing credential JSON in a
+  toast/error message.
+- Bad: using the create form's manual channel name for every imported row.
+
+#### 6. Tests Required
+
+- Controller parser tests for JSON object, JSON array, and ZIP containing JSON
+  files while ignoring non-JSON entries.
+- Controller construction tests proving template settings are preserved and
+  imported type/name/key override per credential.
+- Regression test proving invalid Codex credentials are rejected safely.
+- Frontend verification: `cd web/default && bun run typecheck`; run lint when
+  the local ESLint dependency graph can execute.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+// Use the same manual channel name for every imported credential.
+localChannel.Name = template.Name
+```
+
+Correct:
+
+```go
+localChannel.Name = strings.TrimSpace(credential.Name)
+if localChannel.Name == "" {
+    localChannel.Name = defaultImportedChannelName(localChannel.Type)
+}
+```
+
+Wrong:
+
+```tsx
+toast.error(await file.text()) // exposes credential contents
+```
+
+Correct:
+
+```tsx
+toast.error(t('Only JSON and ZIP credential files are supported'))
+```
+
 ### SMTP email TLS modes
 
 #### 1. Scope / Trigger

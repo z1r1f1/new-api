@@ -4885,6 +4885,11 @@
     "Are you sure you want to {{action}} this user?": "このユーザーを{{action}}してもよろしいですか？",
     "User disabled": "ユーザーを無効化しました",
     "User enabled": "ユーザーを有効化しました",
-    "Request Headers": "リクエストヘッダー"
+    "Request Headers": "リクエストヘッダー",
+    "Credential files": "認証情報ファイル",
+    "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.": "認証情報ツールからエクスポートした JSON または ZIP の認証情報ファイルを選択してください。上記のページ設定は、インポートされる各チャンネルに適用されます。",
+    "Selected {{count}} credential file(s)": "{{count}} 個の認証情報ファイルを選択しました",
+    "Parsed and created {{count}} channel(s)": "{{count}} 個のチャンネルを解析して作成しました",
+    "Only JSON and ZIP credential files are supported": "JSON と ZIP の認証情報ファイルのみ対応しています"
   }
 }

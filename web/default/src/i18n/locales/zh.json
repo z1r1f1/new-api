@@ -4885,6 +4885,11 @@
     "Are you sure you want to {{action}} this user?": "确定要{{action}}此用户吗？",
     "User disabled": "用户已禁用",
     "User enabled": "用户已启用",
-    "Request Headers": "请求头"
+    "Request Headers": "请求头",
+    "Credential files": "凭证文件",
+    "Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.": "选择从凭证工具导出的 JSON 或 ZIP 凭证文件。页面上方的设置会应用到每个导入的渠道。",
+    "Selected {{count}} credential file(s)": "已选择 {{count}} 个凭证文件",
+    "Parsed and created {{count}} channel(s)": "已解析并创建 {{count}} 个渠道",
+    "Only JSON and ZIP credential files are supported": "仅支持 JSON 和 ZIP 凭证文件"
   }
 }
