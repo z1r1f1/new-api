@@ -16,17 +16,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState, useMemo, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
-  getCoreRowModel,
-  useReactTable,
-  getExpandedRowModel,
   type OnChangeFn,
   type SortingState,
-  type VisibilityState,
-  type ExpandedState,
   type Row,
 } from '@tanstack/react-table'
 import { useDebounce, useMediaQuery } from '@/hooks'
@@ -38,6 +33,8 @@ import {
   DISABLED_ROW_DESKTOP,
   DISABLED_ROW_MOBILE,
   DataTablePage,
+  useDebouncedColumnFilter,
+  useDataTable,
 } from '@/components/data-table'
 import { getChannels, searchChannels, getGroups } from '../api'
 import {
@@ -81,12 +78,6 @@ export function ChannelsTable() {
 
   // Table state
   const [sorting, setSorting] = useState<SortingState>([])
-  const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({
-    models: false,
-    tag: false,
-  })
-  const [rowSelection, setRowSelection] = useState({})
-  const [expanded, setExpanded] = useState<ExpandedState>({})
 
   // URL state management
   const {
@@ -131,41 +122,22 @@ export function ChannelsTable() {
   const codexAccountFilter =
     (columnFilters.find((f) => f.id === 'codex_account_type')
       ?.value as string[]) || []
-  const modelFilterFromUrl =
-    (columnFilters.find((f) => f.id === 'model')?.value as string) || ''
   const statusCodeFilterFromUrl =
     (columnFilters.find((f) => f.id === 'last_status_code')?.value as string) ||
     ''
 
   // Local state for immediate input feedback
-  const [modelFilterInput, setModelFilterInput] = useState(modelFilterFromUrl)
   const [statusCodeFilterInput, setStatusCodeFilterInput] = useState(
     statusCodeFilterFromUrl
   )
-  const debouncedModelFilter = useDebounce(modelFilterInput, 500)
   const debouncedStatusCodeFilter = useDebounce(statusCodeFilterInput, 500)
 
   // Sync local input with URL when URL changes (e.g., from back/forward navigation)
-  useEffect(() => {
-    setModelFilterInput(modelFilterFromUrl)
-  }, [modelFilterFromUrl])
-
   useEffect(() => {
     setStatusCodeFilterInput(statusCodeFilterFromUrl)
   }, [statusCodeFilterFromUrl])
 
   // Update URL when debounced value changes
-  useEffect(() => {
-    if (debouncedModelFilter !== modelFilterFromUrl) {
-      onColumnFiltersChange((prev) => {
-        const filtered = prev.filter((f) => f.id !== 'model')
-        return debouncedModelFilter
-          ? [...filtered, { id: 'model', value: debouncedModelFilter }]
-          : filtered
-      })
-    }
-  }, [debouncedModelFilter, modelFilterFromUrl, onColumnFiltersChange])
-
   useEffect(() => {
     if (debouncedStatusCodeFilter !== statusCodeFilterFromUrl) {
       onColumnFiltersChange((prev) => {
@@ -184,12 +156,23 @@ export function ChannelsTable() {
     onColumnFiltersChange,
   ])
 
-  const modelFilter = modelFilterFromUrl
   const statusCodeFilter = statusCodeFilterFromUrl.trim()
   const codexAccountParam =
     codexAccountFilter.length > 0 && !codexAccountFilter.includes('all')
       ? codexAccountFilter[0]
       : undefined
+  const {
+    value: modelFilter,
+    inputValue: modelFilterInput,
+    onChange: onModelFilterInputChange,
+    onCompositionStart: onModelFilterCompositionStart,
+    onCompositionEnd: onModelFilterCompositionEnd,
+    resetInput: resetModelFilterInput,
+  } = useDebouncedColumnFilter({
+    columnFilters,
+    columnId: 'model',
+    onColumnFiltersChange,
+  })
 
   // Determine whether to use search or regular list API
   const shouldSearch = Boolean(globalFilter?.trim() || modelFilter.trim())
@@ -330,40 +313,30 @@ export function ChannelsTable() {
   const columns = useChannelsColumns()
 
   // React Table instance
-  const table = useReactTable({
+  const { table } = useDataTable({
     data: channels,
     columns,
-    pageCount: Math.ceil(totalCount / pagination.pageSize),
-    state: {
-      sorting,
-      columnFilters,
-      columnVisibility,
-      rowSelection,
-      pagination,
-      expanded,
-      globalFilter,
+    totalCount,
+    sorting,
+    initialColumnVisibility: {
+      models: false,
+      tag: false,
     },
+    columnFilters,
+    pagination,
+    globalFilter,
     enableRowSelection: (row: Row<Channel>) => !isTagAggregateRow(row.original),
-    onRowSelectionChange: setRowSelection,
     onSortingChange: handleSortingChange,
     onColumnFiltersChange,
-    onColumnVisibilityChange: setColumnVisibility,
     onPaginationChange,
-    onExpandedChange: setExpanded,
     onGlobalFilterChange,
-    getCoreRowModel: getCoreRowModel(),
-    getExpandedRowModel: getExpandedRowModel(),
     getSubRows: (row: Channel & { children?: Channel[] }) => row.children,
     manualPagination: true,
     manualSorting: true,
     manualFiltering: true,
+    withExpandedRowModel: true,
+    ensurePageInRange,
   })
-
-  // Ensure page is in range when total count changes
-  const pageCount = table.getPageCount()
-  useEffect(() => {
-    ensurePageInRange(pageCount)
-  }, [pageCount, ensurePageInRange])
 
   // Prepare filter options from existing channel types only.
   const typeFilterOptions = useMemo(() => {
@@ -445,12 +418,18 @@ export function ChannelsTable() {
       applyHeaderSize
       toolbarProps={{
         searchPlaceholder: t('Filter by name, ID, or key...'),
+        searchDebounceMs: 500,
+        onReset: () => {
+          resetModelFilterInput()
+        },
         additionalSearch: (
           <div className='flex w-full flex-col gap-2 sm:w-auto sm:flex-row'>
             <Input
               placeholder={t('Filter by model...')}
               value={modelFilterInput}
-              onChange={(e) => setModelFilterInput(e.target.value)}
+              onChange={onModelFilterInputChange}
+              onCompositionStart={onModelFilterCompositionStart}
+              onCompositionEnd={onModelFilterCompositionEnd}
               className='w-full sm:w-[150px] lg:w-[180px]'
             />
             <Input

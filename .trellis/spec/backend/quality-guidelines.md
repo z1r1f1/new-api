@@ -65,6 +65,37 @@ Regression examples:
 
 Follow `.trellis/spec/backend/database-guidelines.md` and the project-level DB rules. New DB code must work on SQLite, MySQL, and PostgreSQL, or include explicit guarded branches.
 
+### HybridCache key ownership
+
+`pkg/cachex.HybridCache` methods own namespace expansion. Callers pass the
+logical key suffix to `SetWithTTL`, `Get`, `DeleteMany`, and prefix deletion
+helpers. Only store or pass the full namespaced key when an API explicitly
+expects the persisted/cache key identity (for example `channelAffinityMeta.CacheKey`
+in Gin context before `ClearCurrentChannelAffinityCache` deletes the current
+entry).
+
+Wrong:
+
+```go
+cacheKey := channelAffinityCacheNamespace + ":example"
+require.NoError(t, cache.SetWithTTL(cacheKey, channelID, time.Minute))
+_, found, err := cache.Get(cacheKey)
+```
+
+Correct:
+
+```go
+cacheKeySuffix := "example"
+cacheKey := channelAffinityCacheNamespace + ":" + cacheKeySuffix
+setChannelAffinityContext(ctx, channelAffinityMeta{CacheKey: cacheKey})
+require.NoError(t, cache.SetWithTTL(cacheKeySuffix, channelID, time.Minute))
+_, found, err := cache.Get(cacheKeySuffix)
+```
+
+Why: `HybridCache.FullKey` prefixes every logical key internally. Passing a
+full key into cache methods silently creates a double-namespaced memory/Redis
+entry and can make delete-path tests pass or fail for the wrong reason.
+
 ### SMTP email TLS modes
 
 #### 1. Scope / Trigger

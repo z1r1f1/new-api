@@ -17,6 +17,7 @@ services:
       REDIS_CONN_STRING: redis://127.0.0.1:6379/0
       ERROR_LOG_ENABLED: "true"
       BATCH_UPDATE_ENABLED: "true"
+      NODE_NAME: ${NODE_NAME:-new-api-node-1}
       TZ: ${TZ:-Asia/Shanghai}
     depends_on:
       postgres:

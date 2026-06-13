@@ -24,14 +24,7 @@ import { toast } from 'sonner'
 import { formatCurrencyFromUSD } from '@/lib/currency'
 import { formatTimestampToDate } from '@/lib/format'
 import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog } from '@/components/dialog'
 import { getCodexUsage, updateChannelBalance } from '../../api'
 import { channelsQueryKeys } from '../../lib'
 import type { ChannelBalanceResponse } from '../../types'
@@ -252,112 +245,112 @@ export function BalanceQueryDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent>
-        <DialogHeader>
-          <DialogTitle>
-            {isChatGPTWeb ? t('Query Image Quota') : t('Query Balance')}
-          </DialogTitle>
-          <DialogDescription>
-            {t('Update balance for:')} <strong>{currentRow.name}</strong>
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className='space-y-4 py-4'>
-          {/* Current Balance Display */}
-          <div className='bg-muted/50 rounded-lg border p-4'>
-            <div className='text-muted-foreground mb-2 flex items-center gap-2 text-sm'>
-              {isChatGPTWeb ? (
-                <ImageIcon className='h-4 w-4' />
-              ) : (
-                <DollarSign className='h-4 w-4' />
-              )}
-              <span>
-                {isChatGPTWeb ? t('Current Image Quota') : t('Current Balance')}
-              </span>
-            </div>
-            <div className='text-2xl font-bold'>{currentValueDisplay}</div>
-            <div className='text-muted-foreground mt-2 text-xs'>
-              {t('Last updated:')}{' '}
-              {formatDate(
-                balanceUpdatedTime ?? currentRow.balance_updated_time
-              )}
-            </div>
-          </div>
-
-          {isChatGPTWeb && (
-            <div className='bg-muted/30 space-y-2 rounded-lg border p-4 text-sm'>
-              <div className='flex items-center justify-between gap-4'>
-                <span className='text-muted-foreground'>
-                  {t('Default model')}
-                </span>
-                <span className='text-right font-medium'>
-                  {imageQuotaData?.default_model_slug || '-'}
-                </span>
-              </div>
-              <div className='flex items-center justify-between gap-4'>
-                <span className='text-muted-foreground'>
-                  {t('Image quota reset time')}
-                </span>
-                <span className='text-right font-medium'>
-                  {formatDate(imageQuotaData?.image_quota_reset_at ?? 0)}
-                </span>
-              </div>
-              <div className='flex items-center justify-between gap-4'>
-                <span className='text-muted-foreground'>
-                  {t('Estimated quota period')}
-                </span>
-                <span className='text-right font-medium'>
-                  {formatImageQuotaWindow(imageQuotaData?.image_quota_window)}
-                </span>
-              </div>
-              <div className='flex items-center justify-between gap-4'>
-                <span className='text-muted-foreground'>
-                  {t('Reset countdown')}
-                </span>
-                <span className='text-right font-medium'>
-                  {formatResetCountdown(
-                    imageQuotaData?.image_quota_reset_at,
-                    imageQuotaData?.image_quota_reset_after_seconds
-                  )}
-                </span>
-              </div>
-              <div className='flex items-start justify-between gap-4'>
-                <span className='text-muted-foreground'>
-                  {t('Blocked features')}
-                </span>
-                <span className='text-right font-medium break-all'>
-                  {imageQuotaData?.blocked_features?.length
-                    ? imageQuotaData.blocked_features.join(', ')
-                    : t('None')}
-                </span>
-              </div>
-              <p className='text-muted-foreground border-t pt-2 text-xs leading-relaxed'>
-                {t(
-                  'Quota period is estimated from the upstream reset time because ChatGPT Web does not label the window directly.'
-                )}
-              </p>
-            </div>
-          )}
-
-          {/* Balance Update Button */}
-          <Button
-            className='w-full'
-            onClick={handleQueryBalance}
-            disabled={isQuerying}
-          >
-            {isQuerying && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
-            {!isQuerying && <RefreshCw className='mr-2 h-4 w-4' />}
-            {updateButtonText}
-          </Button>
-        </div>
-
-        <DialogFooter>
+    <Dialog
+      open={open}
+      onOpenChange={handleClose}
+      title={isChatGPTWeb ? t('Query Image Quota') : t('Query Balance')}
+      description={
+        <>
+          {t('Update balance for:')}
+          <strong>{currentRow.name}</strong>
+        </>
+      }
+      contentHeight='auto'
+      bodyClassName='space-y-4'
+      footer={
+        <>
           <Button variant='outline' onClick={handleClose} disabled={isQuerying}>
             {t('Close')}
           </Button>
-        </DialogFooter>
-      </DialogContent>
+        </>
+      }
+    >
+      <div className='space-y-4 py-4'>
+        {/* Current Balance Display */}
+        <div className='bg-muted/50 rounded-lg border p-4'>
+          <div className='text-muted-foreground mb-2 flex items-center gap-2 text-sm'>
+            {isChatGPTWeb ? (
+              <ImageIcon className='h-4 w-4' />
+            ) : (
+              <DollarSign className='h-4 w-4' />
+            )}
+            <span>
+              {isChatGPTWeb ? t('Current Image Quota') : t('Current Balance')}
+            </span>
+          </div>
+          <div className='text-2xl font-bold'>{currentValueDisplay}</div>
+          <div className='text-muted-foreground mt-2 text-xs'>
+            {t('Last updated:')}{' '}
+            {formatDate(balanceUpdatedTime ?? currentRow.balance_updated_time)}
+          </div>
+        </div>
+
+        {isChatGPTWeb && (
+          <div className='bg-muted/30 space-y-2 rounded-lg border p-4 text-sm'>
+            <div className='flex items-center justify-between gap-4'>
+              <span className='text-muted-foreground'>
+                {t('Default model')}
+              </span>
+              <span className='text-right font-medium'>
+                {imageQuotaData?.default_model_slug || '-'}
+              </span>
+            </div>
+            <div className='flex items-center justify-between gap-4'>
+              <span className='text-muted-foreground'>
+                {t('Image quota reset time')}
+              </span>
+              <span className='text-right font-medium'>
+                {formatDate(imageQuotaData?.image_quota_reset_at ?? 0)}
+              </span>
+            </div>
+            <div className='flex items-center justify-between gap-4'>
+              <span className='text-muted-foreground'>
+                {t('Estimated quota period')}
+              </span>
+              <span className='text-right font-medium'>
+                {formatImageQuotaWindow(imageQuotaData?.image_quota_window)}
+              </span>
+            </div>
+            <div className='flex items-center justify-between gap-4'>
+              <span className='text-muted-foreground'>
+                {t('Reset countdown')}
+              </span>
+              <span className='text-right font-medium'>
+                {formatResetCountdown(
+                  imageQuotaData?.image_quota_reset_at,
+                  imageQuotaData?.image_quota_reset_after_seconds
+                )}
+              </span>
+            </div>
+            <div className='flex items-start justify-between gap-4'>
+              <span className='text-muted-foreground'>
+                {t('Blocked features')}
+              </span>
+              <span className='text-right font-medium break-all'>
+                {imageQuotaData?.blocked_features?.length
+                  ? imageQuotaData.blocked_features.join(', ')
+                  : t('None')}
+              </span>
+            </div>
+            <p className='text-muted-foreground border-t pt-2 text-xs leading-relaxed'>
+              {t(
+                'Quota period is estimated from the upstream reset time because ChatGPT Web does not label the window directly.'
+              )}
+            </p>
+          </div>
+        )}
+
+        {/* Balance Update Button */}
+        <Button
+          className='w-full'
+          onClick={handleQueryBalance}
+          disabled={isQuerying}
+        >
+          {isQuerying && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
+          {!isQuerying && <RefreshCw className='mr-2 h-4 w-4' />}
+          {updateButtonText}
+        </Button>
+      </div>
     </Dialog>
   )
 }

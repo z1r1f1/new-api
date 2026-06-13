@@ -34,7 +34,6 @@ import {
   formatTimestampToDate,
   formatQuota as formatQuotaValue,
 } from '@/lib/format'
-import { getLobeIcon } from '@/lib/lobe-icon'
 import { cn, truncateText } from '@/lib/utils'
 import { TruncatedText } from '@/components/truncated-text'
 import { Button } from '@/components/ui/button'
@@ -46,8 +45,9 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { DataTableColumnHeader } from '@/components/data-table/column-header'
+import { DataTableColumnHeader } from '@/components/data-table'
 import { GroupBadge } from '@/components/group-badge'
+import { ProviderBadge } from '@/components/provider-badge'
 import {
   StatusBadge,
   dotColorMap,
@@ -748,7 +748,6 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
         const typeNameKey = getChannelTypeLabel(type)
         const typeName = t(typeNameKey)
         const iconName = getChannelTypeIcon(type)
-        const icon = getLobeIcon(`${iconName}.Color`, 20)
         const channel = row.original as Channel
         const isMultiKey = isMultiKeyChannel(channel)
         const multiKeyMode = channel.channel_info?.multi_key_mode ?? 'random'
@@ -768,30 +767,25 @@ export function useChannelsColumns(): ColumnDef<Channel>[] {
 
         return (
           <div className='flex items-center gap-2'>
-            <div className='flex items-center gap-1.5'>
-              {isMultiKey && (
-                <TooltipProvider delay={100}>
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <span className='border-border bg-muted text-primary inline-flex h-6 w-6 items-center justify-center rounded-md border' />
-                      }
-                    >
-                      <MultiKeyModeIcon className='h-3.5 w-3.5' />
-                    </TooltipTrigger>
-                    <TooltipContent side='top'>
-                      {multiKeyTooltip}
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
-              {icon}
-            </div>
-            <StatusBadge
+            {isMultiKey && (
+              <TooltipProvider delay={100}>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <span className='border-border bg-muted text-primary inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md border' />
+                    }
+                  >
+                    <MultiKeyModeIcon className='h-3 w-3' />
+                  </TooltipTrigger>
+                  <TooltipContent side='top'>{multiKeyTooltip}</TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            <ProviderBadge
+              iconKey={iconName}
               label={typeName}
-              autoColor={typeName}
-              size='sm'
               copyable={false}
+              showDot={false}
             />
             {isIonet && (
               <TooltipProvider delay={100}>

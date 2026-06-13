@@ -24,7 +24,7 @@ import {
   useCallback,
   useRef,
 } from 'react'
-import { useForm } from 'react-hook-form'
+import { type SubmitErrorHandler, useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -148,6 +148,7 @@ import {
   validateModelMappingJson,
   isCodexChannelType,
   supportsServiceTierPassthrough,
+  hasAdvancedSettingsErrors,
 } from '../../lib'
 import {
   collectInvalidStatusCodeEntries,
@@ -229,7 +230,6 @@ function readAdvancedSettingsPreference(): boolean {
 
 function hasAdvancedSettingsValues(values: ChannelFormValues): boolean {
   return Boolean(
-    values.model_mapping?.trim() ||
     values.param_override?.trim() ||
     values.header_override?.trim() ||
     values.status_code_mapping?.trim() ||
@@ -1113,6 +1113,26 @@ export function ChannelMutateDrawer({
     ]
   )
 
+  const handleAdvancedSettingsOpenChange = useCallback((nextOpen: boolean) => {
+    setAdvancedSettingsOpen(nextOpen)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        ADVANCED_SETTINGS_EXPANDED_KEY,
+        String(nextOpen)
+      )
+    }
+  }, [])
+
+  const onInvalid: SubmitErrorHandler<ChannelFormValues> = useCallback(
+    (errors) => {
+      if (hasAdvancedSettingsErrors(errors)) {
+        handleAdvancedSettingsOpenChange(true)
+      }
+      toast.error(t('Please fix the highlighted fields before saving'))
+    },
+    [handleAdvancedSettingsOpenChange, t]
+  )
+
   // Handle drawer close
   const handleOpenChange = useCallback(
     (v: boolean) => {
@@ -1124,16 +1144,6 @@ export function ChannelMutateDrawer({
     },
     [onOpenChange, form]
   )
-
-  const handleAdvancedSettingsOpenChange = useCallback((nextOpen: boolean) => {
-    setAdvancedSettingsOpen(nextOpen)
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(
-        ADVANCED_SETTINGS_EXPANDED_KEY,
-        String(nextOpen)
-      )
-    }
-  }, [])
 
   return (
     <>
@@ -1165,7 +1175,7 @@ export function ChannelMutateDrawer({
           <Form {...form}>
             <form
               id='channel-form'
-              onSubmit={form.handleSubmit(onSubmit)}
+              onSubmit={form.handleSubmit(onSubmit, onInvalid)}
               className='flex-1 space-y-4 overflow-y-auto px-3 py-3 pb-4 sm:space-y-5 sm:px-4'
             >
               {/* ── Basic Information ── */}

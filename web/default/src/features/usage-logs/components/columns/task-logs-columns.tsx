@@ -102,13 +102,13 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
         const submitTime = row.getValue('submit_time') as number
 
         return (
-          <div className='flex flex-col gap-0.5'>
-            <span className='font-mono text-xs tabular-nums'>
-              {formatLogTimestampToDate(submitTime)}
+          <div className='flex min-w-0 flex-col gap-0.5'>
+            <span className='truncate font-mono text-xs tabular-nums'>
+              {formatLogTimestampToDate(submitTime, 'seconds')}
             </span>
             {log.finish_time ? (
-              <span className='text-muted-foreground/60 font-mono text-[11px] tabular-nums'>
-                {formatLogTimestampToDate(log.finish_time)}
+              <span className='text-muted-foreground/60 truncate font-mono text-[11px] tabular-nums'>
+                {formatLogTimestampToDate(log.finish_time, 'seconds')}
               </span>
             ) : (
               <span className='text-muted-foreground/50 text-[11px]'>-</span>
@@ -116,6 +116,7 @@ export function useTaskLogsColumns(isAdmin: boolean): ColumnDef<TaskLog>[] {
           </div>
         )
       },
+      size: 180,
       meta: { label: t('Submit Time') },
     },
   ]

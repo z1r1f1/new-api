@@ -21,14 +21,8 @@ import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
 import {
   type ColumnDef,
-  flexRender,
-  getCoreRowModel,
-  getFacetedRowModel,
-  getFacetedUniqueValues,
-  getPaginationRowModel,
   type OnChangeFn,
   type VisibilityState,
-  useReactTable,
 } from '@tanstack/react-table'
 import { useMediaQuery } from '@/hooks'
 import { useTranslation } from 'react-i18next'
@@ -36,14 +30,22 @@ import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useIsAdmin } from '@/hooks/use-admin'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
-import { TableCell, TableRow } from '@/components/ui/table'
-import { DataTablePage } from '@/components/data-table'
-import { DEFAULT_LOGS_DATA, LOG_TYPE_ENUM } from '../constants'
+import {
+  DataTablePage,
+  DataTableRow,
+  useDataTable,
+} from '@/components/data-table'
+import {
+  DEFAULT_LOGS_DATA,
+  LOG_TYPE_ALL_VALUE,
+  LOG_TYPE_ENUM,
+} from '../constants'
 import { useColumnsByCategory } from '../lib/columns'
 import { fetchLogsByCategory } from '../lib/utils'
 import type { LogCategory } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
 import { TaskLogsFilterBar } from './task-logs-filter-bar'
+import { UsageLogsMobileList } from './usage-logs-mobile-card'
 
 const route = getRouteApi('/_authenticated/usage-logs/$section')
 
@@ -52,12 +54,13 @@ const logTypeRowTint: Record<number, string> = {
   [LOG_TYPE_ENUM.REFUND]: 'bg-blue-50/30 dark:bg-blue-950/15',
 }
 
+function deserializeLogTypeFilter(value: unknown): unknown[] {
+  const values = Array.isArray(value) ? value : value ? [value] : []
+  return values.filter((item) => String(item) !== LOG_TYPE_ALL_VALUE)
+}
+
 const USAGE_LOGS_COLUMN_VISIBILITY_STORAGE_KEY_PREFIX =
   'usage-logs-column-visibility'
-
-interface UsageLogsTableProps {
-  logCategory: LogCategory
-}
 
 type StoredColumnVisibilityState = {
   logCategory: LogCategory
@@ -130,6 +133,10 @@ function writeColumnVisibility(
   )
 }
 
+interface UsageLogsTableProps {
+  logCategory: LogCategory
+}
+
 export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const { t } = useTranslation()
   const isAdmin = useIsAdmin()
@@ -148,16 +155,20 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     pagination: { defaultPage: 1, defaultPageSize: isMobile ? 20 : 100 },
     globalFilter: { enabled: false },
     columnFilters: [
-      { columnId: 'created_at', searchKey: 'type', type: 'array' as const },
+      {
+        columnId: 'created_at',
+        searchKey: 'type',
+        type: 'array' as const,
+        deserialize: deserializeLogTypeFilter,
+      },
       { columnId: 'model_name', searchKey: 'model', type: 'string' as const },
       { columnId: 'token_name', searchKey: 'token', type: 'string' as const },
       { columnId: 'group', searchKey: 'group', type: 'string' as const },
-      { columnId: 'ip', searchKey: 'ip', type: 'string' as const },
       ...(isAdmin
         ? [
             {
               columnId: 'channel',
-              searchKey: 'channelId',
+              searchKey: 'channel',
               type: 'string' as const,
             },
             {
@@ -209,21 +220,22 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const logs = data?.items || []
   const columns = useColumnsByCategory(logCategory, isAdmin)
   const isLoadingData = isLoading || (isFetching && !data)
+
   const [columnVisibilityState, setColumnVisibilityState] =
     useState<StoredColumnVisibilityState>(() => ({
       logCategory,
       visibility: readColumnVisibility(logCategory),
     }))
+
   const columnVisibility =
     columnVisibilityState.logCategory === logCategory
       ? columnVisibilityState.visibility
-      : readColumnVisibility(logCategory)
+      : getDefaultColumnVisibility(logCategory)
 
   useEffect(() => {
     if (columnVisibilityState.logCategory === logCategory) {
       return
     }
-
     setColumnVisibilityState({
       logCategory,
       visibility: readColumnVisibility(logCategory),
@@ -234,7 +246,6 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     if (columnVisibilityState.logCategory !== logCategory) {
       return
     }
-
     writeColumnVisibility(logCategory, columnVisibilityState.visibility)
   }, [columnVisibilityState, logCategory])
 
@@ -242,12 +253,12 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     updater
   ) => {
     setColumnVisibilityState((prev) => {
-      const currentVisibility =
+      const base =
         prev.logCategory === logCategory
           ? prev.visibility
-          : readColumnVisibility(logCategory)
+          : getDefaultColumnVisibility(logCategory)
       const nextVisibility =
-        typeof updater === 'function' ? updater(currentVisibility) : updater
+        typeof updater === 'function' ? updater(base) : updater
 
       return {
         logCategory,
@@ -256,30 +267,21 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
     })
   }
 
-  const table = useReactTable({
+  const { table } = useDataTable({
     data: logs as Record<string, unknown>[],
     columns: columns as ColumnDef<Record<string, unknown>>[],
-    state: {
-      columnFilters,
-      columnVisibility,
-      pagination,
-    },
+    columnFilters,
+    columnVisibility,
+    pagination,
     enableRowSelection: false,
     onPaginationChange,
     onColumnFiltersChange,
     onColumnVisibilityChange: handleColumnVisibilityChange,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-    getFacetedRowModel: getFacetedRowModel(),
-    getFacetedUniqueValues: getFacetedUniqueValues(),
     manualPagination: true,
-    pageCount: Math.ceil((data?.total || 0) / pagination.pageSize),
+    manualFiltering: true,
+    totalCount: data?.total || 0,
+    ensurePageInRange,
   })
-
-  const pageCount = table.getPageCount()
-  useEffect(() => {
-    ensurePageInRange(pageCount)
-  }, [pageCount, ensurePageInRange])
 
   const isCommon = logCategory === 'common'
 
@@ -294,8 +296,17 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
         'No usage logs available. Logs will appear here once API calls are made.'
       )}
       skeletonKeyPrefix='usage-log-skeleton'
-      tableClassName='max-h-[calc(100dvh-13rem)] overflow-auto sm:max-h-[calc(100dvh-14rem)]'
-      tableHeaderClassName='bg-muted/30 sticky top-0 z-10'
+      applyHeaderSize
+      tableClassName={cn(
+        '[&_[data-slot=table]]:text-[13px] [&_[data-slot=table]_td]:text-[13px] [&_[data-slot=table]_td_*]:text-[13px] [&_[data-slot=table]_th]:text-[13px] [&_[data-slot=table]_th_*]:text-[13px]'
+      )}
+      mobile={
+        <UsageLogsMobileList
+          table={table}
+          isLoading={isLoadingData}
+          logCategory={logCategory}
+        />
+      }
       toolbar={
         isCommon ? (
           <CommonLogsFilterBar table={table} />
@@ -311,13 +322,12 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
           isCommon && logType != null ? (logTypeRowTint[logType] ?? '') : ''
 
         return (
-          <TableRow key={row.id} className={cn('transition-colors', tintClass)}>
-            {row.getVisibleCells().map((cell) => (
-              <TableCell key={cell.id} className={isCommon ? 'py-2' : 'py-3.5'}>
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </TableCell>
-            ))}
-          </TableRow>
+          <DataTableRow
+            key={row.id}
+            row={row}
+            className={cn('transition-colors', tintClass)}
+            getColumnClassName={() => (isCommon ? 'py-2' : 'py-3.5')}
+          />
         )
       }}
     />
