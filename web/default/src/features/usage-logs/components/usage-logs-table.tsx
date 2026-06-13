@@ -306,8 +306,8 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
             key={row.id}
             row={row}
             className={cn('transition-colors', tintClass)}
-            getColumnClassName={(_columnId, kind) =>
-              getUsageLogTableCellClassName(logCategory, kind)
+            getColumnClassName={(columnId, kind) =>
+              getUsageLogTableCellClassName(logCategory, kind, columnId)
             }
           />
         )

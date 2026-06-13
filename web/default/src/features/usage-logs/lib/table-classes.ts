@@ -21,15 +21,22 @@ import type { LogCategory } from '../types'
 const USAGE_LOG_CELL_TEXT_FLOW_CLASS =
   'whitespace-normal overflow-visible text-clip break-words'
 
+const USAGE_LOG_CLIPPED_CELL_CLASS = 'overflow-hidden'
+
 export function getUsageLogTableCellClassName(
   logCategory: LogCategory,
-  kind: 'header' | 'cell'
+  kind: 'header' | 'cell',
+  columnId?: string
 ): string | undefined {
   if (kind !== 'cell') {
     return undefined
   }
 
-  return logCategory === 'common'
-    ? `py-2 ${USAGE_LOG_CELL_TEXT_FLOW_CLASS}`
-    : `py-3.5 ${USAGE_LOG_CELL_TEXT_FLOW_CLASS}`
+  const spacingClass = logCategory === 'common' ? 'py-2' : 'py-3.5'
+
+  if (columnId === 'model_name') {
+    return `${spacingClass} ${USAGE_LOG_CLIPPED_CELL_CLASS}`
+  }
+
+  return `${spacingClass} ${USAGE_LOG_CELL_TEXT_FLOW_CLASS}`
 }

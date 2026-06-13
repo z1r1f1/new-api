@@ -17,6 +17,18 @@ describe('usage log table cell classes', () => {
     assert.doesNotMatch(merged, /whitespace-nowrap/)
   })
 
+  test('clips long model names inside the model column', () => {
+    const merged = cn(
+      'truncate p-2 align-middle',
+      getUsageLogTableCellClassName('common', 'cell', 'model_name')
+    )
+
+    assert.match(merged, /overflow-hidden/)
+    assert.match(merged, /truncate/)
+    assert.doesNotMatch(merged, /overflow-visible/)
+    assert.doesNotMatch(merged, /whitespace-normal/)
+  })
+
   test('keeps the compact vertical rhythm for each log category', () => {
     assert.match(getUsageLogTableCellClassName('common', 'cell') ?? '', /py-2/)
     assert.match(getUsageLogTableCellClassName('task', 'cell') ?? '', /py-3\.5/)
