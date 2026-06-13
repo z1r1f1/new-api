@@ -120,7 +120,7 @@ func TestLinuxDoCreditPurchaseUsesEasyPayCompatibilityParams(t *testing.T) {
 	require.NotEmpty(t, params["sign"])
 }
 
-func TestGetTopUpInfoReturnsLinuxDoCreditUnitPrice(t *testing.T) {
+func TestGetTopUpInfoHidesLinuxDoCreditWhenPaymentMethodRemoved(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
 	originalClientID := setting.LinuxDoCreditClientID
 	originalClientSecret := setting.LinuxDoCreditClientSecret
@@ -143,6 +143,53 @@ func TestGetTopUpInfoReturnsLinuxDoCreditUnitPrice(t *testing.T) {
 	setting.LinuxDoCreditUnitPrice = 2
 	setting.LinuxDoCreditMinTopUp = 3
 	operation_setting.PayMethods = nil
+
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+
+	GetTopUpInfo(ctx)
+
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			EnableLinuxDoCreditTopup bool                `json:"enable_linuxdo_credit_topup"`
+			LinuxDoCreditUnitPrice   float64             `json:"linuxdo_credit_unit_price"`
+			PayMethods               []map[string]string `json:"pay_methods"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &body))
+	require.True(t, body.Success)
+	require.False(t, body.Data.EnableLinuxDoCreditTopup)
+	require.Equal(t, 2.0, body.Data.LinuxDoCreditUnitPrice)
+	for _, method := range body.Data.PayMethods {
+		require.NotEqual(t, model.PaymentMethodLinuxDoCredit, method["type"])
+	}
+}
+
+func TestGetTopUpInfoReturnsLinuxDoCreditWhenPaymentMethodConfigured(t *testing.T) {
+	confirmPaymentComplianceForTest(t)
+	originalClientID := setting.LinuxDoCreditClientID
+	originalClientSecret := setting.LinuxDoCreditClientSecret
+	originalBaseURL := setting.LinuxDoCreditBaseURL
+	originalUnitPrice := setting.LinuxDoCreditUnitPrice
+	originalMinTopUp := setting.LinuxDoCreditMinTopUp
+	originalPayMethods := operation_setting.PayMethods
+	t.Cleanup(func() {
+		setting.LinuxDoCreditClientID = originalClientID
+		setting.LinuxDoCreditClientSecret = originalClientSecret
+		setting.LinuxDoCreditBaseURL = originalBaseURL
+		setting.LinuxDoCreditUnitPrice = originalUnitPrice
+		setting.LinuxDoCreditMinTopUp = originalMinTopUp
+		operation_setting.PayMethods = originalPayMethods
+	})
+
+	setting.LinuxDoCreditClientID = "ldc_client_id"
+	setting.LinuxDoCreditClientSecret = "ldc_client_secret"
+	setting.LinuxDoCreditBaseURL = "https://credit.linux.do/epay/pay"
+	setting.LinuxDoCreditUnitPrice = 2
+	setting.LinuxDoCreditMinTopUp = 3
+	operation_setting.PayMethods = []map[string]string{linuxDoCreditPayMethod()}
 
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)

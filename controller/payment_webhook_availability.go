@@ -3,6 +3,7 @@ package controller
 import (
 	"strings"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
@@ -113,7 +114,8 @@ func isLinuxDoCreditTopUpEnabled() bool {
 	if !isPaymentComplianceConfirmed() {
 		return false
 	}
-	return isLinuxDoCreditWebhookConfigured()
+	return isLinuxDoCreditWebhookConfigured() &&
+		operation_setting.ContainsPayMethod(model.PaymentMethodLinuxDoCredit)
 }
 
 func isLinuxDoCreditWebhookConfigured() bool {
@@ -123,5 +125,8 @@ func isLinuxDoCreditWebhookConfigured() bool {
 }
 
 func isLinuxDoCreditWebhookEnabled() bool {
-	return isLinuxDoCreditTopUpEnabled()
+	if !isPaymentComplianceConfirmed() {
+		return false
+	}
+	return isLinuxDoCreditWebhookConfigured()
 }

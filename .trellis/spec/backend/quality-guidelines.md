@@ -169,6 +169,47 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### Payment gateway availability: user entry vs webhook callback
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to wallet top-up availability, `/api/user/topup/info`,
+  `controller/payment_webhook_availability.go`, gateway-specific `/pay`
+  handlers, or gateway-specific notify/webhook handlers.
+
+#### 2. Contracts
+
+- User-facing top-up availability means: the gateway is compliant, credentials
+  are configured, and the administrator has kept the method in the configured
+  payment-method list when that gateway is represented by `PayMethods`.
+- Webhook availability means: the instance is compliant and has enough
+  provider credentials to verify/handle callbacks for already-created orders.
+- Do not use the same helper for both concepts when deleting a payment method
+  should hide the wallet entry but must not reject callbacks for pending orders.
+- `/api/user/topup/info` must not append a provider payment method that the
+  administrator removed from `operation_setting.PayMethods`.
+
+#### 3. Good/Base/Bad Cases
+
+- Good: Linux DO Credit credentials remain configured, but `linuxdo_credit` is
+  removed from `PayMethods`; wallet top-up info returns
+  `enable_linuxdo_credit_topup=false` and no `linuxdo_credit` item in
+  `pay_methods`.
+- Good: the same removed method still accepts signed provider callbacks for
+  pending orders when webhook credentials remain configured.
+- Base: when credentials are configured and `PayMethods` contains
+  `linuxdo_credit`, wallet top-up info exposes the method.
+- Bad: auto-appending a configured provider back into `pay_methods` after the
+  admin explicitly deleted it.
+
+#### 4. Tests Required
+
+- `controller`: regression test proving removed configured payment methods are
+  hidden from `GetTopUpInfo`.
+- `controller`: regression test proving webhook availability stays true with
+  credentials even when top-up availability is false because the admin removed
+  the payment method.
+
 ### ChatGPT Web session reuse
 
 ChatGPT Web upstream conversation reuse should prefer an explicit prompt cache

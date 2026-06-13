@@ -3,6 +3,7 @@ package controller
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
@@ -173,19 +174,27 @@ func TestLinuxDoCreditWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) 
 	originalClientID := setting.LinuxDoCreditClientID
 	originalClientSecret := setting.LinuxDoCreditClientSecret
 	originalBaseURL := setting.LinuxDoCreditBaseURL
+	originalPayMethods := operation_setting.PayMethods
 	t.Cleanup(func() {
 		setting.LinuxDoCreditClientID = originalClientID
 		setting.LinuxDoCreditClientSecret = originalClientSecret
 		setting.LinuxDoCreditBaseURL = originalBaseURL
+		operation_setting.PayMethods = originalPayMethods
 	})
 
 	setting.LinuxDoCreditClientID = "ldc_client_id"
 	setting.LinuxDoCreditClientSecret = ""
 	setting.LinuxDoCreditBaseURL = "https://credit.linux.do/epay/pay"
+	operation_setting.PayMethods = nil
+	require.False(t, isLinuxDoCreditTopUpEnabled())
 	require.False(t, isLinuxDoCreditWebhookEnabled())
 
 	setting.LinuxDoCreditClientSecret = "ldc_client_secret"
+	require.False(t, isLinuxDoCreditTopUpEnabled())
 	require.True(t, isLinuxDoCreditWebhookEnabled())
+
+	operation_setting.PayMethods = []map[string]string{{"type": model.PaymentMethodLinuxDoCredit}}
+	require.True(t, isLinuxDoCreditTopUpEnabled())
 
 	setting.LinuxDoCreditBaseURL = ""
 	require.False(t, isLinuxDoCreditWebhookEnabled())
