@@ -41,6 +41,7 @@ import {
   LOG_TYPE_ENUM,
 } from '../constants'
 import { useColumnsByCategory } from '../lib/columns'
+import { getUsageLogTableCellClassName } from '../lib/table-classes'
 import { fetchLogsByCategory } from '../lib/utils'
 import type { LogCategory } from '../types'
 import { CommonLogsFilterBar } from './common-logs-filter-bar'
@@ -62,10 +63,7 @@ function deserializeLogTypeFilter(value: unknown): unknown[] {
 const USAGE_LOGS_COLUMN_VISIBILITY_STORAGE_KEY_PREFIX =
   'usage-logs-column-visibility'
 
-type StoredColumnVisibilityState = {
-  logCategory: LogCategory
-  visibility: VisibilityState
-}
+type ColumnVisibilityByCategory = Record<LogCategory, VisibilityState>
 
 function getDefaultColumnVisibility(logCategory: LogCategory): VisibilityState {
   if (logCategory === 'common') {
@@ -221,48 +219,30 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
   const columns = useColumnsByCategory(logCategory, isAdmin)
   const isLoadingData = isLoading || (isFetching && !data)
 
-  const [columnVisibilityState, setColumnVisibilityState] =
-    useState<StoredColumnVisibilityState>(() => ({
-      logCategory,
-      visibility: readColumnVisibility(logCategory),
+  const [columnVisibilityByCategory, setColumnVisibilityByCategory] =
+    useState<ColumnVisibilityByCategory>(() => ({
+      common: readColumnVisibility('common'),
+      drawing: readColumnVisibility('drawing'),
+      task: readColumnVisibility('task'),
     }))
 
-  const columnVisibility =
-    columnVisibilityState.logCategory === logCategory
-      ? columnVisibilityState.visibility
-      : getDefaultColumnVisibility(logCategory)
+  const columnVisibility = columnVisibilityByCategory[logCategory]
 
   useEffect(() => {
-    if (columnVisibilityState.logCategory === logCategory) {
-      return
-    }
-    setColumnVisibilityState({
-      logCategory,
-      visibility: readColumnVisibility(logCategory),
-    })
-  }, [columnVisibilityState.logCategory, logCategory])
-
-  useEffect(() => {
-    if (columnVisibilityState.logCategory !== logCategory) {
-      return
-    }
-    writeColumnVisibility(logCategory, columnVisibilityState.visibility)
-  }, [columnVisibilityState, logCategory])
+    writeColumnVisibility(logCategory, columnVisibility)
+  }, [columnVisibility, logCategory])
 
   const handleColumnVisibilityChange: OnChangeFn<VisibilityState> = (
     updater
   ) => {
-    setColumnVisibilityState((prev) => {
-      const base =
-        prev.logCategory === logCategory
-          ? prev.visibility
-          : getDefaultColumnVisibility(logCategory)
+    setColumnVisibilityByCategory((prev) => {
+      const base = prev[logCategory] ?? getDefaultColumnVisibility(logCategory)
       const nextVisibility =
         typeof updater === 'function' ? updater(base) : updater
 
       return {
-        logCategory,
-        visibility: nextVisibility,
+        ...prev,
+        [logCategory]: nextVisibility,
       }
     })
   }
@@ -326,7 +306,9 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
             key={row.id}
             row={row}
             className={cn('transition-colors', tintClass)}
-            getColumnClassName={() => (isCommon ? 'py-2' : 'py-3.5')}
+            getColumnClassName={(_columnId, kind) =>
+              getUsageLogTableCellClassName(logCategory, kind)
+            }
           />
         )
       }}
