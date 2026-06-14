@@ -37,7 +37,6 @@ import { cn } from '@/lib/utils'
 import { useCopyToClipboard } from '@/hooks/use-copy-to-clipboard'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog } from '@/components/dialog'
 import { StatusBadge, type StatusBadgeProps } from '@/components/status-badge'
 import { DynamicPricingBreakdown } from '@/features/pricing/components/dynamic-pricing-breakdown'
@@ -512,8 +511,8 @@ export function DetailsDialog(props: DetailsDialogProps) {
       contentHeight='min(72vh, 720px)'
       bodyClassName='space-y-4'
     >
-      <ScrollArea className='max-h-[70vh] min-w-0 overflow-hidden pr-2 max-sm:max-h-[calc(100dvh-7rem)] sm:pr-4'>
-        <div className='w-full max-w-full min-w-0 space-y-2.5 overflow-hidden py-1 sm:space-y-3'>
+      <div className='min-w-0 pr-2 sm:pr-4'>
+        <div className='w-full max-w-full min-w-0 space-y-2.5 py-1 sm:space-y-3'>
           {/* Overview section - key identifiers */}
           <div className='min-w-0 space-y-1'>
             {props.log.request_id && (
@@ -1157,7 +1156,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </Dialog>
   )
 }

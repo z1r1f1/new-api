@@ -33,4 +33,11 @@ describe('usage log details dialog source contract', () => {
     assert.match(source, /requestHeaderRows/)
     assert.match(source, /Request Headers/)
   })
+
+  test('lets the shared dialog body own scrolling for long details', () => {
+    const source = readFileSync(sourcePath, 'utf8')
+
+    assert.doesNotMatch(source, /ScrollArea/)
+    assert.match(source, /contentHeight='min\(72vh, 720px\)'/)
+  })
 })
