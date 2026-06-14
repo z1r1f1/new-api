@@ -52,6 +52,7 @@ import {
   isViolationFeeLog,
   getFirstResponseTimeColor,
   getResponseTimeColor,
+  getVisibleAdminRequestHeaders,
 } from '../../lib/format'
 import { getUsageLogRequestMetadata } from '../../lib/request-metadata'
 import {
@@ -474,6 +475,10 @@ export function DetailsDialog(props: DetailsDialogProps) {
     props.isAdmin &&
     props.log.type !== 6 &&
     (other?.request_path || conversionChain.length > 0)
+  const requestHeaderRows = getVisibleAdminRequestHeaders(
+    adminInfo,
+    props.isAdmin
+  )
 
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
@@ -672,6 +677,23 @@ export function DetailsDialog(props: DetailsDialogProps) {
                   </div>
                 </div>
               </div>
+            </DetailSection>
+          )}
+
+          {/* Request headers (admin only) */}
+          {requestHeaderRows.length > 0 && (
+            <DetailSection
+              icon={<ShieldCheck className='size-3.5' aria-hidden='true' />}
+              label={t('Request Headers')}
+            >
+              {requestHeaderRows.map((header) => (
+                <DetailRow
+                  key={header.key}
+                  label={header.key}
+                  value={header.value}
+                  mono
+                />
+              ))}
             </DetailSection>
           )}
 
