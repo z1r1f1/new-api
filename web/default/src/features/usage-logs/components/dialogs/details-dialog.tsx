@@ -53,6 +53,7 @@ import {
   getFirstResponseTimeColor,
   getResponseTimeColor,
 } from '../../lib/format'
+import { getUsageLogRequestMetadata } from '../../lib/request-metadata'
 import {
   getLogTypeConfig,
   isPerCallBilling,
@@ -477,6 +478,7 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const requestMetadata = getUsageLogRequestMetadata(other)
 
   return (
     <Dialog
@@ -521,6 +523,28 @@ export function DetailsDialog(props: DetailsDialogProps) {
                 label={t('Upstream Request ID')}
                 value={props.log.upstream_request_id}
                 mono
+              />
+            )}
+
+            {requestMetadata.requestProtocol && (
+              <DetailRow
+                label={t('Request Protocol')}
+                value={
+                  <StatusBadge
+                    label={
+                      requestMetadata.requestProtocol === 'websocket'
+                        ? 'WebSocket'
+                        : 'HTTP'
+                    }
+                    variant={
+                      requestMetadata.requestProtocol === 'websocket'
+                        ? 'purple'
+                        : 'blue'
+                    }
+                    size='sm'
+                    copyable={false}
+                  />
+                }
               />
             )}
 
@@ -786,17 +810,95 @@ export function DetailsDialog(props: DetailsDialogProps) {
             </DetailSection>
           )}
 
-          {/* Reasoning effort */}
-          {other?.reasoning_effort && (
+          {/* Request service tier / reasoning effort */}
+          {requestMetadata.showRequestFast && (
             <DetailRow
-              label={t('Reasoning Effort')}
+              label={t('Request Fast Parameter')}
               value={
                 <StatusBadge
-                  label={other.reasoning_effort}
+                  label={requestMetadata.requestFast ? t('On') : t('Off')}
+                  variant={requestMetadata.requestFast ? 'green' : 'grey'}
+                  size='sm'
+                  copyable={false}
+                />
+              }
+            />
+          )}
+
+          {requestMetadata.requestFastServiceTier && (
+            <DetailRow
+              label={t('Fast Conversion')}
+              value={`fast=${requestMetadata.requestFast ? 'on' : 'off'} → service_tier=${requestMetadata.requestFastServiceTier}`}
+              mono
+            />
+          )}
+
+          {requestMetadata.requestServiceTier && (
+            <DetailRow
+              label={t('Request Service Tier')}
+              value={
+                <StatusBadge
+                  label={requestMetadata.requestServiceTier}
+                  variant='blue'
+                  size='sm'
+                  copyable={false}
+                />
+              }
+            />
+          )}
+
+          {requestMetadata.responseServiceTier && (
+            <DetailRow
+              label={t('Response Service Tier')}
+              value={
+                <StatusBadge
+                  label={requestMetadata.responseServiceTier}
                   variant={
-                    other.reasoning_effort === 'high'
+                    requestMetadata.responseServiceTier === 'priority' ||
+                    requestMetadata.responseServiceTier === 'fast'
+                      ? 'green'
+                      : requestMetadata.responseServiceTier === 'default'
+                        ? 'grey'
+                        : 'blue'
+                  }
+                  size='sm'
+                  copyable={false}
+                />
+              }
+            />
+          )}
+
+          {requestMetadata.requestEffort && (
+            <DetailRow
+              label={t('Request Effort')}
+              value={
+                <StatusBadge
+                  label={requestMetadata.requestEffort}
+                  variant={
+                    requestMetadata.requestEffort.toLowerCase() === 'high'
                       ? 'orange'
-                      : other.reasoning_effort === 'medium'
+                      : requestMetadata.requestEffort.toLowerCase() === 'medium'
+                        ? 'yellow'
+                        : 'green'
+                  }
+                  size='sm'
+                  copyable={false}
+                />
+              }
+            />
+          )}
+
+          {requestMetadata.showFinalReasoningEffort && (
+            <DetailRow
+              label={t('Final Reasoning Effort')}
+              value={
+                <StatusBadge
+                  label={requestMetadata.reasoningEffort}
+                  variant={
+                    requestMetadata.reasoningEffort.toLowerCase() === 'high'
+                      ? 'orange'
+                      : requestMetadata.reasoningEffort.toLowerCase() ===
+                          'medium'
                         ? 'yellow'
                         : 'green'
                   }
