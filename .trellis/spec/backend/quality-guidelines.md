@@ -354,6 +354,108 @@ if channel == nil {
 }
 ```
 
+### Chat WebSocket dashboard-token authentication
+
+#### 1. Scope / Trigger
+
+- Trigger: changes to `router.SetChatRouter`, `controller.ChatWebSocket`,
+  `service/chat.NewRealtimeServer`, dashboard access-token/session validation,
+  or an in-app chat client that opens `/api/chat/ws`.
+- The chat WebSocket handshake is a Centrifuge protocol boundary. Dashboard
+  authentication belongs in the Centrifuge `connect` command, not in a legacy
+  Gin cookie session checked before the HTTP upgrade.
+
+#### 2. Signatures
+
+- WebSocket endpoint: `GET /api/chat/ws`.
+- Centrifuge client command:
+  `{"connect":{"token":"<dashboard-access-token>"}}`.
+- Token parser:
+  `service.ParseDashboardAccessToken(raw string) (AuthIdentity, bool, error)`.
+- Session validator:
+  `service.ValidateLoginSession(AuthIdentity) (*model.UserSession, *model.UserBase, error)`.
+- Realtime constructor: `chat.NewRealtimeServer() (*chat.RealtimeServer, error)`.
+
+#### 3. Contracts
+
+- `ChatWebSocket` only initializes the shared realtime server and delegates the
+  upgraded request to its HTTP handler; it must not read the removed Gin
+  cookie session or synthesize credentials before the upgrade.
+- `NewRealtimeServer` authenticates `centrifuge.ConnectEvent.Token` in
+  `node.OnConnecting` with the current short-lived dashboard access-token
+  contract, then validates the referenced server-side login session.
+- A valid identity becomes
+  `centrifuge.Credentials{UserID: strconv.Itoa(identity.UserID)}`. Subscription
+  authorization continues to use that user ID for user/conversation channels.
+- REST chat routes remain under `middleware.UserAuth()` and use
+  `Authorization: Bearer <dashboard-access-token>`; WebSocket clients send the
+  same token in the Centrifuge connect command.
+- `SetApiRouter` must call `SetChatRouter`; otherwise both the REST and
+  realtime chat endpoints silently disappear from the router.
+
+#### 4. Validation & Error Matrix
+
+- Valid access token + active matching login session -> Centrifuge connect
+  succeeds with the token subject as the credential user ID.
+- Expired dashboard access token -> `centrifuge.ErrorTokenExpired`.
+- Missing token, opaque/non-dashboard token, invalid signature, or wrong token
+  purpose -> `centrifuge.ErrorUnauthorized`.
+- Revoked/expired login session, disabled user, auth-version mismatch, or
+  session-version mismatch -> `centrifuge.ErrorUnauthorized`.
+- Realtime server initialization failure before upgrade -> HTTP 500 chat JSON
+  response with `chat realtime unavailable`.
+
+#### 5. Good/Base/Bad Cases
+
+- Good: the browser upgrades `/api/chat/ws`, then sends a Centrifuge connect
+  command containing the same access token used for REST chat calls.
+- Base: `/api/chat/users` continues to authenticate through
+  `middleware.UserAuth()` with the Bearer token.
+- Bad: reading `sessions.Default(c)` in `ChatWebSocket`; the current dashboard
+  authentication architecture no longer establishes the old Gin cookie
+  session, so valid users receive 401 or the handler panics in tests.
+- Bad: accepting the HTTP upgrade first and assigning an anonymous/default
+  user when the connect token is absent.
+
+#### 6. Tests Required
+
+- `router`: regression test proving `SetApiRouter` registers
+  `/api/chat/users` and `/api/chat/ws`.
+- `controller`: smoke test creates a real login session/access token, verifies
+  REST Bearer authentication, and verifies a Centrifuge connect command with
+  the token succeeds.
+- `controller` or `service/chat`: missing connect token returns Centrifuge
+  unauthorized error code `101`; expired tokens preserve the token-expired
+  distinction.
+
+#### 7. Wrong vs Correct
+
+Wrong:
+
+```go
+func ChatWebSocket(c *gin.Context) {
+    userID := sessions.Default(c).Get("id")
+    // Credentials are derived from a cookie before the Centrifuge handshake.
+}
+```
+
+Correct:
+
+```go
+node.OnConnecting(func(_ context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+    identity, internal, err := authservice.ParseDashboardAccessToken(event.Token)
+    if !internal || err != nil {
+        return centrifuge.ConnectReply{}, centrifuge.ErrorUnauthorized
+    }
+    if _, _, err := authservice.ValidateLoginSession(identity); err != nil {
+        return centrifuge.ConnectReply{}, centrifuge.ErrorUnauthorized
+    }
+    return centrifuge.ConnectReply{
+        Credentials: &centrifuge.Credentials{UserID: strconv.Itoa(identity.UserID)},
+    }, nil
+})
+```
+
 ### Chat message reactions
 
 #### 1. Scope / Trigger

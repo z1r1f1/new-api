@@ -15,6 +15,11 @@ import (
 
 const defaultFastServiceTier = "priority"
 
+const (
+	headerClaudeCodeProxyFast            = "X-Claude-Code-Proxy-Fast"
+	headerClaudeCodeProxyFastServiceTier = "X-Claude-Code-Proxy-Fast-Service-Tier"
+)
+
 var openAICompatTopLevelSessionKeys = []string{
 	"session_id",
 	"sessionId",
@@ -515,6 +520,17 @@ func parseBoolishAny(value interface{}) (bool, bool) {
 		return typed != 0, true
 	case uint64:
 		return typed != 0, true
+	default:
+		return false, false
+	}
+}
+
+func parseBoolishValue(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true, true
+	case "false", "0", "no", "off":
+		return false, true
 	default:
 		return false, false
 	}

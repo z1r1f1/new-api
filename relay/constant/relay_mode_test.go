@@ -1,17 +1,22 @@
 package constant
 
-import "testing"
+import (
+	"testing"
 
-func TestPath2RelayModePlaygroundImagesGenerations(t *testing.T) {
-	got := Path2RelayMode("/pg/images/generations")
-	if got != RelayModeImagesGenerations {
-		t.Fatalf("expected playground image generation path to use image relay mode, got %d", got)
+	"github.com/stretchr/testify/assert"
+)
+
+func TestPath2RelayMode(t *testing.T) {
+	tests := []struct {
+		path string
+		want int
+	}{
+		{path: "/v1/alpha/search", want: RelayModeAlphaSearch},
+		{path: "/v1/alpha/search?foo=1", want: RelayModeAlphaSearch},
 	}
-}
-
-func TestPath2RelayModePlaygroundImagesEdits(t *testing.T) {
-	got := Path2RelayMode("/pg/images/edits")
-	if got != RelayModeImagesEdits {
-		t.Fatalf("expected playground image edits path to use image edit relay mode, got %d", got)
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			assert.Equal(t, tt.want, Path2RelayMode(tt.path))
+		})
 	}
 }

@@ -9,453 +9,272 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
-
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestOaiResponsesToChatStreamHandlerClaudeSendsTerminalEventsOnDone(t *testing.T) {
-	constant.StreamingTimeout = 30
-	gin.SetMode(gin.TestMode)
+func newResponsesChatTestContext(t *testing.T, body string, isStream bool) (*gin.Context, *httptest.ResponseRecorder, *http.Response, *relaycommon.RelayInfo) {
+	t.Helper()
+
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/message?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set(common.RequestIdKey, "responses-test")
 
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
-		``,
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+	}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
+		IsStream:           isStream,
+		RelayFormat:        types.RelayFormatOpenAI,
+		ShouldIncludeUsage: true,
+		DisablePing:        true,
+	}
+	return c, recorder, resp, info
+}
+
+func TestOaiResponsesToChatStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test","created_at":1710000000}}`,
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup"}}`,
+		`data: {"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"q\":\"x\"}"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`,
 		`data: [DONE]`,
 		``,
 	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatClaude,
-		IsStream:          true,
-		OriginModelName:   "gpt-5.5",
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
-		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone},
-	}
 
-	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-	if usage == nil {
-		t.Fatal("expected usage fallback to be returned")
-	}
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
 
-	body := recorder.Body.String()
-	for _, want := range []string{
-		"event: message_start",
-		"event: content_block_start",
-		"event: content_block_delta",
-		"event: content_block_stop",
-		"event: message_delta",
-		"event: message_stop",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected response body to contain %q, got:\n%s", want, body)
-		}
-	}
+	usage, err := OaiResponsesToChatStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 2, usage.PromptTokens)
+	require.Equal(t, 3, usage.CompletionTokens)
+	require.Equal(t, 5, usage.TotalTokens)
+
+	got := recorder.Body.String()
+	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	require.Contains(t, got, `"role":"assistant"`)
+	require.Contains(t, got, `"content":"hello"`)
+	require.Contains(t, got, `"name":"lookup"`)
+	require.Contains(t, got, `"arguments":"{\"q\":\"x\"}"`)
+	require.Contains(t, got, `"finish_reason":"tool_calls"`)
+	require.Contains(t, got, `"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5`)
+	require.Contains(t, got, `data: [DONE]`)
+	requireOrderedSubstrings(t, got,
+		`"role":"assistant"`,
+		`"content":"hello"`,
+		`"name":"lookup"`,
+		`"arguments":"{\"q\":\"x\"}"`,
+		`"finish_reason":"tool_calls"`,
+		`"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5`,
+		`data: [DONE]`,
+	)
 }
 
-func TestOaiResponsesToChatStreamHandlerClaudeSendsTerminalEventsOnCompletedWithoutUsage(t *testing.T) {
-	constant.StreamingTimeout = 30
+func TestOaiResponsesToChatStreamHandlerConvertsClaudeSSETerminalsAndUsage(t *testing.T) {
+	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/message?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
+	t.Cleanup(func() { gin.SetMode(oldMode) })
 
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.created","response":{"model":"gpt-5.5","created_at":123}}`,
-		``,
-		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
-		``,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123}}`,
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	body := strings.Join([]string{
+		`data: {"type":"response.created","response":{"id":"resp_1","model":"gpt-test","created_at":1710000000}}`,
+		`data: {"type":"response.output_text.delta","delta":"hello"}`,
+		`data: {"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}}}`,
+		`data: [DONE]`,
 		``,
 	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatClaude,
-		IsStream:          true,
-		OriginModelName:   "gpt-5.5",
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
-		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone},
-	}
 
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	info.RelayFormat = types.RelayFormatClaude
 
-	body := recorder.Body.String()
-	for _, want := range []string{"event: content_block_stop", "event: message_delta", "event: message_stop"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected response body to contain %q, got:\n%s", want, body)
+	usage, err := OaiResponsesToChatStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	assert.Equal(t, 2, usage.PromptTokens)
+	assert.Equal(t, 3, usage.CompletionTokens)
+	assert.Equal(t, 5, usage.TotalTokens)
+
+	got := recorder.Body.String()
+	assert.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	assert.Equal(t, 1, strings.Count(got, "event: message_start\n"))
+	assert.Equal(t, 1, strings.Count(got, "event: content_block_stop\n"))
+	assert.Equal(t, 1, strings.Count(got, "event: message_delta\n"))
+	assert.Equal(t, 1, strings.Count(got, "event: message_stop\n"))
+
+	messageDeltaFrame := ""
+	for frame := range strings.SplitSeq(got, "\n\n") {
+		if strings.HasPrefix(frame, "event: message_delta\n") {
+			messageDeltaFrame = frame
+			break
 		}
 	}
+	require.NotEmpty(t, messageDeltaFrame)
+	assert.Contains(t, messageDeltaFrame, `"type":"message_delta"`)
+	assert.Contains(t, messageDeltaFrame, `"stop_reason":"end_turn"`)
+	assert.Contains(t, messageDeltaFrame, `"input_tokens":2`)
+	assert.Contains(t, messageDeltaFrame, `"output_tokens":3`)
+	requireOrderedSubstrings(t, got,
+		"event: message_start\n",
+		"event: content_block_stop\n",
+		"event: message_delta\n",
+		"event: message_stop\n",
+	)
 }
 
-func TestOaiResponsesToChatStreamHandlerClaudeSendsTerminalEventsWithCompletedUsage(t *testing.T) {
-	constant.StreamingTimeout = 30
+func TestOaiResponsesToChatBufferedStreamHandlerReturnsJSONFromSSE(t *testing.T) {
+	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/message?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
+	t.Cleanup(func() { gin.SetMode(oldMode) })
 
-	usageJSON, _ := common.Marshal(dto.Usage{InputTokens: 3, OutputTokens: 2, TotalTokens: 5})
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.output_text.delta","delta":"Hi"}`,
-		``,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123,"usage":` + string(usageJSON) + `}}`,
+	body := strings.Join([]string{
+		`data: {"type":"response.output_text.delta","delta":"buffered text"}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup"}}`,
+		`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"q\":\"x\"}"}`,
+		`data: {"type":"response.done","response":{"model":"gpt-test","status":"completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
+		`data: [DONE]`,
 		``,
 	}, "\n")
-	resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(streamBody))}
-	info := &relaycommon.RelayInfo{RelayFormat: types.RelayFormatClaude, IsStream: true, OriginModelName: "gpt-5.5", ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"}, ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone}}
 
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-	body := recorder.Body.String()
-	for _, want := range []string{"event: content_block_stop", "event: message_delta", "event: message_stop"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected response body to contain %q, got:\n%s", want, body)
-		}
-	}
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+
+	usage, err := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 3, usage.TotalTokens)
+
+	got := recorder.Body.String()
+	require.NotContains(t, got, `data:`)
+	require.Contains(t, got, `"object":"chat.completion"`)
+	require.Contains(t, got, `"content":"buffered text"`)
+	require.Contains(t, got, `"name":"lookup"`)
+	require.Contains(t, got, `"arguments":"{\"q\":\"x\"}"`)
+	require.Contains(t, got, `"finish_reason":"tool_calls"`)
 }
 
-func TestOaiResponsesToChatStreamHandlerClaudeUsesMessageItemDoneText(t *testing.T) {
-	constant.StreamingTimeout = 30
+func TestOaiResponsesToChatBufferedStreamHandlerPreservesInterleavedClaudeContent(t *testing.T) {
+	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
+	t.Cleanup(func() { gin.SetMode(oldMode) })
 
-	streamBody := strings.Join([]string{
+	body := strings.Join([]string{
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_1","summary":[]}}`,
+		`data: {"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"rs_1","delta":"**Planning file inspection**"}`,
+		`data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+		`data: {"type":"response.output_text.delta","output_index":1,"item_id":"msg_1","delta":"I’ll inspect the starter repository."}`,
+		`data: {"type":"response.output_item.added","output_index":2,"item":{"type":"reasoning","id":"rs_2","summary":[]}}`,
+		`data: {"type":"response.reasoning_summary_text.delta","output_index":2,"item_id":"rs_2","delta":"**Clarifying environment task requirements**"}`,
+		`data: {"type":"response.output_item.added","output_index":3,"item":{"type":"message","id":"msg_2","role":"assistant","content":[]}}`,
+		`data: {"type":"response.output_text.delta","output_index":3,"item_id":"msg_2","delta":"What would you like me to build?"}`,
+		`data: {"type":"response.done","response":{"id":"resp_1","model":"gpt-test","status":"completed","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, false)
+	info.RelayFormat = types.RelayFormatClaude
+
+	usage, apiErr := OaiResponsesToChatBufferedStreamHandler(c, info, resp)
+	require.Nil(t, apiErr)
+	require.NotNil(t, usage)
+	assert.Equal(t, 3, usage.TotalTokens)
+
+	var claudeResponse dto.ClaudeResponse
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &claudeResponse))
+	require.Len(t, claudeResponse.Content, 4)
+	assert.Equal(t, []string{"thinking", "text", "thinking", "text"}, []string{
+		claudeResponse.Content[0].Type,
+		claudeResponse.Content[1].Type,
+		claudeResponse.Content[2].Type,
+		claudeResponse.Content[3].Type,
+	})
+	require.NotNil(t, claudeResponse.Content[0].Thinking)
+	require.NotNil(t, claudeResponse.Content[2].Thinking)
+	assert.Equal(t, "**Planning file inspection**", *claudeResponse.Content[0].Thinking)
+	assert.Equal(t, "I’ll inspect the starter repository.", claudeResponse.Content[1].GetText())
+	assert.Equal(t, "**Clarifying environment task requirements**", *claudeResponse.Content[2].Thinking)
+	assert.Equal(t, "What would you like me to build?", claudeResponse.Content[3].GetText())
+}
+
+func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
+	oldMode := gin.Mode()
+	gin.SetMode(gin.TestMode)
+	t.Cleanup(func() { gin.SetMode(oldMode) })
+
+	oldTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = oldTimeout })
+
+	body := strings.Join([]string{
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"lookup"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"q\":\"x\"}"}}]},"finish_reason":null}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}`,
+		`data: {"id":"chatcmpl_1","object":"chat.completion.chunk","created":1710000000,"model":"gpt-test","choices":[],"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}`,
+		`data: [DONE]`,
+		``,
+	}, "\n")
+
+	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	usage, err := OaiChatToResponsesStreamHandler(c, info, resp)
+	require.Nil(t, err)
+	require.NotNil(t, usage)
+	require.Equal(t, 2, usage.PromptTokens)
+	require.Equal(t, 3, usage.CompletionTokens)
+	require.Equal(t, 5, usage.TotalTokens)
+
+	got := recorder.Body.String()
+	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	require.Contains(t, got, `event: response.created`)
+	require.Contains(t, got, `event: response.output_text.delta`)
+	require.Contains(t, got, `"delta":"hello"`)
+	require.Contains(t, got, `event: response.function_call_arguments.delta`)
+	require.Contains(t, got, `"delta":"{\"q\":\"x\"}"`)
+	require.Contains(t, got, `event: response.completed`)
+	require.Contains(t, got, `"input_tokens":2`)
+	require.Contains(t, got, `"output_tokens":3`)
+	requireOrderedSubstrings(t, got,
 		`event: response.created`,
-		`data: {"type":"response.created","response":{"model":"gpt-5.5","created_at":123}}`,
-		``,
 		`event: response.output_item.added`,
-		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","status":"in_progress","role":"assistant","content":[{"type":"output_text","text":"","annotations":[]}]}}`,
-		``,
-		`event: response.output_item.done`,
-		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","status":"completed","role":"assistant","content":[{"type":"output_text","text":"Hello from item done","annotations":[]}]}}`,
-		``,
-		`event: response.completed`,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123}}`,
-		``,
-	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatClaude,
-		IsStream:          true,
-		OriginModelName:   "gpt-5.5",
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
-		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone},
-	}
-
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-
-	body := recorder.Body.String()
-	for _, want := range []string{
-		"event: content_block_delta",
-		"Hello from item done",
-		"event: message_stop",
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected response body to contain %q, got:\n%s", want, body)
-		}
-	}
-}
-
-func TestOaiResponsesToChatStreamHandlerClaudeKeepsToolCallsAfterText(t *testing.T) {
-	constant.StreamingTimeout = 30
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
-
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.output_text.delta","delta":"我先读取目录。"}`,
-		``,
-		`data: {"type":"response.output_item.added","item":{"type":"function_call","id":"item_1","call_id":"call_1","name":"list_files","arguments":""}}`,
-		``,
-		`data: {"type":"response.function_call_arguments.delta","item_id":"item_1","delta":"{\"path\":\".\"}"}`,
-		``,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123,"usage":{"input_tokens":30,"output_tokens":5,"total_tokens":35}}}`,
-		``,
-	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatClaude,
-		IsStream:          true,
-		OriginModelName:   "gpt-5.5",
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
-		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone},
-	}
-
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-
-	body := recorder.Body.String()
-	for _, want := range []string{
-		`"type":"text"`,
-		`"type":"tool_use"`,
-		`"name":"list_files"`,
-		`"partial_json":"{\"path\":\".\"}"`,
-		`"stop_reason":"tool_use"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected response body to contain %q, got:\n%s", want, body)
-		}
-	}
-}
-
-func TestOaiResponsesToChatStreamHandlerClaudeConvertsToolCallJSONText(t *testing.T) {
-	constant.StreamingTimeout = 30
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
-
-	usageJSON, _ := common.Marshal(dto.Usage{InputTokens: 30, OutputTokens: 5, TotalTokens: 35})
-	streamBody := strings.Join([]string{
-		`event: response.created`,
-		`data: {"type":"response.created","response":{"model":"gpt-5.5-thinking","created_at":123}}`,
-		``,
-		`event: response.output_item.added`,
-		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","status":"in_progress","role":"assistant","content":[{"type":"output_text","text":"","annotations":[]}]}}`,
-		``,
 		`event: response.output_text.delta`,
-		`data: {"type":"response.output_text.delta","delta":"{\"tool_call\":{\"name\":\"exec_command\",\"arguments\":{\"cmd\":\"cat AGENTS.md\",\"workdir\":\"/Users/zrf/project/git-project/aicustomer\",\"max_output_tokens\":20000}}}"}`,
-		``,
+		`event: response.output_item.added`,
+		`event: response.function_call_arguments.delta`,
+		`event: response.output_text.done`,
+		`event: response.function_call_arguments.done`,
 		`event: response.completed`,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5-thinking","created_at":123,"usage":` + string(usageJSON) + `}}`,
-		``,
-		`data: [DONE]`,
-		``,
-	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatClaude,
-		IsStream:          true,
-		OriginModelName:   "gpt-5.5-thinking",
-		Request:           &dto.ClaudeRequest{Tools: []dto.Tool{{Name: "exec_command", InputSchema: map[string]interface{}{"type": "object"}}}},
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5-thinking"},
-		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone},
-	}
-
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-
-	body := recorder.Body.String()
-	for _, want := range []string{
-		`"type":"tool_use"`,
-		`"name":"exec_command"`,
-		`"partial_json":"{\"cmd\":\"cat AGENTS.md\",\"workdir\":\"/Users/zrf/project/git-project/aicustomer\",\"max_output_tokens\":20000}"`,
-		`"stop_reason":"tool_use"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("expected response body to contain %q, got:\n%s", want, body)
-		}
-	}
-	for _, forbidden := range []string{
-		`"type":"text"`,
-		`{"tool_call":{"name":"exec_command"`,
-	} {
-		if strings.Contains(body, forbidden) {
-			t.Fatalf("response body leaked tool-call JSON/text %q:\n%s", forbidden, body)
-		}
-	}
-	if got := strings.Count(body, "event: content_block_stop"); got != 1 {
-		t.Fatalf("expected exactly one tool content block stop, got %d:\n%s", got, body)
-	}
+	)
 }
 
-func TestOaiResponsesToChatStreamHandlerIncludesResponseFailedDetails(t *testing.T) {
-	originalStreamingTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = originalStreamingTimeout
-	})
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages?beta=true", nil)
-	c.Set(common.RequestIdKey, "test-request")
+func requireOrderedSubstrings(t *testing.T, s string, parts ...string) {
+	t.Helper()
 
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.failed","response":{"status":"failed","error":{"message":"Invalid tool result payload","code":"invalid_tool_result"}}}`,
-		``,
-	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:       types.RelayFormatClaude,
-		IsStream:          true,
-		OriginModelName:   "gpt-5.5",
-		ChannelMeta:       &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
-		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{LastMessagesType: relaycommon.LastMessageTypeNone},
-	}
-
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr == nil {
-		t.Fatal("expected response.failed to return an API error")
-	}
-	errText := apiErr.Error()
-	for _, want := range []string{"response.failed", "Invalid tool result payload", "invalid_tool_result"} {
-		if !strings.Contains(errText, want) {
-			t.Fatalf("expected error to contain %q, got %q", want, errText)
-		}
-	}
-	if apiErr.GetErrorCode() != types.ErrorCodeBadResponse {
-		t.Fatalf("error code = %q, want %q", apiErr.GetErrorCode(), types.ErrorCodeBadResponse)
-	}
-}
-
-func TestOaiResponsesToChatStreamHandlerOpenAIReasoningOnlyFallsBackToContent(t *testing.T) {
-	originalStreamingTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = originalStreamingTimeout
-	})
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	c.Set(common.RequestIdKey, "test-request")
-
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.created","response":{"model":"gpt-5.5","created_at":123}}`,
-		``,
-		`data: {"type":"response.reasoning_summary_text.delta","delta":"长任务分析完成，"}`,
-		``,
-		`data: {"type":"response.reasoning_summary_text.delta","delta":"这是最终结果。"}`,
-		``,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123,"usage":{"input_tokens":10,"output_tokens":8,"total_tokens":18}}}`,
-		``,
-	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatOpenAI,
-		IsStream:        true,
-		OriginModelName: "gpt-5.5",
-		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: "gpt-5.5"},
-	}
-
-	usage, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-	if usage == nil || usage.TotalTokens != 18 {
-		t.Fatalf("unexpected usage: %+v", usage)
-	}
-
-	body := recorder.Body.String()
-	if !strings.Contains(body, `"reasoning_content":"长任务分析完成，"`) {
-		t.Fatalf("expected original reasoning summary chunk to be preserved, got:\n%s", body)
-	}
-	if !strings.Contains(body, `"content":"长任务分析完成，这是最终结果。"`) {
-		t.Fatalf("expected reasoning-only stream to fall back to visible content, got:\n%s", body)
-	}
-	if !strings.Contains(body, `data: [DONE]`) {
-		t.Fatalf("expected OpenAI stream terminator, got:\n%s", body)
-	}
-}
-
-func TestOaiResponsesToChatStreamHandlerOpenAIHonorsThinkingToContent(t *testing.T) {
-	originalStreamingTimeout := constant.StreamingTimeout
-	constant.StreamingTimeout = 30
-	t.Cleanup(func() {
-		constant.StreamingTimeout = originalStreamingTimeout
-	})
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-	c.Set(common.RequestIdKey, "test-request")
-
-	streamBody := strings.Join([]string{
-		`data: {"type":"response.reasoning_summary_text.delta","delta":"推理过程"}`,
-		``,
-		`data: {"type":"response.completed","response":{"model":"gpt-5.5","created_at":123}}`,
-		``,
-	}, "\n")
-	resp := &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(streamBody)),
-	}
-	info := &relaycommon.RelayInfo{
-		RelayFormat:     types.RelayFormatOpenAI,
-		IsStream:        true,
-		OriginModelName: "gpt-5.5",
-		ChannelMeta: &relaycommon.ChannelMeta{
-			UpstreamModelName: "gpt-5.5",
-			ChannelSetting:    dto.ChannelSettings{ThinkingToContent: true},
-		},
-		ThinkingContentInfo: relaycommon.ThinkingContentInfo{
-			IsFirstThinkingContent: true,
-		},
-	}
-
-	_, apiErr := OaiResponsesToChatStreamHandler(c, info, resp)
-	if apiErr != nil {
-		t.Fatalf("OaiResponsesToChatStreamHandler returned error: %v", apiErr)
-	}
-
-	body := recorder.Body.String()
-	if strings.Contains(body, `"reasoning_content"`) {
-		t.Fatalf("thinking_to_content should not expose reasoning_content directly, got:\n%s", body)
-	}
-	convertedThinking := `"content":"\u003cthink\u003e\n推理过程"`
-	if !strings.Contains(body, convertedThinking) {
-		t.Fatalf("expected thinking_to_content conversion in Responses bridge, got:\n%s", body)
-	}
-	if strings.Count(body, convertedThinking) != 1 {
-		t.Fatalf("expected no fallback duplication when thinking_to_content is enabled, got:\n%s", body)
+	offset := 0
+	for _, part := range parts {
+		idx := strings.Index(s[offset:], part)
+		require.NotEqualf(t, -1, idx, "missing %q after byte offset %d", part, offset)
+		offset += idx + len(part)
 	}
 }

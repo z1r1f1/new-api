@@ -7,10 +7,10 @@ import (
 )
 
 func TestPerfMetricIncrementExprQualifiesPostgreSQLColumn(t *testing.T) {
-	originalPostgreSQL := common.UsingPostgreSQL
-	common.UsingPostgreSQL = true
+	originalMainDatabaseType := common.MainDatabaseType()
+	common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
 	t.Cleanup(func() {
-		common.UsingPostgreSQL = originalPostgreSQL
+		common.SetMainDatabaseType(originalMainDatabaseType)
 	})
 
 	expr := perfMetricIncrementExpr("generation_ms", 12)
@@ -23,10 +23,10 @@ func TestPerfMetricIncrementExprQualifiesPostgreSQLColumn(t *testing.T) {
 }
 
 func TestPerfMetricIncrementExprQualifiesGenericColumn(t *testing.T) {
-	originalPostgreSQL := common.UsingPostgreSQL
-	common.UsingPostgreSQL = false
+	originalMainDatabaseType := common.MainDatabaseType()
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	t.Cleanup(func() {
-		common.UsingPostgreSQL = originalPostgreSQL
+		common.SetMainDatabaseType(originalMainDatabaseType)
 	})
 
 	expr := perfMetricIncrementExpr("generation_ms", 12)

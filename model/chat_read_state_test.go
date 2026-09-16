@@ -59,15 +59,15 @@ func TestChatReadStateIncrementInitializesMissingUnreadFromHistory(t *testing.T)
 }
 
 func TestChatUnreadCountIncrementSQLQualifiesPostgreSQLTable(t *testing.T) {
-	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousMainDatabaseType := common.MainDatabaseType()
 	t.Cleanup(func() {
-		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.SetMainDatabaseType(previousMainDatabaseType)
 	})
 
-	common.UsingPostgreSQL = true
+	common.SetMainDatabaseType(common.DatabaseTypePostgreSQL)
 	assert.Equal(t, `"chat_read_states"."unread_count" + ?`, chatUnreadCountIncrementSQL())
 
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	assert.Equal(t, "unread_count + ?", chatUnreadCountIncrementSQL())
 }
 

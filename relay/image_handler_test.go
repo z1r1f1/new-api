@@ -19,9 +19,11 @@ import (
 func setupImageHandlerTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	previousMainDatabaseType := common.MainDatabaseType()
+	previousDB := model.DB
+	previousLogDB := model.LOG_DB
+	previousRedisEnabled := common.RedisEnabled
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 
 	db, err := gorm.Open(sqlite.Open("file:"+strings.ReplaceAll(t.Name(), "/", "_")+"?mode=memory&cache=shared"), &gorm.Config{})
@@ -38,6 +40,10 @@ func setupImageHandlerTestDB(t *testing.T) *gorm.DB {
 		if err == nil {
 			_ = sqlDB.Close()
 		}
+		common.SetMainDatabaseType(previousMainDatabaseType)
+		common.RedisEnabled = previousRedisEnabled
+		model.DB = previousDB
+		model.LOG_DB = previousLogDB
 	})
 	return db
 }
@@ -83,28 +89,6 @@ func TestRecordImageGenerationDrawingLogPersistsOpenAIImageResponse(t *testing.T
 	}
 	if row.SubmitTime != startedAt.UnixMilli() || row.StartTime != startedAt.UnixMilli() {
 		t.Fatalf("unexpected timestamps: %#v", row)
-	}
-}
-
-func TestRecordImageGenerationDrawingLogSkipsChatGPTWebDuplicate(t *testing.T) {
-	db := setupImageHandlerTestDB(t)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	common.SetContextKey(ctx, constant.ContextKeyImageGenerationResponse, &dto.ImageResponse{
-		Data: []dto.ImageData{{Url: "https://example.com/generated.png"}},
-	})
-	info := &relaycommon.RelayInfo{
-		UserId:      7,
-		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeChatGPTImage, ChannelId: 12},
-	}
-
-	recordImageGenerationDrawingLog(ctx, info, &dto.ImageRequest{Model: "gpt-image-2", Prompt: "draw cat"})
-
-	var count int64
-	if err := db.Model(&model.Midjourney{}).Count(&count).Error; err != nil {
-		t.Fatalf("count rows: %v", err)
-	}
-	if count != 0 {
-		t.Fatalf("expected no duplicate ChatGPT Web drawing log, got %d", count)
 	}
 }
 

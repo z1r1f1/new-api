@@ -7,8 +7,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	chatservice "github.com/QuantumNous/new-api/service/chat"
-	"github.com/centrifugal/centrifuge"
-	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -353,20 +351,12 @@ func SetChatMemberMuted(c *gin.Context) {
 }
 
 func ChatWebSocket(c *gin.Context) {
-	userId, ok := currentChatSessionUserID(c)
-	if !ok {
-		chatJSON(c, http.StatusUnauthorized, false, "not logged in", nil)
-		return
-	}
 	server, err := chatservice.DefaultRealtimeServer()
 	if err != nil {
 		chatJSON(c, http.StatusInternalServerError, false, "chat realtime unavailable", nil)
 		return
 	}
-	request := c.Request.WithContext(centrifuge.SetCredentials(c.Request.Context(), &centrifuge.Credentials{
-		UserID: strconv.Itoa(userId),
-	}))
-	server.ServeHTTP(c.Writer, request)
+	server.ServeHTTP(c.Writer, c.Request)
 }
 
 func getChatService(c *gin.Context) (*chatservice.Service, bool) {
@@ -388,15 +378,6 @@ func currentChatUserID(c *gin.Context) (int, bool) {
 		return 0, false
 	}
 	return normalizeChatUserID(value)
-}
-
-func currentChatSessionUserID(c *gin.Context) (int, bool) {
-	session := sessions.Default(c)
-	status, ok := normalizeChatUserID(session.Get("status"))
-	if !ok || status != common.UserStatusEnabled {
-		return 0, false
-	}
-	return normalizeChatUserID(session.Get("id"))
 }
 
 func normalizeChatUserID(value any) (int, bool) {

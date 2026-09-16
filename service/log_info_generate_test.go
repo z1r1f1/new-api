@@ -20,35 +20,10 @@ func TestGenerateTextOtherInfoRecordsFastServiceTierOnWhenRequestHasFast(t *test
 	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["fast_service_tier"] != true {
-		t.Fatalf("expected fast_service_tier=true, got %#v", other["fast_service_tier"])
-	}
-}
-
-func TestGenerateTextOtherInfoRecordsChatGPTWebTiming(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"gpt-5.5-thinking"}`))
-	ctx.Request.Header.Set("Content-Type", "application/json")
-	timing := NewChatGPTWebTiming()
-	timing.Set("request_kind", "chat")
-	timing.AddDuration("stream_open_ms", 12*time.Millisecond)
-	SetChatGPTWebTiming(ctx, timing)
-	now := time.Now()
-	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
-
-	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
-
-	rawTiming, ok := other["chatgpt_web_timing"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected chatgpt_web_timing map, got %#v", other["chatgpt_web_timing"])
-	}
-	if rawTiming["request_kind"] != "chat" {
-		t.Fatalf("expected request_kind=chat, got %#v", rawTiming["request_kind"])
-	}
-	if rawTiming["stream_open_ms"] != int64(12) {
-		t.Fatalf("expected stream_open_ms=12, got %#v", rawTiming["stream_open_ms"])
+	if snapshot["fast_service_tier"] != true {
+		t.Fatalf("expected fast_service_tier=true, got %#v", snapshot["fast_service_tier"])
 	}
 }
 
@@ -61,12 +36,13 @@ func TestGenerateTextOtherInfoRecordsFastServiceTierOffWhenRequestDoesNotHaveFas
 	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["fast_service_tier"] != false {
-		t.Fatalf("expected fast_service_tier=false, got %#v", other["fast_service_tier"])
+	if snapshot["fast_service_tier"] != false {
+		t.Fatalf("expected fast_service_tier=false, got %#v", snapshot["fast_service_tier"])
 	}
-	if other["request_fast"] != false {
-		t.Fatalf("expected request_fast=false, got %#v", other["request_fast"])
+	if snapshot["request_fast"] != false {
+		t.Fatalf("expected request_fast=false, got %#v", snapshot["request_fast"])
 	}
 }
 
@@ -86,18 +62,19 @@ func TestGenerateTextOtherInfoRecordsRequestServiceTierFromFastAlias(t *testing.
 	}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["request_service_tier"] != "priority" {
-		t.Fatalf("expected fast alias to log request_service_tier=priority, got %#v", other["request_service_tier"])
+	if snapshot["request_service_tier"] != "priority" {
+		t.Fatalf("expected fast alias to log request_service_tier=priority, got %#v", snapshot["request_service_tier"])
 	}
-	if other["request_fast"] != true {
-		t.Fatalf("expected request_fast=true, got %#v", other["request_fast"])
+	if snapshot["request_fast"] != true {
+		t.Fatalf("expected request_fast=true, got %#v", snapshot["request_fast"])
 	}
-	if other["request_fast_service_tier"] != "priority" {
-		t.Fatalf("expected request_fast_service_tier=priority, got %#v", other["request_fast_service_tier"])
+	if snapshot["request_fast_service_tier"] != "priority" {
+		t.Fatalf("expected request_fast_service_tier=priority, got %#v", snapshot["request_fast_service_tier"])
 	}
-	if other["request_effort"] != "medium" {
-		t.Fatalf("expected request_effort=medium, got %#v", other["request_effort"])
+	if snapshot["request_effort"] != "medium" {
+		t.Fatalf("expected request_effort=medium, got %#v", snapshot["request_effort"])
 	}
 }
 
@@ -123,12 +100,13 @@ func TestGenerateTextOtherInfoRecordsResponseServiceTier(t *testing.T) {
 	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["request_service_tier"] != "priority" {
-		t.Fatalf("expected request_service_tier=priority, got %#v", other["request_service_tier"])
+	if snapshot["request_service_tier"] != "priority" {
+		t.Fatalf("expected request_service_tier=priority, got %#v", snapshot["request_service_tier"])
 	}
-	if other["response_service_tier"] != "default" {
-		t.Fatalf("expected response_service_tier=default, got %#v", other["response_service_tier"])
+	if snapshot["response_service_tier"] != "default" {
+		t.Fatalf("expected response_service_tier=default, got %#v", snapshot["response_service_tier"])
 	}
 }
 
@@ -142,9 +120,10 @@ func TestGenerateTextOtherInfoRecordsResponseServiceTierFromContext(t *testing.T
 	relayInfo := &relaycommon.RelayInfo{StartTime: now, FirstResponseTime: now, ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["response_service_tier"] != "default" {
-		t.Fatalf("expected response_service_tier=default from context, got %#v", other["response_service_tier"])
+	if snapshot["response_service_tier"] != "default" {
+		t.Fatalf("expected response_service_tier=default from context, got %#v", snapshot["response_service_tier"])
 	}
 }
 
@@ -164,18 +143,19 @@ func TestGenerateTextOtherInfoRecordsRequestEffortAndServiceTierFromBillingInput
 	}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["request_service_tier"] != "priority" {
-		t.Fatalf("expected request_service_tier=priority, got %#v", other["request_service_tier"])
+	if snapshot["request_service_tier"] != "priority" {
+		t.Fatalf("expected request_service_tier=priority, got %#v", snapshot["request_service_tier"])
 	}
-	if other["request_effort"] != "high" {
-		t.Fatalf("expected request_effort=high, got %#v", other["request_effort"])
+	if snapshot["request_effort"] != "high" {
+		t.Fatalf("expected request_effort=high, got %#v", snapshot["request_effort"])
 	}
-	if other["request_fast"] != true {
-		t.Fatalf("expected request_fast=true when request_service_tier=priority, got %#v", other["request_fast"])
+	if snapshot["request_fast"] != true {
+		t.Fatalf("expected request_fast=true when request_service_tier=priority, got %#v", snapshot["request_fast"])
 	}
-	if other["request_fast_service_tier"] != "priority" {
-		t.Fatalf("expected request_fast_service_tier=priority, got %#v", other["request_fast_service_tier"])
+	if snapshot["request_fast_service_tier"] != "priority" {
+		t.Fatalf("expected request_fast_service_tier=priority, got %#v", snapshot["request_fast_service_tier"])
 	}
 }
 
@@ -195,9 +175,10 @@ func TestGenerateTextOtherInfoRecordsRequestEffortFromOutputConfig(t *testing.T)
 	}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["request_effort"] != "xhigh" {
-		t.Fatalf("expected request_effort=xhigh, got %#v", other["request_effort"])
+	if snapshot["request_effort"] != "xhigh" {
+		t.Fatalf("expected request_effort=xhigh, got %#v", snapshot["request_effort"])
 	}
 }
 
@@ -220,21 +201,22 @@ func TestGenerateTextOtherInfoRecordsFastConversionAndResponseTier(t *testing.T)
 	}
 
 	other := GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	if other["request_fast"] != true {
-		t.Fatalf("expected request_fast=true, got %#v", other["request_fast"])
+	if snapshot["request_fast"] != true {
+		t.Fatalf("expected request_fast=true, got %#v", snapshot["request_fast"])
 	}
-	if other["request_fast_service_tier"] != "priority" {
-		t.Fatalf("expected request_fast_service_tier=priority, got %#v", other["request_fast_service_tier"])
+	if snapshot["request_fast_service_tier"] != "priority" {
+		t.Fatalf("expected request_fast_service_tier=priority, got %#v", snapshot["request_fast_service_tier"])
 	}
-	if other["request_service_tier"] != "priority" {
-		t.Fatalf("expected request_service_tier=priority, got %#v", other["request_service_tier"])
+	if snapshot["request_service_tier"] != "priority" {
+		t.Fatalf("expected request_service_tier=priority, got %#v", snapshot["request_service_tier"])
 	}
-	if other["request_effort"] != "medium" {
-		t.Fatalf("expected request_effort=medium, got %#v", other["request_effort"])
+	if snapshot["request_effort"] != "medium" {
+		t.Fatalf("expected request_effort=medium, got %#v", snapshot["request_effort"])
 	}
-	if other["response_service_tier"] != "default" {
-		t.Fatalf("expected response_service_tier=default, got %#v", other["response_service_tier"])
+	if snapshot["response_service_tier"] != "default" {
+		t.Fatalf("expected response_service_tier=default, got %#v", snapshot["response_service_tier"])
 	}
 }
 
@@ -250,8 +232,9 @@ func TestGenerateTextOtherInfoRecordsRequestProtocol(t *testing.T) {
 		FirstResponseTime: now,
 		ChannelMeta:       &relaycommon.ChannelMeta{},
 	}, 1, 1, 1, 0, 0, 0, -1)
-	if httpOther["request_protocol"] != "http" {
-		t.Fatalf("expected request_protocol=http, got %#v", httpOther["request_protocol"])
+	httpSnapshot := httpOther.Snapshot()
+	if httpSnapshot["request_protocol"] != "http" {
+		t.Fatalf("expected request_protocol=http, got %#v", httpSnapshot["request_protocol"])
 	}
 
 	wsCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -264,8 +247,9 @@ func TestGenerateTextOtherInfoRecordsRequestProtocol(t *testing.T) {
 		FirstResponseTime: now,
 		ChannelMeta:       &relaycommon.ChannelMeta{},
 	}, 1, 1, 1, 0, 0, 0, -1)
-	if wsOther["request_protocol"] != "websocket" {
-		t.Fatalf("expected request_protocol=websocket, got %#v", wsOther["request_protocol"])
+	wsSnapshot := wsOther.Snapshot()
+	if wsSnapshot["request_protocol"] != "websocket" {
+		t.Fatalf("expected request_protocol=websocket, got %#v", wsSnapshot["request_protocol"])
 	}
 }
 
@@ -287,10 +271,11 @@ func TestGenerateTextOtherInfoRecordsSafeRequestHeadersInAdminInfo(t *testing.T)
 		FirstResponseTime: now,
 		ChannelMeta:       &relaycommon.ChannelMeta{},
 	}, 1, 1, 1, 0, 0, 0, -1)
+	snapshot := other.Snapshot()
 
-	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	adminInfo, ok := snapshot["admin_info"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("expected admin_info map, got %#v", other["admin_info"])
+		t.Fatalf("expected admin_info map, got %#v", snapshot["admin_info"])
 	}
 	headers, ok := adminInfo["request_headers"].(map[string]string)
 	if !ok {
@@ -310,7 +295,7 @@ func TestGenerateTextOtherInfoRecordsSafeRequestHeadersInAdminInfo(t *testing.T)
 			t.Fatalf("expected sensitive header %s to be filtered, got %#v", sensitive, headers)
 		}
 	}
-	if _, ok := other["request_headers"]; ok {
-		t.Fatalf("request_headers must stay under admin_info, got top-level %#v", other["request_headers"])
+	if _, ok := snapshot["request_headers"]; ok {
+		t.Fatalf("request_headers must stay under admin_info, got top-level %#v", snapshot["request_headers"])
 	}
 }

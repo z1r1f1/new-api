@@ -37,14 +37,10 @@ func setupChatServiceTestDB(t *testing.T) {
 
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
-	previousUsingSQLite := common.UsingSQLite
-	previousUsingMySQL := common.UsingMySQL
-	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousMainDatabaseType := common.MainDatabaseType()
 	previousRedisEnabled := common.RedisEnabled
 
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
@@ -69,9 +65,7 @@ func setupChatServiceTestDB(t *testing.T) {
 		}
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
-		common.UsingSQLite = previousUsingSQLite
-		common.UsingMySQL = previousUsingMySQL
-		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.SetMainDatabaseType(previousMainDatabaseType)
 		common.RedisEnabled = previousRedisEnabled
 	})
 }
@@ -81,14 +75,10 @@ func setupChatServiceTestDBWithoutChatTables(t *testing.T) {
 
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
-	previousUsingSQLite := common.UsingSQLite
-	previousUsingMySQL := common.UsingMySQL
-	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousMainDatabaseType := common.MainDatabaseType()
 	previousRedisEnabled := common.RedisEnabled
 
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
@@ -106,9 +96,7 @@ func setupChatServiceTestDBWithoutChatTables(t *testing.T) {
 		}
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
-		common.UsingSQLite = previousUsingSQLite
-		common.UsingMySQL = previousUsingMySQL
-		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.SetMainDatabaseType(previousMainDatabaseType)
 		common.RedisEnabled = previousRedisEnabled
 	})
 }

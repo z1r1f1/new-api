@@ -3,11 +3,12 @@ package model
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
+	"github.com/QuantumNous/new-api/dto"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -104,21 +105,39 @@ func getChannelQuery(group string, model string, retry int) (*gorm.DB, error) {
 	return channelQuery, nil
 }
 
-func GetChannel(group string, model string, retry int) (*Channel, error) {
+func GetChannel(
+	group string,
+	model string,
+	retry int,
+	filters []dto.ChannelFilter,
+) (*Channel, error) {
 	var abilities []Ability
-
-	var err error = nil
-	channelQuery, err := getChannelQuery(group, model, retry)
+	err := DB.Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).Order("priority DESC, weight DESC").Find(&abilities).Error
 	if err != nil {
 		return nil, err
 	}
-	if common.UsingSQLite || common.UsingPostgreSQL {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	} else {
-		err = channelQuery.Order("weight DESC").Find(&abilities).Error
-	}
-	if err != nil {
-		return nil, err
+	abilities = filterAbilitiesByConstraints(abilities, model, filters)
+	if len(abilities) > 0 {
+		priorities := make([]int64, 0)
+		seen := make(map[int64]bool)
+		for _, ability := range abilities {
+			priority := int64(0)
+			if ability.Priority != nil {
+				priority = *ability.Priority
+			}
+			if !seen[priority] {
+				seen[priority] = true
+				priorities = append(priorities, priority)
+			}
+		}
+		sort.Slice(priorities, func(i, j int) bool { return priorities[i] > priorities[j] })
+		if retry >= len(priorities) {
+			retry = len(priorities) - 1
+		}
+		targetPriority := priorities[retry]
+		abilities = lo.Filter(abilities, func(ability Ability, _ int) bool {
+			return ability.Priority == nil && targetPriority == 0 || ability.Priority != nil && *ability.Priority == targetPriority
+		})
 	}
 	channel := Channel{}
 	if len(abilities) > 0 {
@@ -144,65 +163,54 @@ func GetChannel(group string, model string, retry int) (*Channel, error) {
 	return &channel, err
 }
 
-// GetChannelWithPreference mirrors GetChannel while preferring accepted
-// candidates across priorities when a preference predicate is supplied.
-func GetChannelWithPreference(group string, model string, retry int, prefer func(*Channel) bool) (*Channel, error) {
-	if prefer == nil {
-		return GetChannel(group, model, retry)
-	}
-
-	abilities, err := getAllChannelAbilities(group, model)
-	if err != nil {
-		return nil, err
-	}
+// filterAbilitiesByConstraints applies the same ChannelSatisfiesFilters
+// predicate used by the memory-cache path. A failed channel lookup fails
+// closed when a task-plugin identity is required and fails open otherwise.
+func filterAbilitiesByConstraints(abilities []Ability, modelName string, filters []dto.ChannelFilter) []Ability {
 	if len(abilities) == 0 {
-		return nil, nil
+		return nil
 	}
 
-	candidates := make([]*Channel, 0, len(abilities))
+	channelIds := make([]int, 0, len(abilities))
+	seen := make(map[int]struct{}, len(abilities))
 	for _, ability := range abilities {
-		channel := Channel{}
-		if err := DB.First(&channel, "id = ?", ability.ChannelId).Error; err != nil {
-			return nil, err
+		if _, ok := seen[ability.ChannelId]; ok {
+			continue
 		}
-		candidates = append(candidates, &channel)
+		seen[ability.ChannelId] = struct{}{}
+		channelIds = append(channelIds, ability.ChannelId)
 	}
 
-	preferred := make([]*Channel, 0, len(candidates))
-	for _, channel := range candidates {
-		if prefer(channel) {
-			preferred = append(preferred, channel)
+	var channels []*Channel
+	if err := DB.Where("id IN ?", channelIds).Find(&channels).Error; err != nil {
+		if identityFilterRequiresKey(filters) {
+			return nil
 		}
-	}
-	if len(preferred) > 0 {
-		candidates = preferred
+		return abilities
 	}
 
-	return selectRandomSatisfiedChannelFromCandidates(candidates, retry, group, model)
+	channelsByID := make(map[int]*Channel, len(channels))
+	for _, channel := range channels {
+		channelsByID[channel.Id] = channel
+	}
+
+	filtered := make([]Ability, 0, len(abilities))
+	for _, ability := range abilities {
+		channel := channelsByID[ability.ChannelId]
+		if ok, _ := ChannelSatisfiesFilters(channel, modelName, filters); ok {
+			filtered = append(filtered, ability)
+		}
+	}
+	return filtered
 }
 
-func getAllChannelAbilities(group string, modelName string) ([]Ability, error) {
-	var abilities []Ability
-	query := func(model string) *gorm.DB {
-		return DB.Model(&Ability{}).
-			Where(commonGroupCol+" = ? and model = ? and enabled = ?", group, model, true).
-			Order("priority DESC").
-			Order("weight DESC")
+func identityFilterRequiresKey(filters []dto.ChannelFilter) bool {
+	for _, filter := range filters {
+		if filter.Kind == dto.FilterTaskPluginIdentity && filter.TaskPluginKey != "" {
+			return true
+		}
 	}
-	if err := query(modelName).Find(&abilities).Error; err != nil {
-		return nil, err
-	}
-	if len(abilities) > 0 {
-		return abilities, nil
-	}
-	normalized := ratio_setting.FormatMatchingModelName(modelName)
-	if normalized == "" || normalized == modelName {
-		return abilities, nil
-	}
-	if err := query(normalized).Find(&abilities).Error; err != nil {
-		return nil, err
-	}
-	return abilities, nil
+	return false
 }
 
 func (channel *Channel) AddAbilities(tx *gorm.DB) error {
@@ -278,7 +286,7 @@ func (channel *Channel) UpdateAbilities(tx *gorm.DB) error {
 	}
 
 	// Then add new abilities
-	models_ := strings.Split(channel.Models, ",")
+	models_ := channel.GetModels()
 	groups_ := strings.Split(channel.Group, ",")
 	abilitySet := make(map[string]struct{})
 	abilities := make([]Ability, 0, len(models_))
@@ -354,7 +362,7 @@ func FixAbility() (int, int, error) {
 	defer fixLock.Unlock()
 
 	// truncate abilities table
-	if common.UsingSQLite {
+	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		err := DB.Exec("DELETE FROM abilities").Error
 		if err != nil {
 			common.SysLog(fmt.Sprintf("Delete abilities failed: %s", err.Error()))

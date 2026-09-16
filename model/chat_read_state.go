@@ -153,7 +153,7 @@ func IncrementChatUnreadStates(conversationID int, userIDs []int) error {
 }
 
 func chatUnreadCountIncrementSQL() string {
-	if common.UsingPostgreSQL {
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
 		return `"chat_read_states"."unread_count" + ?`
 	}
 	return "unread_count + ?"

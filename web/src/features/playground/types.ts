@@ -1,0 +1,263 @@
+/*
+Copyright (C) 2023-2026 QuantumNous
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the
+License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+For commercial licensing, please contact support@quantumnous.com
+*/
+// Message types
+export type MessageRole = 'user' | 'assistant' | 'system'
+
+export type MessageStatus = 'loading' | 'streaming' | 'complete' | 'error'
+
+export type PlaygroundMessageLayoutMode = 'alternating' | 'left'
+
+export interface MessageVersion {
+  id: string
+  content: string
+}
+
+export interface GeneratedImage {
+  url: string
+  alt: string
+}
+
+export interface Message {
+  key: string
+  from: MessageRole
+  versions: MessageVersion[]
+  createdAt?: number
+  startedAt?: number
+  completedAt?: number
+  durationMs?: number
+  sources?: { href: string; title: string }[]
+  reasoning?: {
+    content: string
+    duration: number
+    startedAt?: number
+    completedAt?: number
+    durationMs?: number
+  }
+  isReasoningStreaming?: boolean
+  isReasoningComplete?: boolean
+  isContentComplete?: boolean
+  status?: MessageStatus
+  errorCode?: string | null
+}
+
+export type PlaygroundDebugTab = 'preview' | 'request' | 'response'
+
+export interface PlaygroundDebugData {
+  previewRequest: unknown | null
+  gatewayRequest: unknown | null
+  upstreamRequest: unknown | null
+  request: unknown | null
+  response: unknown | null
+  sseMessages: string[]
+  timestamp: string | null
+  previewTimestamp: string | null
+  isStreaming: boolean
+}
+
+export interface PlaygroundWorkbenchState {
+  showSettings: boolean
+  showDebugPanel: boolean
+  customRequestMode: boolean
+  customRequestBody: string
+  searchEnabled: boolean
+}
+
+export interface PlaygroundSession {
+  id: string
+  title: string
+  messages: Message[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PendingImageGenerationTask {
+  taskId: string
+  messageKey: string
+  sessionId: string
+  debugId?: string
+  startedAt: number
+  updatedAt: string
+}
+
+export interface PlaygroundImportData {
+  config?: Partial<PlaygroundConfig>
+  inputs?: Partial<PlaygroundConfig>
+  parameterEnabled?: Partial<ParameterEnabled>
+  customRequestMode?: boolean
+  customRequestBody?: string
+  showDebugPanel?: boolean
+  searchEnabled?: boolean
+  messages?: Message[]
+  sessions?: PlaygroundSession[]
+  activeSessionId?: string
+}
+
+export type PlaygroundRequestPayload =
+  | ChatCompletionRequest
+  | ImageGenerationRequest
+  | Record<string, unknown>
+
+// API payload types
+export interface ChatCompletionMessage {
+  role: MessageRole
+  content: string | ContentPart[]
+}
+
+export interface ContentPart {
+  type: 'text' | 'image_url'
+  text?: string
+  image_url?: {
+    url: string
+  }
+}
+
+export interface ChatCompletionRequest {
+  model: string
+  group?: string
+  messages: ChatCompletionMessage[]
+  stream: boolean
+  web_search_options?: {
+    search_context_size?: 'low' | 'medium' | 'high'
+  }
+  chatgpt_web_deep_research?: boolean
+  temperature?: number
+  top_p?: number
+  max_tokens?: number
+  frequency_penalty?: number
+  presence_penalty?: number
+  seed?: number
+}
+
+export interface ChatCompletionChunk {
+  id: string
+  object: string
+  created: number
+  model: string
+  choices: Array<{
+    index: number
+    delta: {
+      role?: MessageRole
+      content?: string
+      reasoning_content?: string
+      reasoning?: string
+    }
+    finish_reason: string | null
+  }>
+}
+
+export interface ChatCompletionResponse {
+  id: string
+  object: string
+  created: number
+  model: string
+  choices: Array<{
+    index: number
+    message: {
+      role: MessageRole
+      content: string
+      reasoning_content?: string
+    }
+    finish_reason: string
+  }>
+  usage?: {
+    prompt_tokens: number
+    completion_tokens: number
+    total_tokens: number
+  }
+}
+
+export interface ImageGenerationRequest {
+  model: string
+  group?: string
+  prompt: string
+  [key: string]: unknown
+}
+
+export interface ImageGenerationDataItem {
+  url?: string
+  b64_json?: string
+  revised_prompt?: string
+}
+
+export interface ImageGenerationResult {
+  data?: ImageGenerationDataItem[]
+  error?: {
+    message?: string
+    type?: string
+    code?: string
+  }
+  message?: string
+  [key: string]: unknown
+}
+
+export interface ImageGenerationSubmitResponse extends ImageGenerationResult {
+  task_id?: string
+  taskId?: string
+  id?: string
+  status?: string
+  poll_url?: string
+}
+
+export interface ImageGenerationTaskResponse {
+  task_id?: string
+  taskId?: string
+  id?: string
+  status?: string
+  raw_status?: string
+  progress?: string
+  fail_reason?: string
+  data?: ImageGenerationResult
+  [key: string]: unknown
+}
+
+// Configuration types
+export interface PlaygroundConfig {
+  model: string
+  group: string
+  temperature: number
+  top_p: number
+  max_tokens: number
+  frequency_penalty: number
+  presence_penalty: number
+  seed: number | null
+  stream: boolean
+  deep_research: boolean
+}
+
+export interface ParameterEnabled {
+  temperature: boolean
+  top_p: boolean
+  max_tokens: boolean
+  frequency_penalty: boolean
+  presence_penalty: boolean
+  seed: boolean
+}
+
+// Model and group options
+export interface ModelOption {
+  label: string
+  value: string
+}
+
+export interface GroupOption {
+  label: string
+  value: string
+  ratio: number
+  desc?: string
+}

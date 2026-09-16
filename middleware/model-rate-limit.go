@@ -3,16 +3,15 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/common/limiter"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -21,11 +20,8 @@ import (
 const (
 	ModelRequestRateLimitCountMark        = "MRRL"
 	ModelRequestRateLimitSuccessCountMark = "MRRLS"
+	modelRateLimitTimeFormat              = "2006-01-02T15:04:05.000Z"
 )
-
-type ModelRequestRateLimitCommit func(success bool)
-
-func noopModelRequestRateLimitCommit(bool) {}
 
 // 检查Redis中的请求限制
 func checkRedisRateLimit(ctx context.Context, rdb *redis.Client, key string, maxCount int, duration int64) (bool, error) {
@@ -47,13 +43,13 @@ func checkRedisRateLimit(ctx context.Context, rdb *redis.Client, key string, max
 
 	// 检查时间窗口
 	oldTimeStr, _ := rdb.LIndex(ctx, key, -1).Result()
-	oldTime, err := time.Parse(timeFormat, oldTimeStr)
+	oldTime, err := time.Parse(modelRateLimitTimeFormat, oldTimeStr)
 	if err != nil {
 		return false, err
 	}
 
-	nowTimeStr := time.Now().Format(timeFormat)
-	nowTime, err := time.Parse(timeFormat, nowTimeStr)
+	nowTimeStr := time.Now().UTC().Format(modelRateLimitTimeFormat)
+	nowTime, err := time.Parse(modelRateLimitTimeFormat, nowTimeStr)
 	if err != nil {
 		return false, err
 	}
@@ -74,47 +70,10 @@ func recordRedisRequest(ctx context.Context, rdb *redis.Client, key string, maxC
 		return
 	}
 
-	now := time.Now().Format(timeFormat)
+	now := time.Now().UTC().Format(modelRateLimitTimeFormat)
 	rdb.LPush(ctx, key, now)
 	rdb.LTrim(ctx, key, 0, int64(maxCount-1))
 	rdb.Expire(ctx, key, time.Duration(setting.ModelRequestRateLimitDurationMinutes)*time.Minute)
-}
-
-func modelRequestRateLimitConfig(c *gin.Context) (duration int64, totalMaxCount int, successMaxCount int) {
-	duration = int64(setting.ModelRequestRateLimitDurationMinutes * 60)
-	totalMaxCount = setting.ModelRequestRateLimitCount
-	successMaxCount = setting.ModelRequestRateLimitSuccessCount
-
-	group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
-	if group == "" {
-		group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
-	}
-
-	groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
-	if found {
-		totalMaxCount = groupTotalCount
-		successMaxCount = groupSuccessCount
-	}
-	return duration, totalMaxCount, successMaxCount
-}
-
-func newModelRateLimitError(message string, statusCode int) *types.NewAPIError {
-	return types.NewErrorWithStatusCode(
-		fmt.Errorf("%s", message),
-		types.ErrorCodeInvalidRequest,
-		statusCode,
-		types.ErrOptionWithSkipRetry(),
-		types.ErrOptionWithNoRecordErrorLog(),
-	)
-}
-
-func isResponsesWebSocketHandshake(c *gin.Context) bool {
-	return c != nil &&
-		c.Request != nil &&
-		c.Request.Method == http.MethodGet &&
-		c.Request.URL != nil &&
-		c.Request.URL.Path == "/v1/responses" &&
-		strings.EqualFold(c.Request.Header.Get("Upgrade"), "websocket")
 }
 
 // Redis限流处理器
@@ -145,7 +104,7 @@ func redisRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) g
 			allowed, err = tb.Allow(
 				ctx,
 				totalKey,
-				limiter.WithCapacity(int64(totalMaxCount)*duration),
+				limiter.WithCapacity(rateLimitCapacity(totalMaxCount, duration)),
 				limiter.WithRate(int64(totalMaxCount)),
 				limiter.WithRequested(duration),
 			)
@@ -209,79 +168,57 @@ func memoryRateLimitHandler(duration int64, totalMaxCount, successMaxCount int) 
 // ModelRequestRateLimit 模型请求限流中间件
 func ModelRequestRateLimit() func(c *gin.Context) {
 	return func(c *gin.Context) {
-		if isResponsesWebSocketHandshake(c) {
+		// 在每个请求时检查是否启用限流
+		if !setting.ModelRequestRateLimitEnabled {
 			c.Next()
 			return
 		}
-		commit, apiErr := CheckModelRequestRateLimit(c)
-		if apiErr != nil {
-			abortWithOpenAiMessage(c, apiErr.StatusCode, apiErr.Error(), apiErr.GetErrorCode())
-			return
+
+		// 计算限流参数
+		duration := rateLimitDurationSeconds(setting.ModelRequestRateLimitDurationMinutes)
+		totalMaxCount := setting.ModelRequestRateLimitCount
+		successMaxCount := setting.ModelRequestRateLimitSuccessCount
+
+		// 获取分组
+		group := common.GetContextKeyString(c, constant.ContextKeyTokenGroup)
+		if group == "" {
+			group = common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 		}
-		c.Next()
-		commit(c.Writer.Status() < 400)
+
+		//获取分组的限流配置
+		groupTotalCount, groupSuccessCount, found := setting.GetGroupRateLimit(group)
+		if found {
+			totalMaxCount = groupTotalCount
+			successMaxCount = groupSuccessCount
+		}
+
+		// 根据存储类型选择并执行限流处理器
+		if common.RedisEnabled {
+			redisRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
+		} else {
+			memoryRateLimitHandler(duration, totalMaxCount, successMaxCount)(c)
+		}
 	}
 }
 
-func CheckModelRequestRateLimit(c *gin.Context) (ModelRequestRateLimitCommit, *types.NewAPIError) {
-	if !setting.ModelRequestRateLimitEnabled {
-		return noopModelRequestRateLimitCommit, nil
+func rateLimitDurationSeconds(durationMinutes int) int64 {
+	if durationMinutes <= 0 {
+		return 0
 	}
-
-	duration, totalMaxCount, successMaxCount := modelRequestRateLimitConfig(c)
-	userId := strconv.Itoa(c.GetInt("id"))
-	if common.RedisEnabled {
-		ctx := context.Background()
-		rdb := common.RDB
-		successKey := fmt.Sprintf("rateLimit:%s:%s", ModelRequestRateLimitSuccessCountMark, userId)
-		allowed, err := checkRedisRateLimit(ctx, rdb, successKey, successMaxCount, duration)
-		if err != nil {
-			fmt.Println("检查成功请求数限制失败:", err.Error())
-			return noopModelRequestRateLimitCommit, newModelRateLimitError("rate_limit_check_failed", http.StatusInternalServerError)
-		}
-		if !allowed {
-			return noopModelRequestRateLimitCommit, newModelRateLimitError(fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, successMaxCount), http.StatusTooManyRequests)
-		}
-
-		if totalMaxCount > 0 {
-			totalKey := fmt.Sprintf("rateLimit:%s", userId)
-			tb := limiter.New(ctx, rdb)
-			allowed, err = tb.Allow(
-				ctx,
-				totalKey,
-				limiter.WithCapacity(int64(totalMaxCount)*duration),
-				limiter.WithRate(int64(totalMaxCount)),
-				limiter.WithRequested(duration),
-			)
-			if err != nil {
-				fmt.Println("检查总请求数限制失败:", err.Error())
-				return noopModelRequestRateLimitCommit, newModelRateLimitError("rate_limit_check_failed", http.StatusInternalServerError)
-			}
-			if !allowed {
-				return noopModelRequestRateLimitCommit, newModelRateLimitError(fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount), http.StatusTooManyRequests)
-			}
-		}
-
-		return func(success bool) {
-			if success {
-				recordRedisRequest(ctx, rdb, successKey, successMaxCount)
-			}
-		}, nil
+	minutes := int64(durationMinutes)
+	if minutes > math.MaxInt64/60 {
+		return math.MaxInt64
 	}
+	return minutes * 60
+}
 
-	inMemoryRateLimiter.Init(time.Duration(setting.ModelRequestRateLimitDurationMinutes) * time.Minute)
-	totalKey := ModelRequestRateLimitCountMark + userId
-	successKey := ModelRequestRateLimitSuccessCountMark + userId
-	if totalMaxCount > 0 && !inMemoryRateLimiter.Request(totalKey, totalMaxCount, duration) {
-		return noopModelRequestRateLimitCommit, newModelRateLimitError(fmt.Sprintf("您已达到总请求数限制：%d分钟内最多请求%d次，包括失败次数，请检查您的请求是否正确", setting.ModelRequestRateLimitDurationMinutes, totalMaxCount), http.StatusTooManyRequests)
+func rateLimitCapacity(count int, durationSeconds int64) int64 {
+	if count <= 0 || durationSeconds <= 0 {
+		return 0
 	}
-	if successMaxCount > 0 && !inMemoryRateLimiter.Check(successKey, successMaxCount, duration) {
-		return noopModelRequestRateLimitCommit, newModelRateLimitError(fmt.Sprintf("您已达到请求数限制：%d分钟内最多请求%d次", setting.ModelRequestRateLimitDurationMinutes, successMaxCount), http.StatusTooManyRequests)
+	c := int64(count)
+	if c > math.MaxInt64/durationSeconds {
+		return math.MaxInt64
 	}
-
-	return func(success bool) {
-		if success && successMaxCount > 0 {
-			inMemoryRateLimiter.Request(successKey, successMaxCount, duration)
-		}
-	}, nil
+	return c * durationSeconds
 }

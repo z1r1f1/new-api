@@ -2,7 +2,6 @@ package relay
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,16 +10,17 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/QuantumNous/new-api/types"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/sjson"
 )
 
 func recordImageGenerationDrawingLog(c *gin.Context, info *relaycommon.RelayInfo, request *dto.ImageRequest) {
@@ -35,14 +35,9 @@ func recordImageGenerationDrawingLog(c *gin.Context, info *relaycommon.RelayInfo
 		channelID = info.ChannelMeta.ChannelId
 		upstreamModel = strings.TrimSpace(info.ChannelMeta.UpstreamModelName)
 	}
-	// ChatGPT Web image requests are logged by the adaptor with conversation
-	// metadata; skip here to avoid duplicate drawing-log rows.
-	if channelType == constant.ChannelTypeChatGPTImage {
-		return
-	}
 
-	imageResp, ok := common.GetContextKeyType[*dto.ImageResponse](c, constant.ContextKeyImageGenerationResponse)
-	if !ok || imageResp == nil || len(imageResp.Data) == 0 {
+	imageResponse, ok := common.GetContextKeyType[*dto.ImageResponse](c, constant.ContextKeyImageGenerationResponse)
+	if !ok || imageResponse == nil || len(imageResponse.Data) == 0 {
 		return
 	}
 
@@ -70,21 +65,21 @@ func recordImageGenerationDrawingLog(c *gin.Context, info *relaycommon.RelayInfo
 		"channel_type_name":    description,
 		"model":                modelName,
 		"upstream_model":       upstreamModel,
-		"response_created":     imageResp.Created,
+		"response_created":     imageResponse.Created,
 		"response_format":      strings.TrimSpace(request.ResponseFormat),
 		"size":                 strings.TrimSpace(request.Size),
 		"quality":              strings.TrimSpace(request.Quality),
-		"image_response_count": len(imageResp.Data),
+		"image_response_count": len(imageResponse.Data),
 	})
 	properties := string(propertiesBytes)
 
-	for index, item := range imageResp.Data {
+	for index, item := range imageResponse.Data {
 		imageURL := imageDataDrawingLogURL(item)
 		if imageURL == "" {
 			continue
 		}
 		taskID := taskIDPrefix
-		if len(imageResp.Data) > 1 {
+		if len(imageResponse.Data) > 1 {
 			taskID = fmt.Sprintf("%s-%d", taskIDPrefix, index+1)
 		}
 		prompt := strings.TrimSpace(request.Prompt)
@@ -118,17 +113,19 @@ func imageDataDrawingLogURL(item dto.ImageData) string {
 	if imageURL := strings.TrimSpace(item.Url); imageURL != "" {
 		return imageURL
 	}
-	if b64 := strings.TrimSpace(item.B64Json); b64 != "" {
-		if strings.HasPrefix(b64, "data:") {
-			return b64
+	if base64JSON := strings.TrimSpace(item.B64Json); base64JSON != "" {
+		if strings.HasPrefix(base64JSON, "data:") {
+			return base64JSON
 		}
-		return "data:image/png;base64," + b64
+		return "data:image/png;base64," + base64JSON
 	}
 	return ""
 }
 
 func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *types.NewAPIError) {
 	info.InitChannelMeta(c)
+	info.BillingImageCount = nil
+	info.ImageRequestCount = 0
 
 	imageReq, ok := info.Request.(*dto.ImageRequest)
 	if !ok {
@@ -150,15 +147,28 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		return types.NewError(fmt.Errorf("invalid api type: %d", info.ApiType), types.ErrorCodeInvalidApiType, types.ErrOptionWithSkipRetry())
 	}
 	adaptor.Init(info)
+	imageCount, err := request.ImageCount(info.ChannelType == constant.ChannelTypeAli)
+	if err != nil {
+		return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+	}
+	promptExtend := request.BillingParameters != nil && request.BillingParameters.PromptExtend != nil && *request.BillingParameters.PromptExtend
 
 	var requestBody io.Reader
+	var jsonData []byte
 
 	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || info.ChannelSetting.PassThroughBodyEnabled {
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
 		}
-		requestBody = common.ReaderOnly(storage)
+		if strings.Contains(c.Request.Header.Get("Content-Type"), "multipart/form-data") {
+			requestBody = common.NewReplayableBodyReader(storage)
+		} else {
+			jsonData, err = storage.Bytes()
+			if err != nil {
+				return types.NewErrorWithStatusCode(err, types.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+			}
+		}
 	} else {
 		convertedRequest, err := adaptor.ConvertImageRequest(c, info, *request)
 		if err != nil {
@@ -170,7 +180,7 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 		case *bytes.Buffer:
 			requestBody = convertedRequest.(io.Reader)
 		default:
-			jsonData, err := common.Marshal(convertedRequest)
+			jsonData, err = common.Marshal(convertedRequest)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
@@ -183,37 +193,52 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 				}
 			}
 
-			logger.LogDebug(c, "image request body: %s", sanitizedRequestBodyForLog(jsonData))
-			body, size, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		}
+	}
+	if jsonData != nil {
+		// This is a different trust boundary from ingress: channel overrides
+		// and pass-through bodies can change the quantity actually submitted.
+		var outbound struct {
+			N          *uint                       `json:"n"`
+			Parameters *dto.ImageBillingParameters `json:"parameters"`
+		}
+		if err := common.Unmarshal(jsonData, &outbound); err != nil {
+			return types.NewErrorWithStatusCode(fmt.Errorf("invalid image billing parameters: %w", err), types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		quantityRequest := dto.ImageRequest{N: outbound.N, BillingParameters: outbound.Parameters}
+		if quantityRequest.N == nil {
+			quantityRequest.N = common.GetPointer(uint(imageCount))
+		}
+		imageCount, err = quantityRequest.ImageCount(info.ChannelType == constant.ChannelTypeAli)
+		if err != nil {
+			return types.NewErrorWithStatusCode(err, types.ErrorCodeInvalidRequest, http.StatusBadRequest, types.ErrOptionWithSkipRetry())
+		}
+		promptExtend = outbound.Parameters != nil && outbound.Parameters.PromptExtend != nil && *outbound.Parameters.PromptExtend
+		if info.ChannelType == constant.ChannelTypeAli {
+			// Always send the same explicit quantity that is reserved, including
+			// when an empty parameters object accompanies a top-level n.
+			jsonData, err = sjson.SetBytes(jsonData, "parameters.n", imageCount)
 			if err != nil {
 				return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 			}
-			defer closer.Close()
-			jsonData = nil
-			info.UpstreamRequestBodySize = size
-			requestBody = body
 		}
+		logger.LogDebug(c, "image request body: %s", jsonData)
+		body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)
+		if err != nil {
+			return types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
+		}
+		defer closer.Close()
+		requestBody = body
+	}
+	if billingErr := service.PrepareImageBillingForRequest(c, info, imageCount, promptExtend); billingErr != nil {
+		return billingErr
 	}
 
 	statusCodeMappingStr := c.GetString("status_code_mapping")
 
 	resp, err := adaptor.DoRequest(c, info, requestBody)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		opts := make([]types.NewAPIErrorOptions, 0, 1)
-		var noRetryErr interface {
-			SkipRelayRetry() bool
-			RelayStatusCode() int
-		}
-		if errors.As(err, &noRetryErr) {
-			if noRetryErr.SkipRelayRetry() {
-				opts = append(opts, types.ErrOptionWithSkipRetry())
-			}
-			if noRetryErr.RelayStatusCode() > 0 {
-				statusCode = noRetryErr.RelayStatusCode()
-			}
-		}
-		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, statusCode, opts...)
+		return types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError)
 	}
 	var httpResp *http.Response
 	if resp != nil {
@@ -243,16 +268,6 @@ func ImageHelper(c *gin.Context, info *relaycommon.RelayInfo) (newAPIError *type
 	imageN := uint(1)
 	if request.N != nil {
 		imageN = *request.N
-	}
-
-	// n is handled via OtherRatio so it is applied exactly once in quota
-	// calculation (both price-based and ratio-based paths).
-	// Adaptors may have already set a more accurate count from the
-	// upstream response; only set the default when they haven't.
-	if info.PriceData.UsePrice { // only price model use N ratio
-		if _, hasN := info.PriceData.OtherRatios["n"]; !hasN {
-			info.PriceData.AddOtherRatio("n", float64(imageN))
-		}
 	}
 
 	if usage.(*dto.Usage).TotalTokens == 0 {

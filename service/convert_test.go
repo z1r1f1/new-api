@@ -3,82 +3,112 @@ package service
 import (
 	"testing"
 
-	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestClaudeToOpenAIRequestPreservesServiceTierAndOutputConfigEffort(t *testing.T) {
-	openAIReq, err := ClaudeToOpenAIRequest(dto.ClaudeRequest{
-		Model:        "gpt-5.5",
-		ServiceTier:  "priority",
-		OutputConfig: []byte(`{"effort":"medium"}`),
-		Messages: []dto.ClaudeMessage{{
-			Role:    "user",
-			Content: "hi",
-		}},
-	}, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodex}, OriginModelName: "gpt-5.5"})
-	if err != nil {
-		t.Fatalf("ClaudeToOpenAIRequest returned error: %v", err)
+func TestResponseConverterFacades(t *testing.T) {
+	cache5m, cache1h := NormalizeCacheCreationSplit(10, 3, 2)
+	assert.Equal(t, 8, cache5m)
+	assert.Equal(t, 2, cache1h)
+
+	chatResp := &dto.OpenAITextResponse{
+		Id:    "chatcmpl_1",
+		Model: "gpt-test",
+		Choices: []dto.OpenAITextResponseChoice{
+			{
+				Message: dto.Message{
+					Role:    "assistant",
+					Content: "hello",
+				},
+				FinishReason: "stop",
+			},
+		},
 	}
 
-	if openAIReq.ReasoningEffort != "medium" {
-		t.Fatalf("expected reasoning_effort medium, got %q", openAIReq.ReasoningEffort)
-	}
-	var serviceTier string
-	if err := common.Unmarshal(openAIReq.ServiceTier, &serviceTier); err != nil || serviceTier != "priority" {
-		t.Fatalf("expected service_tier priority, got %q err=%v", serviceTier, err)
-	}
+	claudeResp := ResponseOpenAI2Claude(chatResp, &relaycommon.RelayInfo{})
+	require.NotNil(t, claudeResp)
+	assert.Equal(t, "message", claudeResp.Type)
+
+	geminiResp := ResponseOpenAI2Gemini(chatResp, &relaycommon.RelayInfo{})
+	require.NotNil(t, geminiResp)
+	require.Len(t, geminiResp.Candidates, 1)
 }
 
-func TestClaudeMessagesToResponsesNormalizesToolSchema(t *testing.T) {
-	openAIReq, err := ClaudeToOpenAIRequest(dto.ClaudeRequest{
-		Model: "gpt-5.5",
-		Tools: []dto.Tool{
+func TestStreamResponseConverterFacades(t *testing.T) {
+	info := &relaycommon.RelayInfo{
+		SendResponseCount: 1,
+		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{
+			LastMessagesType: relaycommon.LastMessageTypeNone,
+		},
+	}
+	streamResp := &dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_1",
+		Model: "gpt-test",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
 			{
-				Name:        "Read",
-				Description: "Read a file",
-				InputSchema: map[string]any{
-					"type":     "object",
-					"required": nil,
-					"properties": map[string]any{
-						"file_path": map[string]any{"type": "string"},
-						"offset":    map[string]any{"type": "integer"},
-						"limit":     map[string]any{"type": "integer"},
-					},
+				Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+					Content: ptrValue("hello"),
 				},
 			},
 		},
-		Messages: []dto.ClaudeMessage{{
-			Role:    "user",
-			Content: "read file",
-		}},
-	}, &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodex}, OriginModelName: "gpt-5.5"})
-	if err != nil {
-		t.Fatalf("ClaudeToOpenAIRequest returned error: %v", err)
 	}
 
-	responsesReq, err := ChatCompletionsRequestToResponsesRequest(openAIReq)
-	if err != nil {
-		t.Fatalf("ChatCompletionsRequestToResponsesRequest returned error: %v", err)
+	claudeResponses := StreamResponseOpenAI2Claude(streamResp, info)
+	require.NotEmpty(t, claudeResponses)
+
+	geminiResp := StreamResponseOpenAI2Gemini(streamResp, &relaycommon.RelayInfo{})
+	require.NotNil(t, geminiResp)
+	require.Len(t, geminiResp.Candidates, 1)
+}
+
+func TestRequestConverterFacadeAcceptsTypedNilRelayInfo(t *testing.T) {
+	for _, target := range []types.RelayFormat{types.RelayFormatClaude, types.RelayFormatGemini} {
+		t.Run(string(target), func(t *testing.T) {
+			var info *relaycommon.RelayInfo
+			request := &dto.GeneralOpenAIRequest{
+				Model: "test-model",
+				Messages: []dto.Message{
+					{Role: "user", Content: "hello"},
+				},
+			}
+
+			result, err := ConvertRequest(nil, info, target, request)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			assert.Equal(t, target, result.To)
+		})
+	}
+}
+
+func TestStreamResponseConverterFacadesAcceptTypedNilRelayInfo(t *testing.T) {
+	var info *relaycommon.RelayInfo
+	streamResp := &dto.ChatCompletionsStreamResponse{
+		Id:    "chatcmpl_typed_nil",
+		Model: "gpt-test",
+		Choices: []dto.ChatCompletionsStreamResponseChoice{
+			{
+				Delta: dto.ChatCompletionsStreamResponseChoiceDelta{
+					Content: ptrValue("hello"),
+				},
+			},
+		},
 	}
 
-	var tools []map[string]any
-	if err := common.Unmarshal(responsesReq.Tools, &tools); err != nil {
-		t.Fatalf("failed to decode responses tools: %v", err)
-	}
-	if len(tools) != 1 {
-		t.Fatalf("expected one responses tool, got %d", len(tools))
-	}
-	params, ok := tools[0]["parameters"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected parameters object, got %#v", tools[0]["parameters"])
-	}
-	if _, exists := params["required"]; exists {
-		t.Fatalf("expected nil required field to be removed, got %#v", params["required"])
-	}
-	if params["additionalProperties"] != false {
-		t.Fatalf("expected Claude tool schema to reject extra parameters after Responses conversion, got %#v", params["additionalProperties"])
-	}
+	claudeResponses := StreamResponseOpenAI2Claude(streamResp, info)
+	require.NotEmpty(t, claudeResponses)
+	assert.Equal(t, "content_block_start", claudeResponses[0].Type)
+
+	geminiResp := StreamResponseOpenAI2Gemini(streamResp, info)
+	require.NotNil(t, geminiResp)
+	require.Len(t, geminiResp.Candidates, 1)
+	assert.Zero(t, geminiResp.UsageMetadata.PromptTokenCount)
+}
+
+func ptrValue[T any](value T) *T {
+	return &value
 }

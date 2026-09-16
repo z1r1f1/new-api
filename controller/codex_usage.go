@@ -1,12 +1,9 @@
 package controller
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -20,62 +17,69 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func normalizeCodexUsagePlanType(value any) string {
-	planType := strings.ToLower(strings.TrimSpace(fmt.Sprint(value)))
-	switch planType {
-	case "free", "plus", "pro", "team", "enterprise":
-		return planType
-	default:
-		return ""
-	}
+func GetCodexChannelUsage(c *gin.Context) {
+	fetchCodexChannelWhamData(
+		c,
+		service.FetchCodexWhamUsage,
+		"failed to fetch codex usage",
+		"获取用量信息失败，请稍后重试",
+	)
 }
 
-func stringFieldFromMap(data map[string]interface{}, key string) string {
-	if data == nil {
-		return ""
-	}
-	value, ok := data[key]
-	if !ok || value == nil {
-		return ""
-	}
-	return strings.TrimSpace(fmt.Sprint(value))
+func GetCodexChannelRateLimitResetCredits(c *gin.Context) {
+	fetchCodexChannelWhamData(
+		c,
+		service.FetchCodexWhamRateLimitResetCredits,
+		"failed to fetch codex reset credits",
+		"获取重置次数详情失败，请稍后重试",
+	)
 }
 
-func mapFieldFromMap(data map[string]interface{}, key string) map[string]interface{} {
-	if data == nil {
+func ResetCodexChannelUsage(c *gin.Context) {
+	fetchCodexChannelWhamData(
+		c,
+		service.ConsumeCodexWhamRateLimitResetCredit,
+		"failed to reset codex usage",
+		"重置用量失败，请稍后重试",
+	)
+}
+
+func normalizeCodexUsagePlanType(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
+}
+
+func stringFieldFromMap(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(values[key]))
+}
+
+func mapFieldFromMap(values map[string]any, key string) map[string]any {
+	if values == nil {
 		return nil
 	}
-	value, ok := data[key]
-	if !ok || value == nil {
-		return nil
-	}
-	nested, ok := value.(map[string]interface{})
-	if !ok {
-		return nil
-	}
+	nested, _ := values[key].(map[string]any)
 	return nested
 }
 
 func extractCodexUsagePlanType(payload any) string {
-	data, ok := payload.(map[string]interface{})
+	data, ok := payload.(map[string]any)
 	if !ok {
 		return ""
 	}
 	if planType := normalizeCodexUsagePlanType(stringFieldFromMap(data, "plan_type")); planType != "" {
 		return planType
 	}
-	if planType := normalizeCodexUsagePlanType(stringFieldFromMap(mapFieldFromMap(data, "rate_limit"), "plan_type")); planType != "" {
-		return planType
-	}
-	return ""
+	return normalizeCodexUsagePlanType(stringFieldFromMap(mapFieldFromMap(data, "rate_limit"), "plan_type"))
 }
 
-func persistCodexChannelAccountType(ch *model.Channel, planType string) {
+func persistCodexChannelAccountType(channel *model.Channel, planType string) {
 	normalizedPlanType := normalizeCodexUsagePlanType(planType)
-	if ch == nil || normalizedPlanType == "" {
+	if channel == nil || normalizedPlanType == "" {
 		return
 	}
-	otherInfo := ch.GetOtherInfo()
+	otherInfo := channel.GetOtherInfo()
 	if strings.TrimSpace(fmt.Sprint(otherInfo["codex_account_type"])) == normalizedPlanType {
 		return
 	}
@@ -86,22 +90,20 @@ func persistCodexChannelAccountType(ch *model.Channel, planType string) {
 		common.SysError("failed to marshal codex account type: " + err.Error())
 		return
 	}
-	ch.OtherInfo = string(encoded)
-	if err := model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("other_info", ch.OtherInfo).Error; err != nil {
+	channel.OtherInfo = string(encoded)
+	if err := model.DB.Model(&model.Channel{}).Where("id = ?", channel.Id).Update("other_info", channel.OtherInfo).Error; err != nil {
 		common.SysError("failed to persist codex account type: " + err.Error())
 	}
 }
 
-func syncCodexChannelAccountTypeFromUsage(ctx context.Context, ch *model.Channel) error {
-	if ch == nil || ch.Type != constant.ChannelTypeCodex || ch.ChannelInfo.IsMultiKey {
+func syncCodexChannelAccountTypeFromUsage(ctx context.Context, channel *model.Channel) error {
+	if channel == nil || channel.Type != constant.ChannelTypeCodex || channel.ChannelInfo.IsMultiKey {
 		return nil
 	}
-
-	oauthKey, err := codex.ParseOAuthKey(strings.TrimSpace(ch.Key))
+	oauthKey, err := codex.ParseOAuthKey(strings.TrimSpace(channel.Key))
 	if err != nil {
 		return err
 	}
-
 	accessToken := strings.TrimSpace(oauthKey.AccessToken)
 	accountID := strings.TrimSpace(oauthKey.AccountID)
 	if accessToken == "" {
@@ -110,186 +112,51 @@ func syncCodexChannelAccountTypeFromUsage(ctx context.Context, ch *model.Channel
 	if accountID == "" {
 		return fmt.Errorf("codex channel: account_id is required")
 	}
-
-	client, err := service.NewProxyHttpClient(ch.GetSetting().Proxy)
+	client, err := service.GetHttpClientWithProxy(channel.GetSetting().Proxy)
 	if err != nil {
 		return err
 	}
-
 	usageCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-
-	statusCode, body, err := service.FetchCodexWhamUsage(usageCtx, client, ch.GetBaseURL(), accessToken, accountID)
+	statusCode, body, err := service.FetchCodexWhamUsage(usageCtx, client, channel.GetBaseURL(), accessToken, accountID)
 	if err != nil {
 		return err
 	}
 	if statusCode < 200 || statusCode >= 300 {
 		return fmt.Errorf("codex usage upstream status: %d", statusCode)
 	}
-
 	var payload any
 	if err := common.Unmarshal(body, &payload); err != nil {
 		return err
 	}
-	persistCodexChannelAccountType(ch, extractCodexUsagePlanType(payload))
+	persistCodexChannelAccountType(channel, extractCodexUsagePlanType(payload))
 	return nil
 }
 
-func syncCodexChannelAccountTypeAfterSuccessfulTest(ctx context.Context, ch *model.Channel) {
-	if err := syncCodexChannelAccountTypeFromUsage(ctx, ch); err != nil {
+func syncCodexChannelAccountTypeAfterSuccessfulTest(ctx context.Context, channel *model.Channel) {
+	if err := syncCodexChannelAccountTypeFromUsage(ctx, channel); err != nil {
 		channelID := 0
-		if ch != nil {
-			channelID = ch.Id
+		if channel != nil {
+			channelID = channel.Id
 		}
 		common.SysLog(fmt.Sprintf("failed to sync codex account type after channel test: channel_id=%d, error=%v", channelID, err))
 	}
 }
 
-func getAutoTeamAPIURL() string {
-	apiURL := strings.TrimSpace(os.Getenv("AUTOTEAM_API_URL"))
-	if apiURL == "" {
-		apiURL = "http://127.0.0.1:8788"
-	}
-	return strings.TrimRight(apiURL, "/")
-}
+type codexWhamFetchFunc func(
+	ctx context.Context,
+	client *http.Client,
+	baseURL string,
+	accessToken string,
+	accountID string,
+) (statusCode int, body []byte, err error)
 
-func getAutoTeamAPIKey() string {
-	apiKey := strings.TrimSpace(os.Getenv("AUTOTEAM_API_KEY"))
-	if apiKey == "" {
-		apiKey = strings.TrimSpace(os.Getenv("AUTOTEAM_TOKEN"))
-	}
-	return apiKey
-}
-
-func callAutoTeamRedo(ctx context.Context, path string, requestBody []byte) (bool, string, int, any, error) {
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		getAutoTeamAPIURL()+path,
-		bytes.NewReader(requestBody),
-	)
-	if err != nil {
-		return false, "", 0, nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if apiKey := getAutoTeamAPIKey(); apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+apiKey)
-	}
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, "", 0, nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4*1024*1024))
-	if err != nil {
-		return false, "", resp.StatusCode, nil, err
-	}
-
-	var payload any
-	if len(body) > 0 && common.Unmarshal(body, &payload) != nil {
-		payload = string(body)
-	}
-
-	ok := resp.StatusCode >= 200 && resp.StatusCode < 300
-	message := ""
-	if data, ok := payload.(map[string]interface{}); ok {
-		message = strings.TrimSpace(fmt.Sprint(data["message"]))
-		if message == "<nil>" {
-			message = ""
-		}
-	}
-	if !ok && message == "" {
-		message = fmt.Sprintf("AutoTeam status: %d", resp.StatusCode)
-	}
-	return ok, message, resp.StatusCode, payload, nil
-}
-
-func RedoChannelAutoTeamOAuth(c *gin.Context) {
-	channelId, err := strconv.Atoi(c.Param("id"))
-	if err != nil {
-		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
-		return
-	}
-
-	ch, err := model.GetChannelById(channelId, true)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if ch == nil {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel not found"})
-		return
-	}
-	if ch.Type != constant.ChannelTypeCodex && ch.Type != constant.ChannelTypeChatGPTImage {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel type is not supported"})
-		return
-	}
-	if ch.ChannelInfo.IsMultiKey {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "multi-key channel is not supported"})
-		return
-	}
-
-	email := strings.TrimSpace(ch.Name)
-	if email == "" {
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "channel name is required"})
-		return
-	}
-
-	path := "/api/accounts/login"
-	requestPayload := gin.H{"email": email}
-	if ch.Type == constant.ChannelTypeChatGPTImage {
-		path = "/api/accounts/redo-chatgpt-tokens"
-		requestPayload = gin.H{"emails": []string{email}}
-	}
-
-	requestBody, err := common.Marshal(requestPayload)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
-	if ch.Type == constant.ChannelTypeChatGPTImage {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			ok, message, statusCode, _, err := callAutoTeamRedo(ctx, path, requestBody)
-			if err != nil {
-				common.SysError("failed to call autoteam redo chatgpt: " + err.Error())
-				return
-			}
-			if !ok {
-				common.SysError(fmt.Sprintf("autoteam redo chatgpt failed: status=%d message=%s", statusCode, message))
-			}
-		}()
-		c.JSON(http.StatusOK, gin.H{
-			"success": true,
-			"message": "ChatGPT redo task submitted",
-			"async":   true,
-		})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Minute)
-	defer cancel()
-
-	ok, message, statusCode, payload, err := callAutoTeamRedo(ctx, path, requestBody)
-	if err != nil {
-		common.SysError("failed to call autoteam redo oauth: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "调用 AutoTeam 重做 OAuth 失败，请检查服务状态"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success":         ok,
-		"message":         message,
-		"upstream_status": statusCode,
-		"data":            payload,
-	})
-}
-
-func GetCodexChannelUsage(c *gin.Context) {
+func fetchCodexChannelWhamData(
+	c *gin.Context,
+	fetch codexWhamFetchFunc,
+	logPrefix string,
+	userMessage string,
+) {
 	channelId, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		common.ApiError(c, fmt.Errorf("invalid channel id: %w", err))
@@ -331,7 +198,7 @@ func GetCodexChannelUsage(c *gin.Context) {
 		return
 	}
 
-	client, err := service.NewProxyHttpClient(ch.GetSetting().Proxy)
+	client, err := service.GetHttpClientWithProxy(ch.GetSetting().Proxy)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -340,10 +207,10 @@ func GetCodexChannelUsage(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 	defer cancel()
 
-	statusCode, body, err := service.FetchCodexWhamUsage(ctx, client, ch.GetBaseURL(), accessToken, accountID)
+	statusCode, body, err := fetch(ctx, client, ch.GetBaseURL(), accessToken, accountID)
 	if err != nil {
-		common.SysError("failed to fetch codex usage: " + err.Error())
-		c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取用量信息失败，请稍后重试"})
+		common.SysError(logPrefix + ": " + err.Error())
+		c.JSON(http.StatusOK, gin.H{"success": false, "message": userMessage})
 		return
 	}
 
@@ -365,15 +232,14 @@ func GetCodexChannelUsage(c *gin.Context) {
 			if encErr == nil {
 				_ = model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error
 				model.InitChannelCache()
-				service.ResetProxyClientCache()
 			}
 
 			ctx2, cancel2 := context.WithTimeout(c.Request.Context(), 15*time.Second)
 			defer cancel2()
-			statusCode, body, err = service.FetchCodexWhamUsage(ctx2, client, ch.GetBaseURL(), oauthKey.AccessToken, accountID)
+			statusCode, body, err = fetch(ctx2, client, ch.GetBaseURL(), oauthKey.AccessToken, accountID)
 			if err != nil {
-				common.SysError("failed to fetch codex usage after refresh: " + err.Error())
-				c.JSON(http.StatusOK, gin.H{"success": false, "message": "获取用量信息失败，请稍后重试"})
+				common.SysError(logPrefix + " after refresh: " + err.Error())
+				c.JSON(http.StatusOK, gin.H{"success": false, "message": userMessage})
 				return
 			}
 		}
@@ -385,9 +251,6 @@ func GetCodexChannelUsage(c *gin.Context) {
 	}
 
 	ok := statusCode >= 200 && statusCode < 300
-	if ok {
-		persistCodexChannelAccountType(ch, extractCodexUsagePlanType(payload))
-	}
 	resp := gin.H{
 		"success":         ok,
 		"message":         "",

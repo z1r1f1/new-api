@@ -1,12 +1,15 @@
 package chat
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/model"
+	authservice "github.com/QuantumNous/new-api/service"
 	"github.com/centrifugal/centrifuge"
 )
 
@@ -29,6 +32,21 @@ func NewRealtimeServer() (*RealtimeServer, error) {
 	if err != nil {
 		return nil, err
 	}
+	node.OnConnecting(func(_ context.Context, event centrifuge.ConnectEvent) (centrifuge.ConnectReply, error) {
+		identity, internal, err := authservice.ParseDashboardAccessToken(event.Token)
+		if errors.Is(err, authservice.ErrAuthTokenExpired) {
+			return centrifuge.ConnectReply{}, centrifuge.ErrorTokenExpired
+		}
+		if !internal || err != nil {
+			return centrifuge.ConnectReply{}, centrifuge.ErrorUnauthorized
+		}
+		if _, _, err := authservice.ValidateLoginSession(identity); err != nil {
+			return centrifuge.ConnectReply{}, centrifuge.ErrorUnauthorized
+		}
+		return centrifuge.ConnectReply{
+			Credentials: &centrifuge.Credentials{UserID: strconv.Itoa(identity.UserID)},
+		}, nil
+	})
 	node.OnConnect(func(client *centrifuge.Client) {
 		client.OnSubscribe(func(event centrifuge.SubscribeEvent, callback centrifuge.SubscribeCallback) {
 			if authorizeSubscription(client.UserID(), event.Channel) {

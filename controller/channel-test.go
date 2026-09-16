@@ -7,10 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +16,6 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
-	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
@@ -26,12 +23,12 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/QuantumNous/new-api/types"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
-	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
 
@@ -45,13 +42,6 @@ type testResult struct {
 	responseTimeMillis int64
 	hasResponseTime    bool
 }
-
-const (
-	chatGPTWebImageQuotaTestModel = "gpt-image-2"
-	chatGPTWebImageQuotaProbePath = "/backend-api/conversation/init"
-)
-
-var updateChatGPTWebImageBalanceForChannelTest = updateChannelChatGPTImageBalanceWithContext
 
 type firstByteResponseWriter struct {
 	gin.ResponseWriter
@@ -117,17 +107,11 @@ func channelTestTimeoutDuration() time.Duration {
 }
 
 func shouldSkipChannelTestTimeout(channel *model.Channel) bool {
-	if channel == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(channel.Name), "codex-to-claude")
+	return channel != nil && strings.EqualFold(strings.TrimSpace(channel.Name), "codex-to-claude")
 }
 
 func applyChannelTestTimeout(req *http.Request, channel *model.Channel) (*http.Request, context.CancelFunc) {
-	if req == nil {
-		return req, nil
-	}
-	if shouldSkipChannelTestTimeout(channel) {
+	if req == nil || shouldSkipChannelTestTimeout(channel) {
 		return req, nil
 	}
 	timeout := channelTestTimeoutDuration()
@@ -138,16 +122,10 @@ func applyChannelTestTimeout(req *http.Request, channel *model.Channel) (*http.R
 	return req.WithContext(ctx), cancel
 }
 
-func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointType string) string {
+func normalizeChannelTestEndpoint(channel *model.Channel, endpointType string) string {
 	normalized := strings.TrimSpace(endpointType)
 	if normalized != "" {
 		return normalized
-	}
-	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
-		return string(constant.EndpointTypeImageGeneration)
-	}
-	if strings.HasSuffix(modelName, ratio_setting.CompactModelSuffix) {
-		return string(constant.EndpointTypeOpenAIResponseCompact)
 	}
 	if channel != nil && channel.Type == constant.ChannelTypeCodex {
 		return string(constant.EndpointTypeOpenAIResponse)
@@ -155,7 +133,27 @@ func normalizeChannelTestEndpoint(channel *model.Channel, modelName, endpointTyp
 	return normalized
 }
 
-func testChannel(channel *model.Channel, testModel string, endpointType string, isStream bool) testResult {
+func resolveChannelTestUserID(c *gin.Context) (int, error) {
+	if c != nil {
+		if userID := c.GetInt("id"); userID > 0 {
+			return userID, nil
+		}
+	}
+
+	var rootUser model.User
+	if err := model.DB.Select("id").Where("role = ?", common.RoleRootUser).First(&rootUser).Error; err != nil {
+		return 0, fmt.Errorf("failed to resolve channel test user: %w", err)
+	}
+	if rootUser.Id == 0 {
+		return 0, errors.New("failed to resolve channel test user")
+	}
+	return rootUser.Id, nil
+}
+
+func testChannel(ctx context.Context, channel *model.Channel, testUserID int, testModel string, endpointType string, isStream bool) testResult {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	tik := time.Now()
 	var unsupportedTestChannelTypes = []int{
 		constant.ChannelTypeMidjourney,
@@ -165,6 +163,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		constant.ChannelTypeJimeng,
 		constant.ChannelTypeDoubaoVideo,
 		constant.ChannelTypeVidu,
+		constant.ChannelTypeTaskPlugin,
 	}
 	if lo.Contains(unsupportedTestChannelTypes, channel.Type) {
 		channelTypeName := constant.GetChannelTypeName(channel.Type)
@@ -192,10 +191,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		}
 	}
 
-	endpointType = normalizeChannelTestEndpoint(channel, testModel, endpointType)
-	if shouldForceNonStreamChannelTest(channel, endpointType) {
-		isStream = false
-	}
+	endpointType = normalizeChannelTestEndpoint(channel, endpointType)
 
 	requestPath := "/v1/chat/completions"
 
@@ -224,37 +220,26 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		if channel.Type == constant.ChannelTypeVolcEngine && strings.Contains(testModel, "seedream") {
 			requestPath = "/v1/images/generations"
 		}
-		if common.IsImageGenerationModel(testModel) {
-			requestPath = "/v1/images/generations"
-		}
 
 		// responses-only models
 		if strings.Contains(strings.ToLower(testModel), "codex") {
 			requestPath = "/v1/responses"
 		}
 
-		// responses compaction models (must use /v1/responses/compact)
-		if strings.HasSuffix(testModel, ratio_setting.CompactModelSuffix) {
-			requestPath = "/v1/responses/compact"
-		}
 	}
-	if strings.HasPrefix(requestPath, "/v1/responses/compact") {
-		testModel = ratio_setting.WithCompactModelSuffix(testModel)
+	// Gemini 原生流式通过 URL action（:streamGenerateContent）表达而非请求体字段，
+	// GeminiChatRequest.IsStream 依据请求 URL 判定，合成请求路径需与生产入口保持一致
+	if isStream && constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
+		requestPath = strings.Replace(requestPath, ":generateContent", ":streamGenerateContent", 1)
 	}
-
-	c.Request = &http.Request{
-		Method: "POST",
-		URL:    &url.URL{Path: requestPath}, // 使用动态路径
-		Body:   nil,
-		Header: make(http.Header),
-	}
+	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, requestPath, nil)
 	var cancelTestTimeout context.CancelFunc
 	c.Request, cancelTestTimeout = applyChannelTestTimeout(c.Request, channel)
 	if cancelTestTimeout != nil {
 		defer cancelTestTimeout()
 	}
 
-	cache, err := model.GetUserCache(1)
+	cache, err := model.GetUserCache(testUserID)
 	if err != nil {
 		return testResult{
 			localErr:    err,
@@ -262,19 +247,14 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 		}
 	}
 	cache.WriteContext(c)
-	c.Set("id", 1)
+	c.Set("id", testUserID)
 
 	//c.Request.Header.Set("Authorization", "Bearer "+channel.Key)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("channel", channel.Type)
 	c.Set("base_url", channel.GetBaseURL())
-	group, _ := model.GetUserGroup(1, false)
+	group, _ := model.GetUserGroup(testUserID, false)
 	c.Set("group", group)
-
-	if shouldUseChatGPTWebImageQuotaTest(channel) {
-		c.Request.URL.Path = chatGPTWebImageQuotaProbePath
-		return testChatGPTWebImageQuota(c, channel, tik)
-	}
 
 	newAPIError := middleware.SetupContextForSelectedChannel(c, channel, testModel)
 	if newAPIError != nil {
@@ -349,11 +329,6 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 	info.IsChannelTest = true
 	info.InitChannelMeta(c)
-	// Use RelayInfo as the source of truth for stream handling. Some channel
-	// test request types intentionally ignore requested stream (embeddings,
-	// rerank, image generation, response compaction), so response validation
-	// must follow the actual generated request instead of the default flag.
-	isStream = info.IsStream
 
 	err = attachTestBillingRequestInput(info, request)
 	if err != nil {
@@ -372,6 +347,13 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			newAPIError: types.NewError(err, types.ErrorCodeChannelModelMappedError),
 		}
 	}
+	if err := helper.ApplyReasoningModelSuffix(c, info, request); err != nil {
+		return testResult{
+			context:     c,
+			localErr:    err,
+			newAPIError: types.NewErrorWithStatusCode(err, types.ErrorCodeConvertRequestFailed, http.StatusBadRequest, types.ErrOptionWithSkipRetry()),
+		}
+	}
 
 	testModel = info.UpstreamModelName
 	// 更新请求中的模型名称
@@ -379,11 +361,10 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 
 	apiType, _ := common.ChannelType2APIType(channel.Type)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
-		apiType != constant.APITypeOpenAI &&
-		apiType != constant.APITypeCodex {
+		!common.SupportsResponsesCompact(channel.Type, apiType) {
 		return testResult{
 			context:     c,
-			localErr:    fmt.Errorf("responses compaction test only supports openai/codex channels, got api type %d", apiType),
+			localErr:    fmt.Errorf("responses compaction test is not supported for api type %d", apiType),
 			newAPIError: types.NewError(fmt.Errorf("unsupported api type: %d", apiType), types.ErrorCodeInvalidApiType),
 		}
 	}
@@ -479,14 +460,18 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 			}
 		}
 	default:
-		// Chat/Completion 等其他请求类型
-		if generalReq, ok := request.(*dto.GeneralOpenAIRequest); ok {
-			convertedRequest, err = adaptor.ConvertOpenAIRequest(c, info, generalReq)
-		} else {
+		switch req := request.(type) {
+		case *dto.GeneralOpenAIRequest:
+			convertedRequest, err = adaptor.ConvertOpenAIRequest(c, info, req)
+		case *dto.ClaudeRequest:
+			convertedRequest, err = adaptor.ConvertClaudeRequest(c, info, req)
+		case *dto.GeminiChatRequest:
+			convertedRequest, err = adaptor.ConvertGeminiRequest(c, info, req)
+		default:
 			return testResult{
 				context:     c,
-				localErr:    errors.New("invalid general request type"),
-				newAPIError: types.NewError(errors.New("invalid general request type"), types.ErrorCodeConvertRequestFailed),
+				localErr:    errors.New("invalid chat request type"),
+				newAPIError: types.NewError(errors.New("invalid chat request type"), types.ErrorCodeConvertRequestFailed),
 			}
 		}
 	}
@@ -555,12 +540,6 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	var httpResp *http.Response
 	if resp != nil {
 		httpResp = resp.(*http.Response)
-		if httpResp.StatusCode >= 100 && httpResp.StatusCode <= 599 {
-			statusCode := httpResp.StatusCode
-			gopool.Go(func() {
-				model.UpdateChannelLastStatusCode(channel.Id, statusCode)
-			})
-		}
 		if httpResp.StatusCode != http.StatusOK {
 			err := service.RelayErrorHandler(c.Request.Context(), httpResp, true)
 			common.SysError(fmt.Sprintf(
@@ -622,7 +601,7 @@ func testChannel(channel *model.Channel, testModel string, endpointType string, 
 	responseTimeMillis := resolveChannelTestResponseTimeMillis(tik, fullElapsed, isStream, firstByteWriter)
 	consumedTime := float64(milliseconds) / 1000.0
 	other := buildTestLogOther(c, info, priceData, usage, tieredResult)
-	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
+	model.RecordConsumeLog(c, testUserID, model.RecordConsumeLogParams{
 		ChannelId:        channel.Id,
 		PromptTokens:     usage.PromptTokens,
 		CompletionTokens: usage.CompletionTokens,
@@ -658,7 +637,7 @@ func attachTestBillingRequestInput(info *relaycommon.RelayInfo, request dto.Requ
 	return nil
 }
 
-func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage) (int, *billingexpr.TieredResult) {
+func settleTestQuota(info *relaycommon.RelayInfo, priceData hosttypes.PriceData, usage *dto.Usage) (int, *billingexpr.TieredResult) {
 	if usage != nil && info != nil && info.TieredBillingSnapshot != nil {
 		isClaudeUsageSemantic := usage.UsageSemantic == "anthropic" || info.GetFinalRequestRelayFormat() == types.RelayFormatClaude
 		usedVars := billingexpr.UsedVars(info.TieredBillingSnapshot.ExprString)
@@ -669,18 +648,19 @@ func settleTestQuota(info *relaycommon.RelayInfo, priceData types.PriceData, usa
 
 	quota := 0
 	if !priceData.UsePrice {
-		quota = usage.PromptTokens + int(math.Round(float64(usage.CompletionTokens)*priceData.CompletionRatio))
-		quota = int(math.Round(float64(quota) * priceData.ModelRatio))
+		completionQuota := common.QuotaRound(float64(usage.CompletionTokens) * priceData.CompletionRatio)
+		quota = common.QuotaRound(float64(usage.PromptTokens) + float64(completionQuota))
+		quota = common.QuotaRound(float64(quota) * priceData.ModelRatio)
 		if priceData.ModelRatio != 0 && quota <= 0 {
 			quota = 1
 		}
 		return quota, nil
 	}
 
-	return int(priceData.ModelPrice * common.QuotaPerUnit), nil
+	return common.QuotaFromFloat(priceData.ModelPrice * common.QuotaPerUnit), nil
 }
 
-func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData types.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) map[string]interface{} {
+func buildTestLogOther(c *gin.Context, info *relaycommon.RelayInfo, priceData hosttypes.PriceData, usage *dto.Usage, tieredResult *billingexpr.TieredResult) *model.LogOther {
 	other := service.GenerateTextOtherInfo(c, info, priceData.ModelRatio, priceData.GroupRatioInfo.GroupRatio, priceData.CompletionRatio,
 		usage.PromptTokensDetails.CachedTokens, priceData.CacheRatio, priceData.ModelPrice, priceData.GroupRatioInfo.GroupSpecialRatio)
 	if tieredResult != nil {
@@ -734,7 +714,7 @@ func detectErrorFromTestResponseBody(respBody []byte) error {
 		return fmt.Errorf("upstream error: %s", message)
 	}
 
-	for _, line := range bytes.Split(b, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(b, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
@@ -760,7 +740,7 @@ func validateStreamTestResponseBody(respBody []byte) error {
 		return errors.New("stream response body is empty")
 	}
 
-	for _, line := range bytes.Split(b, []byte{'\n'}) {
+	for line := range bytes.SplitSeq(b, []byte{'\n'}) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 || !bytes.HasPrefix(line, []byte("data:")) {
 			continue
@@ -799,106 +779,15 @@ func parseChannelTestStreamQuery(raw string) bool {
 }
 
 func shouldUseStreamForAutomaticChannelTest(channel *model.Channel) bool {
-	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
-		return false
-	}
-	return true
+	return channel != nil
 }
 
-func shouldUseChatGPTWebImageQuotaTest(channel *model.Channel) bool {
-	return channel != nil && channel.Type == constant.ChannelTypeChatGPTImage
-}
-
-func testChatGPTWebImageQuota(c *gin.Context, channel *model.Channel, startedAt time.Time) testResult {
-	balance, data, err := updateChatGPTWebImageBalanceForChannelTest(c.Request.Context(), channel, 0)
-	if err != nil {
-		if errors.Is(c.Request.Context().Err(), context.DeadlineExceeded) {
-			timeoutErr := fmt.Errorf("模型测试超时：响应时间超过禁用阈值 %.2fs", channelTestTimeoutDuration().Seconds())
-			return testResult{
-				context:     c,
-				localErr:    timeoutErr,
-				newAPIError: types.NewOpenAIError(timeoutErr, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout),
-			}
-		}
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeDoRequestFailed, http.StatusInternalServerError),
-		}
-	}
-	if data == nil {
-		err := errors.New("未找到 ChatGPT 图片额度信息")
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError),
-		}
-	}
-	if data.ImageQuotaRemaining <= 0 {
-		err := fmt.Errorf("%s 图片剩余额度不足：%d", chatGPTWebImageQuotaTestModel, data.ImageQuotaRemaining)
-		return testResult{
-			context:     c,
-			localErr:    err,
-			newAPIError: types.NewOpenAIError(err, types.ErrorCodeInsufficientUserQuota, http.StatusPaymentRequired),
-		}
-	}
-
-	elapsed := time.Since(startedAt)
-	milliseconds := elapsed.Milliseconds()
-	content := formatChatGPTWebImageQuotaTestContent(data)
-	model.RecordConsumeLog(c, 1, model.RecordConsumeLogParams{
-		ChannelId:      channel.Id,
-		ModelName:      chatGPTWebImageQuotaTestModel,
-		TokenName:      "模型测试",
-		Quota:          0,
-		Content:        content,
-		UseTimeSeconds: int(elapsed.Seconds()),
-		IsStream:       false,
-		Group:          c.GetString("group"),
-		Other: map[string]interface{}{
-			"request_path":                chatGPTWebImageQuotaProbePath,
-			"request_conversion":          []string{"chatgpt_web_image_quota"},
-			"chatgpt_web_image_quota":     data,
-			"chatgpt_web_image_quota_raw": balance,
-			"model":                       chatGPTWebImageQuotaTestModel,
-			"model_price":                 0,
-			"model_ratio":                 0,
-			"completion_ratio":            0,
-			"cache_ratio":                 0,
-			"group_ratio":                 1,
-		},
-	})
-	common.SysLog(fmt.Sprintf("testing ChatGPT Web channel #%d image quota: %s", channel.Id, content))
-	return testResult{
-		context:            c,
-		localErr:           nil,
-		newAPIError:        nil,
-		responseTimeMillis: milliseconds,
-		hasResponseTime:    true,
-	}
-}
-
-func formatChatGPTWebImageQuotaTestContent(data *chatGPTImageBalanceData) string {
-	if data == nil {
-		return chatGPTWebImageQuotaTestModel + " 图片剩余额度未知"
-	}
-	if data.ImageQuotaTotal > 0 {
-		return fmt.Sprintf("%s 图片剩余额度 %d/%d", chatGPTWebImageQuotaTestModel, data.ImageQuotaRemaining, data.ImageQuotaTotal)
-	}
-	return fmt.Sprintf("%s 图片剩余额度 %d", chatGPTWebImageQuotaTestModel, data.ImageQuotaRemaining)
-}
-
-func shouldForceNonStreamChannelTest(channel *model.Channel, endpointType string) bool {
-	return channel != nil &&
-		channel.Type == constant.ChannelTypeChatGPTImage &&
-		constant.EndpointType(endpointType) == constant.EndpointTypeOpenAI
+func shouldForceNonStreamChannelTest(_ *model.Channel, _ string) bool {
+	return false
 }
 
 func shouldDeleteChannelForChatRequirementsFailure(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(strings.ToLower(err.Error()), "chat-requirements failed")
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "chat-requirements failed")
 }
 
 func channelDeletionReasonAfterTest(result testResult, deleteUnauthorized bool) string {
@@ -931,7 +820,7 @@ func shouldDeleteChannelAfterTest(result testResult) bool {
 }
 
 func shouldPreserveChannelAfterTestDeletion(channel *model.Channel) bool {
-	return channel != nil && (channel.Type == constant.ChannelTypeCodex || channel.Type == constant.ChannelTypeChatGPTImage)
+	return channel != nil && channel.Type == constant.ChannelTypeCodex
 }
 
 func detectErrorMessageFromJSONBytes(jsonBytes []byte) string {
@@ -1004,12 +893,31 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 				Model: model,
 				Input: testResponsesInput,
 			}
-		case constant.EndpointTypeAnthropic, constant.EndpointTypeGemini, constant.EndpointTypeOpenAI:
-			// 返回 GeneralOpenAIRequest
-			maxTokens := uint(16)
-			if constant.EndpointType(endpointType) == constant.EndpointTypeGemini {
-				maxTokens = 3000
+		case constant.EndpointTypeAnthropic:
+			return &dto.ClaudeRequest{
+				Model:     model,
+				Stream:    lo.ToPtr(isStream),
+				MaxTokens: lo.ToPtr(uint(16)),
+				Messages: []dto.ClaudeMessage{
+					{
+						Role:    "user",
+						Content: "hi",
+					},
+				},
 			}
+		case constant.EndpointTypeGemini:
+			return &dto.GeminiChatRequest{
+				Contents: []dto.GeminiChatContent{
+					{
+						Role:  "user",
+						Parts: []dto.GeminiPart{{Text: "hi"}},
+					},
+				},
+				GenerationConfig: dto.GeminiChatGenerationConfig{
+					MaxOutputTokens: lo.ToPtr(uint(3000)),
+				},
+			}
+		case constant.EndpointTypeOpenAI:
 			req := &dto.GeneralOpenAIRequest{
 				Model:  model,
 				Stream: lo.ToPtr(isStream),
@@ -1019,30 +927,12 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 						Content: "hi",
 					},
 				},
-				MaxTokens: lo.ToPtr(maxTokens),
+				MaxTokens: lo.ToPtr(uint(16)),
 			}
 			if isStream {
 				req.StreamOptions = &dto.StreamOptions{IncludeUsage: true}
 			}
 			return req
-		}
-	}
-
-	if channel != nil && channel.Type == constant.ChannelTypeChatGPTImage {
-		if !common.IsImageGenerationModel(model) {
-			maxTokens := uint(16)
-			return &dto.GeneralOpenAIRequest{
-				Model:     model,
-				Stream:    lo.ToPtr(isStream),
-				Messages:  []dto.Message{{Role: "user", Content: "hi"}},
-				MaxTokens: lo.ToPtr(maxTokens),
-			}
-		}
-		return &dto.ImageRequest{
-			Model:  model,
-			Prompt: "a cute cat",
-			N:      lo.ToPtr(uint(1)),
-			Size:   "1024x1024",
 		}
 	}
 
@@ -1064,14 +954,6 @@ func buildTestRequest(model string, endpointType string, channel *model.Channel,
 		return &dto.EmbeddingRequest{
 			Model: model,
 			Input: []any{"hello world"},
-		}
-	}
-
-	// Responses compaction models (must use /v1/responses/compact)
-	if strings.HasSuffix(model, ratio_setting.CompactModelSuffix) {
-		return &dto.OpenAIResponsesCompactionRequest{
-			Model: model,
-			Input: testResponsesInput,
 		}
 	}
 
@@ -1136,8 +1018,17 @@ func TestChannel(c *gin.Context) {
 	testModel := c.Query("model")
 	endpointType := c.Query("endpoint_type")
 	isStream := parseChannelTestStreamQuery(c.Query("stream"))
+	testUserID, err := resolveChannelTestUserID(c)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	tik := time.Now()
-	result := testChannel(channel, testModel, endpointType, isStream)
+	requestCtx := context.Background()
+	if c.Request != nil {
+		requestCtx = c.Request.Context()
+	}
+	result := testChannel(requestCtx, channel, testUserID, testModel, endpointType, isStream)
 	if result.localErr != nil {
 		resp := gin.H{
 			"success": false,
@@ -1170,175 +1061,254 @@ func TestChannel(c *gin.Context) {
 	})
 }
 
-var testAllChannelsLock sync.Mutex
-var testAllChannelsRunning bool = false
+// channelTestSummary records the outcome of one channel test cycle so the
+// system task can persist a per-run result for history.
+type channelTestSummary struct {
+	Tested    int `json:"tested"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	Disabled  int `json:"disabled"`
+	Enabled   int `json:"enabled"`
+}
 
-func runChannelAutoTests(channels []*model.Channel, notify bool, deleteUnauthorized bool) error {
-	testAllChannelsLock.Lock()
-	if testAllChannelsRunning {
-		testAllChannelsLock.Unlock()
-		return errors.New("测试已在运行中")
+func testChannelForHealthCheck(ctx context.Context, channel *model.Channel, testUserID int, allowDisable bool, disableThreshold int64) channelTestSummary {
+	summary := channelTestSummary{}
+	isChannelEnabled := channel.Status == common.ChannelStatusEnabled
+	tik := time.Now()
+	result := testChannel(ctx, channel, testUserID, "", "", shouldUseStreamForAutomaticChannelTest(channel))
+	milliseconds := channelTestResponseTimeMillis(result, time.Since(tik).Milliseconds())
+	if ctx.Err() != nil {
+		return summary
 	}
-	testAllChannelsRunning = true
-	testAllChannelsLock.Unlock()
 
-	var disableThreshold = int64(common.ChannelDisableThreshold * 1000)
-	if disableThreshold == 0 {
-		disableThreshold = 10000000 // a impossible value
+	summary.Tested++
+
+	shouldBanChannel := false
+	newAPIError := result.newAPIError
+	if newAPIError != nil {
+		shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
 	}
-	gopool.Go(func() {
-		// 使用 defer 确保无论如何都会重置运行状态，防止死锁
-		defer func() {
-			testAllChannelsLock.Lock()
-			testAllChannelsRunning = false
-			testAllChannelsLock.Unlock()
-		}()
 
-		for _, channel := range channels {
-			if channel.Status == common.ChannelStatusManuallyDisabled {
-				continue
-			}
-			isChannelEnabled := channel.Status == common.ChannelStatusEnabled
-			tik := time.Now()
-			result := testChannel(channel, "", "", shouldUseStreamForAutomaticChannelTest(channel))
-			tok := time.Now()
-			milliseconds := channelTestResponseTimeMillis(result, tok.Sub(tik).Milliseconds())
+	if common.AutomaticDisableChannelEnabled && !shouldBanChannel {
+		if milliseconds > disableThreshold {
+			err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
+			newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
+			shouldBanChannel = true
+		}
+	}
 
-			if deleteReason := channelDeletionReasonAfterTest(result, deleteUnauthorized); deleteReason != "" {
-				if shouldPreserveChannelAfterTestDeletion(channel) {
-					common.SysLog(fmt.Sprintf("kept channel #%d (%s) after %s because ChatGPT Web/Codex channels are not auto-deleted", channel.Id, channel.Name, deleteReason))
-				} else {
-					if err := channel.Delete(); err != nil {
-						common.SysError(fmt.Sprintf("failed to delete channel after %s: channel_id=%d err=%v", deleteReason, channel.Id, err))
-					} else {
-						common.SysLog(fmt.Sprintf("deleted channel #%d (%s) because test result matched %s", channel.Id, channel.Name, deleteReason))
-						model.InitChannelCache()
+	if newAPIError == nil {
+		summary.Succeeded++
+	} else {
+		summary.Failed++
+	}
+
+	if allowDisable && isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
+		processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError, nil)
+		summary.Disabled++
+	}
+
+	if result.localErr == nil && !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
+		service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
+		summary.Enabled++
+	}
+
+	channel.UpdateResponseTime(milliseconds)
+	return summary
+}
+
+// runChannelTestWorkers executes independent channel tests with bounded
+// concurrency. Results and progress are reduced by the caller goroutine, so
+// summary counts and the progress reporter remain serialized.
+func runChannelTestWorkers(
+	ctx context.Context,
+	channels []*model.Channel,
+	concurrency int,
+	run func(context.Context, *model.Channel) channelTestSummary,
+	report func(processed, total int),
+) channelTestSummary {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	total := len(channels)
+	if report != nil {
+		report(0, total)
+	}
+	if total == 0 {
+		return channelTestSummary{}
+	}
+
+	workerCount := min(operation_setting.NormalizeChannelTestConcurrency(concurrency), total)
+	jobs := make(chan *model.Channel)
+	results := make(chan channelTestSummary)
+
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case channel, ok := <-jobs:
+					if !ok {
+						return
 					}
-					time.Sleep(common.RequestInterval)
-					continue
+					if ctx.Err() != nil {
+						return
+					}
+
+					result := channelTestSummary{}
+					if channel != nil && channel.Status != common.ChannelStatusManuallyDisabled {
+						result = run(ctx, channel)
+					}
+
+					results <- result
+
+					if common.RequestInterval > 0 {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(common.RequestInterval):
+						}
+					}
 				}
 			}
-
-			shouldBanChannel := false
-			newAPIError := result.newAPIError
-			// request error disables the channel
-			if newAPIError != nil {
-				shouldBanChannel = service.ShouldDisableChannel(result.newAPIError)
-			}
-
-			// 当错误检查通过，才检查响应时间
-			if common.AutomaticDisableChannelEnabled && !shouldBanChannel {
-				if milliseconds > disableThreshold {
-					err := fmt.Errorf("响应时间 %.2fs 超过阈值 %.2fs", float64(milliseconds)/1000.0, float64(disableThreshold)/1000.0)
-					newAPIError = types.NewOpenAIError(err, types.ErrorCodeChannelResponseTimeExceeded, http.StatusRequestTimeout)
-					shouldBanChannel = service.ShouldDisableChannel(newAPIError)
-				}
-			}
-
-			// disable channel
-			if isChannelEnabled && shouldBanChannel && channel.GetAutoBan() {
-				processChannelError(result.context, *types.NewChannelError(channel.Id, channel.Type, channel.Name, channel.ChannelInfo.IsMultiKey, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.GetAutoBan()), newAPIError)
-			}
-
-			// enable channel
-			if !isChannelEnabled && service.ShouldEnableChannel(newAPIError, channel.Status) {
-				service.EnableChannel(channel.Id, common.GetContextKeyString(result.context, constant.ContextKeyChannelKey), channel.Name)
-			}
-
-			channel.UpdateResponseTime(milliseconds)
-			time.Sleep(common.RequestInterval)
-		}
-
-		if notify {
-			service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
-		}
-	})
-	return nil
-}
-
-func testAllChannels(notify bool, deleteUnauthorized bool) error {
-	channels, getChannelErr := model.GetAllChannels(0, 0, true, false)
-	if getChannelErr != nil {
-		return getChannelErr
+		}()
 	}
-	return runChannelAutoTests(channels, notify, deleteUnauthorized)
+
+	go func() {
+		defer close(jobs)
+		for _, channel := range channels {
+			select {
+			case <-ctx.Done():
+				return
+			case jobs <- channel:
+			}
+		}
+	}()
+
+	go func() {
+		workers.Wait()
+		close(results)
+	}()
+
+	summary := channelTestSummary{}
+	processed := 0
+	for result := range results {
+		summary.Tested += result.Tested
+		summary.Succeeded += result.Succeeded
+		summary.Failed += result.Failed
+		summary.Disabled += result.Disabled
+		summary.Enabled += result.Enabled
+		processed++
+		if report != nil && ctx.Err() == nil {
+			report(processed, total)
+		}
+	}
+	return summary
 }
 
+// performChannelTests runs channel health checks with the configured bounded
+// concurrency and honors cancellation when a system-task runner loses its
+// lease.
+func performChannelTests(ctx context.Context, channels []*model.Channel, testUserID int, allowDisable bool, concurrency int, report func(processed, total int)) channelTestSummary {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	disableThreshold := int64(common.ChannelDisableThreshold * 1000)
+	if disableThreshold == 0 {
+		disableThreshold = 10000000 // an impossible value
+	}
+	return runChannelTestWorkers(
+		ctx,
+		channels,
+		concurrency,
+		func(ctx context.Context, channel *model.Channel) channelTestSummary {
+			return testChannelForHealthCheck(ctx, channel, testUserID, allowDisable, disableThreshold)
+		},
+		report,
+	)
+}
+
+// runChannelTestTask runs one synchronous channel test cycle for the system task
+// runner (both the scheduled job and the manual "test all channels" trigger go
+// through here). It honors ctx cancellation so a runner that loses its lease
+// stops promptly. mode selects the channel set: an empty mode falls back to the
+// configured monitor ChannelTestMode (scheduled behavior), while a manual
+// trigger passes ChannelTestModeScheduledAll to test every channel. When notify
+// is set the root user is notified on completion. Cross-instance execution is
+// guarded by the system task per-type lock, so no process-local guard is needed.
+func runChannelTestTask(ctx context.Context, mode string, notify bool, report func(processed, total int)) (channelTestSummary, error) {
+	testUserID, err := resolveChannelTestUserID(nil)
+	if err != nil {
+		return channelTestSummary{}, err
+	}
+	channels, err := model.GetAllChannels(0, 0, true, false)
+	if err != nil {
+		return channelTestSummary{}, err
+	}
+	if strings.TrimSpace(mode) == "" {
+		mode = operation_setting.GetMonitorSetting().ChannelTestMode
+	}
+	selected := selectChannelsForAutomaticTest(channels, mode)
+	allowDisable := mode != operation_setting.ChannelTestModePassiveRecovery
+	concurrency := operation_setting.GetMonitorSetting().ChannelTestConcurrency
+	summary := performChannelTests(ctx, selected, testUserID, allowDisable, concurrency, report)
+	if notify && (ctx == nil || ctx.Err() == nil) {
+		service.NotifyRootUser(dto.NotifyTypeChannelTest, "通道测试完成", "所有通道测试已完成")
+	}
+	return summary, nil
+}
+
+func selectChannelsForAutomaticTest(channels []*model.Channel, mode string) []*model.Channel {
+	selected := make([]*model.Channel, 0, len(channels))
+	for _, channel := range channels {
+		if channel.Status == common.ChannelStatusManuallyDisabled {
+			continue
+		}
+		if mode == operation_setting.ChannelTestModeAutoBanOnly && !channel.GetAutoBan() {
+			continue
+		}
+		if mode == operation_setting.ChannelTestModePassiveRecovery && channel.Status != common.ChannelStatusAutoDisabled {
+			continue
+		}
+		selected = append(selected, channel)
+	}
+	return selected
+}
+
+// TestAllChannels enqueues a channel_test system task instead of running the
+// test loop inline. If any channel_test task is already active, the manual run is
+// rejected so the caller does not mistake a scheduled run for this manual one.
 func TestAllChannels(c *gin.Context) {
-	err := testAllChannels(true, true)
+	task, created, err := service.EnqueueSystemTask(model.SystemTaskTypeChannelTest, channelTestTaskPayload{
+		Mode:   operation_setting.ChannelTestModeScheduledAll,
+		Notify: true,
+	})
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-	})
-}
-
-func TestChannelsBatch(c *gin.Context) {
-	channelBatch := ChannelBatch{}
-	if err := c.ShouldBindJSON(&channelBatch); err != nil || len(channelBatch.Ids) == 0 {
-		c.JSON(http.StatusOK, gin.H{
+	if !created {
+		c.JSON(http.StatusConflict, gin.H{
 			"success": false,
-			"message": "参数错误",
+			"message": "已有通道测试任务正在运行或等待中，不能启动本次手动任务",
+			"data": gin.H{
+				"task_id": task.TaskID,
+				"status":  task.Status,
+				"type":    task.Type,
+			},
 		})
 		return
 	}
-
-	channelRecords := make([]model.Channel, 0, len(channelBatch.Ids))
-	if err := model.DB.Where("id in (?)", channelBatch.Ids).Find(&channelRecords).Error; err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	if len(channelRecords) == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "未找到可测试的渠道",
-		})
-		return
-	}
-	channels := make([]*model.Channel, 0, len(channelRecords))
-	for index := range channelRecords {
-		channels = append(channels, &channelRecords[index])
-	}
-
-	if err := runChannelAutoTests(channels, true, true); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    len(channels),
-	})
-}
-
-var autoTestChannelsOnce sync.Once
-
-func AutomaticallyTestChannels() {
-	// 只在Master节点定时测试渠道
-	if !common.IsMasterNode {
-		return
-	}
-	autoTestChannelsOnce.Do(func() {
-		for {
-			if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
-				time.Sleep(1 * time.Minute)
-				continue
-			}
-			for {
-				frequency := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
-				time.Sleep(time.Duration(int(math.Round(frequency))) * time.Minute)
-				common.SysLog(fmt.Sprintf("automatically test channels with interval %f minutes", frequency))
-				common.SysLog("automatically testing all channels")
-				_ = testAllChannels(false, false)
-				common.SysLog("automatically channel test finished")
-				if !operation_setting.GetMonitorSetting().AutoTestChannelEnabled {
-					break
-				}
-			}
-		}
+		"data": gin.H{
+			"task_id": task.TaskID,
+			"status":  task.Status,
+		},
 	})
 }

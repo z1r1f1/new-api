@@ -20,7 +20,6 @@ func GetAllLogs(c *gin.Context) {
 	modelName := c.Query("model_name")
 	channel, _ := strconv.Atoi(c.Query("channel_id"))
 	if channel == 0 {
-		// Backward compatibility for old clients that used `channel` as channel id.
 		channel, _ = strconv.Atoi(c.Query("channel"))
 	}
 	channelName := c.Query("channel_name")
@@ -28,10 +27,15 @@ func GetAllLogs(c *gin.Context) {
 	ip := c.Query("ip")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetAllLogs(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, ip, requestId, upstreamRequestId)
+	logs, total, err := model.GetAllLogsWithFilters(logType, startTimestamp, endTimestamp, modelName, username, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, ip, requestId, upstreamRequestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
+	}
+	if c.GetInt("role") < common.RoleRootUser {
+		model.FormatAdminLogs(logs)
+	} else {
+		model.FormatRootLogs(logs)
 	}
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(logs)
@@ -56,7 +60,7 @@ func GetUserLogs(c *gin.Context) {
 	ip := c.Query("ip")
 	requestId := c.Query("request_id")
 	upstreamRequestId := c.Query("upstream_request_id")
-	logs, total, err := model.GetUserLogs(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, ip, requestId, upstreamRequestId)
+	logs, total, err := model.GetUserLogsWithFilters(userId, logType, startTimestamp, endTimestamp, modelName, tokenName, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), channel, channelName, group, ip, requestId, upstreamRequestId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -121,8 +125,8 @@ func GetLogsStat(c *gin.Context) {
 	channelName := c.Query("channel_name")
 	group := c.Query("group")
 	ip := c.Query("ip")
-	requestId := c.Query("request_id")
-	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId)
+	requestID := c.Query("request_id")
+	stat, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -159,8 +163,8 @@ func GetLogsSelfStat(c *gin.Context) {
 	channelName := c.Query("channel_name")
 	group := c.Query("group")
 	ip := c.Query("ip")
-	requestId := c.Query("request_id")
-	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestId)
+	requestID := c.Query("request_id")
+	quotaNum, err := model.SumUsedQuota(logType, startTimestamp, endTimestamp, modelName, username, tokenName, channel, channelName, group, ip, requestID)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -180,28 +184,6 @@ func GetLogsSelfStat(c *gin.Context) {
 			"avg_frt":            quotaNum.AvgFirstResponseTime,
 			//"token": tokenNum,
 		},
-	})
-	return
-}
-
-func DeleteHistoryLogs(c *gin.Context) {
-	targetTimestamp, _ := strconv.ParseInt(c.Query("target_timestamp"), 10, 64)
-	if targetTimestamp == 0 {
-		c.JSON(http.StatusOK, gin.H{
-			"success": false,
-			"message": "target timestamp is required",
-		})
-		return
-	}
-	count, err := model.DeleteOldLog(c.Request.Context(), targetTimestamp, 100)
-	if err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    count,
 	})
 	return
 }

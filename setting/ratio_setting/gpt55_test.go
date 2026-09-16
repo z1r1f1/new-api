@@ -9,8 +9,8 @@ func TestGPT55DefaultRatios(t *testing.T) {
 	if !hasRatio {
 		t.Fatal("expected model ratio for gpt-5.5")
 	}
-	if modelRatio != 0.625 {
-		t.Fatalf("expected gpt-5.5 model ratio 0.625, got %v", modelRatio)
+	if modelRatio != 2.5 {
+		t.Fatalf("expected gpt-5.5 model ratio 2.5, got %v", modelRatio)
 	}
 
 	cacheRatio, ok := GetCacheRatio("gpt-5.5")

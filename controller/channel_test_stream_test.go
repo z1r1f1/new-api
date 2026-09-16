@@ -132,12 +132,6 @@ func TestShouldAutoTestUseStream(t *testing.T) {
 		}
 	})
 
-	t.Run("chatgpt web channels use non-stream probe", func(t *testing.T) {
-		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
-		if shouldUseStreamForAutomaticChannelTest(channel) {
-			t.Fatalf("expected ChatGPT Web channel to use stream=false during auto test")
-		}
-	})
 }
 
 func TestParseChannelTestStreamQuery(t *testing.T) {
@@ -235,20 +229,6 @@ func TestShouldDeleteChannelAfterTest(t *testing.T) {
 }
 
 func TestShouldForceNonStreamChannelTest(t *testing.T) {
-	t.Run("chatgpt web text endpoint uses non-stream probe", func(t *testing.T) {
-		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
-		if !shouldForceNonStreamChannelTest(channel, string(constant.EndpointTypeOpenAI)) {
-			t.Fatalf("expected ChatGPT Web text endpoint test to force non-stream")
-		}
-	})
-
-	t.Run("chatgpt web image endpoint keeps normal image behavior", func(t *testing.T) {
-		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
-		if shouldForceNonStreamChannelTest(channel, string(constant.EndpointTypeImageGeneration)) {
-			t.Fatalf("expected ChatGPT Web image endpoint test not to force text non-stream")
-		}
-	})
-
 	t.Run("ordinary channels keep requested stream behavior", func(t *testing.T) {
 		channel := &model.Channel{Type: constant.ChannelTypeOpenAI}
 		if shouldForceNonStreamChannelTest(channel, string(constant.EndpointTypeOpenAI)) {
@@ -262,13 +242,6 @@ func TestShouldPreserveChannelAfterTestDeletion(t *testing.T) {
 		channel := &model.Channel{Type: constant.ChannelTypeCodex}
 		if !shouldPreserveChannelAfterTestDeletion(channel) {
 			t.Fatalf("expected Codex channel to be preserved from auto deletion")
-		}
-	})
-
-	t.Run("preserves chatgpt web channel", func(t *testing.T) {
-		channel := &model.Channel{Type: constant.ChannelTypeChatGPTImage}
-		if !shouldPreserveChannelAfterTestDeletion(channel) {
-			t.Fatalf("expected ChatGPT Web channel to be preserved from auto deletion")
 		}
 	})
 

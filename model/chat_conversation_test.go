@@ -27,14 +27,10 @@ func setupChatTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 
 	previousDB := DB
-	previousUsingSQLite := common.UsingSQLite
-	previousUsingMySQL := common.UsingMySQL
-	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousMainDatabaseType := common.MainDatabaseType()
 	previousRedisEnabled := common.RedisEnabled
 
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	initCol()
 
@@ -57,9 +53,7 @@ func setupChatTestDB(t *testing.T) *gorm.DB {
 			_ = sqlDB.Close()
 		}
 		DB = previousDB
-		common.UsingSQLite = previousUsingSQLite
-		common.UsingMySQL = previousUsingMySQL
-		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.SetMainDatabaseType(previousMainDatabaseType)
 		common.RedisEnabled = previousRedisEnabled
 		initCol()
 	})

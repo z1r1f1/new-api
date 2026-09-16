@@ -1,23 +1,154 @@
 package relay
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/constant"
+	appdto "github.com/QuantumNous/new-api/dto"
+	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/QuantumNous/new-api/types"
+	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/service"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestNormalizeResponsesWSMaxOutputTokens(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		valid bool
+	}{
+		{value: "0", valid: true},
+		{value: "1073741823", valid: true},
+		{value: "1073741824"},
+		{value: "18446744073686646784"},
+		{value: "-1"},
+	} {
+		for _, wrapped := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/wrapped=%t", tc.value, wrapped), func(t *testing.T) {
+				fields := `"model":"gpt-5.1","input":"hi","max_output_tokens":` + tc.value
+				payload := `{"type":"response.create",` + fields + `}`
+				if wrapped {
+					payload = `{"type":"response.create","response":{` + fields + `}}`
+				}
+				create, _, err := normalizeResponsesWSCreateEvent([]byte(payload))
+				if !tc.valid {
+					require.Error(t, err)
+					assert.Equal(t, http.StatusBadRequest, newResponsesWSInvalidRequestError(err).StatusCode)
+					return
+				}
+				require.NoError(t, err)
+				require.NotNil(t, create.Request.MaxOutputTokens)
+				assert.Equal(t, tc.value, fmt.Sprint(*create.Request.MaxOutputTokens))
+			})
+		}
+	}
+}
+
+func TestSelectResponsesWSChannelHonorsPinsAndFilters(t *testing.T) {
+	database := setupRelayChannelDB(t)
+	enabled := &model.Channel{Name: "enabled", Key: "sk-test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeOpenAI}
+	enabled.SetSetting(dto.ChannelSettings{ResponsesWebSocketEnabled: true})
+	wsDisabled := &model.Channel{Name: "ws-disabled", Key: "sk-test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeOpenAI}
+	disabled := &model.Channel{Name: "disabled", Key: "sk-test", Status: common.ChannelStatusManuallyDisabled, Type: constant.ChannelTypeOpenAI}
+	filtered := &model.Channel{Name: "filtered", Key: "sk-test", Status: common.ChannelStatusEnabled, Type: constant.ChannelTypeAdvancedCustom}
+	for _, channel := range []*model.Channel{enabled, disabled, filtered, wsDisabled} {
+		require.NoError(t, database.Create(channel).Error)
+	}
+	for _, tc := range []struct {
+		name      string
+		channelID int
+		status    int
+	}{
+		{name: "token pin overrides origin pin", channelID: enabled.Id},
+		{name: "disabled pin rejects", channelID: disabled.Id, status: http.StatusForbidden},
+		{name: "pin cannot bypass websocket switch", channelID: wsDisabled.Id, status: http.StatusBadRequest},
+		{name: "pin cannot bypass path filter", channelID: filtered.Id, status: http.StatusBadRequest},
+		{name: "missing pin rejects", channelID: 99999, status: http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+			constraints := service.GetChannelConstraints(c)
+			constraints.AddPin(appdto.ChannelPin{ChannelId: disabled.Id, Source: appdto.PinSourceOriginTask, Rank: appdto.PinRankOriginTask, RetryMode: appdto.PinRetrySameChannel})
+			constraints.AddPin(appdto.ChannelPin{ChannelId: tc.channelID, Source: appdto.PinSourceToken, Rank: appdto.PinRankToken, RetryMode: appdto.PinRetrySingleAttempt})
+			constraints.AddFilter(appdto.ChannelFilter{Kind: appdto.FilterRequestPath, RequestPath: c.Request.URL.Path})
+			channel, apiErr := selectResponsesWSChannel(c, "gpt-5.1", &service.RetryParam{Ctx: c, ModelName: "gpt-5.1", TokenGroup: "default"})
+			if tc.status != 0 {
+				require.NotNil(t, apiErr)
+				assert.Equal(t, tc.status, apiErr.StatusCode)
+				assert.Nil(t, channel)
+				assert.False(t, service.ShouldRetryRelayError(c, apiErr, 2))
+				return
+			}
+			require.Nil(t, apiErr)
+			require.NotNil(t, channel)
+			assert.Equal(t, enabled.Id, channel.Id)
+			assert.Equal(t, enabled.Id, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
+			assert.False(t, service.ShouldRetryRelayError(c, types.NewErrorWithStatusCode(errors.New("upstream failed"), types.ErrorCodeDoRequestFailed, 503), 2))
+		})
+	}
+}
+
+func TestResponsesWSChannelRoutingRequiresExplicitOptIn(t *testing.T) {
+	database := setupRelayChannelDB(t)
+	require.NoError(t, database.AutoMigrate(&model.Ability{}))
+	legacy := &model.Channel{Name: "legacy-http", Key: "sk-test", Type: constant.ChannelTypeOpenAI, Status: common.ChannelStatusEnabled, Group: "default", Models: "ws-model", Priority: common.GetPointer(int64(10))}
+	enabled := &model.Channel{Name: "websocket", Key: "sk-test", Type: constant.ChannelTypeCodex, Status: common.ChannelStatusEnabled, Group: "default", Models: "ws-model", Priority: common.GetPointer(int64(0))}
+	unsupported := &model.Channel{Name: "unsupported", Key: "sk-test", Type: constant.ChannelTypeAnthropic, Status: common.ChannelStatusEnabled, Group: "default", Models: "ws-model", Priority: common.GetPointer(int64(5))}
+	enabled.SetSetting(dto.ChannelSettings{ResponsesWebSocketEnabled: true})
+	unsupported.SetSetting(dto.ChannelSettings{ResponsesWebSocketEnabled: true})
+	for _, channel := range []*model.Channel{legacy, enabled, unsupported} {
+		require.NoError(t, database.Create(channel).Error)
+		require.NoError(t, database.Create(&model.Ability{ChannelId: channel.Id, Model: "ws-model", Group: "default", Enabled: true, Priority: channel.Priority}).Error)
+	}
+	previousCache := common.MemoryCacheEnabled
+	t.Cleanup(func() {
+		defer func() { common.MemoryCacheEnabled = previousCache }()
+		ids := []int{legacy.Id, enabled.Id, unsupported.Id}
+		require.NoError(t, database.Where("channel_id IN ?", ids).Delete(&model.Ability{}).Error)
+		require.NoError(t, database.Where("id IN ?", ids).Delete(&model.Channel{}).Error)
+		model.InitChannelCache()
+	})
+	common.MemoryCacheEnabled = true
+	model.InitChannelCache()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	params := &service.RetryParam{Ctx: c, ModelName: "ws-model", TokenGroup: "default"}
+	channel, apiErr := selectResponsesWSChannel(c, "ws-model", params)
+	require.Nil(t, apiErr)
+	require.NotNil(t, channel)
+	assert.Equal(t, enabled.Id, channel.Id)
+	httpChannel, err := model.GetRandomSatisfiedChannel("default", "ws-model", 0, nil)
+	require.NoError(t, err)
+	require.NotNil(t, httpChannel)
+	assert.Equal(t, legacy.Id, httpChannel.Id)
+
+	// Disabling the saved setting takes effect for the next create on an existing session.
+	enabled.SetSetting(dto.ChannelSettings{ResponsesWebSocketEnabled: false})
+	require.NoError(t, database.Model(enabled).Update("setting", enabled.Setting).Error)
+	model.InitChannelCache()
+	session := &responsesWSSession{lockedChannelID: enabled.Id, lockedModel: "ws-model"}
+	apiErr = session.restoreConnectionContext(c, "ws-model")
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	channel, apiErr = selectResponsesWSChannel(c, "ws-model", params)
+	require.NotNil(t, apiErr)
+	assert.Nil(t, channel)
+}
 
 func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {
 	message := []byte(`{
@@ -27,7 +158,6 @@ func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {
 		"response": {
 			"model": "gpt-5.3-codex-spark",
 			"input": "hi",
-			"fast": true,
 			"store": false,
 			"stream": true,
 			"stream_options": {"include_usage": true}
@@ -47,13 +177,6 @@ func TestNormalizeResponsesWSCreateEventWrapper(t *testing.T) {
 	}
 	if strings.TrimSpace(string(create.Generate)) != "false" {
 		t.Fatalf("generate = %s, want false", create.Generate)
-	}
-	var raw map[string]any
-	if err := common.Unmarshal(create.Raw, &raw); err != nil {
-		t.Fatalf("unmarshal raw request: %v", err)
-	}
-	if raw["fast"] != true {
-		t.Fatalf("raw request should preserve compatibility fields such as fast: %s", create.Raw)
 	}
 	if req.Stream != nil {
 		t.Fatalf("stream = %v, want nil", req.Stream)
@@ -111,7 +234,7 @@ func TestBuildResponsesWSCreateEventIsFlat(t *testing.T) {
 		"stream_options": {"include_usage": true}
 	}`)
 
-	got, err := buildResponsesWSCreateEvent(payload, json.RawMessage(`false`))
+	got, err := buildResponsesWSCreateEvent(payload, common.RawMessage(`false`))
 	if err != nil {
 		t.Fatalf("buildResponsesWSCreateEvent() error = %v", err)
 	}
@@ -180,254 +303,6 @@ func TestBuildResponsesWSErrorPayloadIncludesStatus(t *testing.T) {
 	}
 }
 
-func TestResponsesWSUpstreamUsageLimitErrorUses429(t *testing.T) {
-	message := []byte(`{
-		"type": "response.failed",
-		"response": {
-			"status": "failed",
-			"error": {
-				"message": "You've hit your usage limit. To continue using Codex, try again later.",
-				"type": "rate_limit_error",
-				"code": "usage_limit"
-			}
-		}
-	}`)
-	var streamResp dto.ResponsesStreamResponse
-	if err := common.Unmarshal(message, &streamResp); err != nil {
-		t.Fatalf("unmarshal stream response: %v", err)
-	}
-
-	apiErr := newResponsesWSUpstreamAPIError(streamResp, message)
-	if apiErr == nil {
-		t.Fatal("apiErr is nil")
-	}
-	if apiErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusTooManyRequests)
-	}
-	if !strings.Contains(apiErr.Error(), "usage limit") {
-		t.Fatalf("error should include upstream detail, got %q", apiErr.Error())
-	}
-}
-
-func TestResponsesWSTopLevelErrorPreservesStatus(t *testing.T) {
-	message := []byte(`{
-		"type": "error",
-		"status": 400,
-		"error": {
-			"message": "Unsupported parameter: stream_options",
-			"type": "invalid_request_error",
-			"code": "unsupported_parameter"
-		}
-	}`)
-	var streamResp dto.ResponsesStreamResponse
-	if err := common.Unmarshal(message, &streamResp); err != nil {
-		t.Fatalf("unmarshal stream response: %v", err)
-	}
-
-	apiErr := newResponsesWSUpstreamAPIError(streamResp, message)
-	if apiErr == nil {
-		t.Fatal("apiErr is nil")
-	}
-	if apiErr.StatusCode != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusBadRequest)
-	}
-	if !strings.Contains(apiErr.Error(), "Unsupported parameter") {
-		t.Fatalf("error should include top-level detail, got %q", apiErr.Error())
-	}
-}
-
-func TestResponsesWSUsageLimitTextError(t *testing.T) {
-	apiErr := newResponsesWSUsageLimitTextError("You've hit your usage limit. Try again later.")
-	if apiErr == nil {
-		t.Fatal("apiErr is nil")
-	}
-	if apiErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusTooManyRequests)
-	}
-}
-
-func TestResponsesWSTextualPreviousResponseNotFoundErrorUses429(t *testing.T) {
-	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
-	if apiErr == nil {
-		t.Fatal("apiErr is nil")
-	}
-	if apiErr.StatusCode != http.StatusTooManyRequests {
-		t.Fatalf("status = %d, want %d", apiErr.StatusCode, http.StatusTooManyRequests)
-	}
-	if !strings.Contains(apiErr.Error(), "Previous response") {
-		t.Fatalf("error should include upstream detail, got %q", apiErr.Error())
-	}
-}
-
-func TestResponsesWSTextualErrorDoesNotTreatPlain429MentionAsFailure(t *testing.T) {
-	if apiErr := newResponsesWSTextualUpstreamError("HTTP 429 is a numeric status code in many APIs."); apiErr != nil {
-		t.Fatalf("plain explanatory 429 text should not be treated as upstream failure: %v", apiErr)
-	}
-	if apiErr := newResponsesWSTextualUpstreamError("status_code=429, 已处理这个问题，并已经重建并重启当前容器。"); apiErr != nil {
-		t.Fatalf("assistant explanation containing status_code=429 should not be treated as upstream failure: %v", apiErr)
-	}
-}
-
-func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForStateError(t *testing.T) {
-	create := responsesWSCreateRequest{
-		Request: dto.OpenAIResponsesRequest{
-			Model:              "gpt-5.5",
-			PreviousResponseID: "resp_123",
-		},
-		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":"hi"}`),
-	}
-	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
-
-	got := prepareResponsesWSRetryCreate(create, apiErr)
-
-	if got.Request.PreviousResponseID != "resp_123" {
-		t.Fatalf("PreviousResponseID = %q, want resp_123", got.Request.PreviousResponseID)
-	}
-	if !strings.Contains(string(got.Raw), "previous_response_id") {
-		t.Fatalf("previous_response_id should remain because it is upstream state, got: %s", got.Raw)
-	}
-}
-
-func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForNonStateError(t *testing.T) {
-	create := responsesWSCreateRequest{
-		Request: dto.OpenAIResponsesRequest{
-			Model:              "gpt-5.5",
-			PreviousResponseID: "resp_123",
-		},
-		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":"hi"}`),
-	}
-	apiErr := types.NewOpenAIError(errors.New("upstream failed"), types.ErrorCodeBadResponseStatusCode, http.StatusInternalServerError)
-
-	got := prepareResponsesWSRetryCreate(create, apiErr)
-
-	if got.Request.PreviousResponseID != "resp_123" {
-		t.Fatalf("PreviousResponseID = %q, want resp_123", got.Request.PreviousResponseID)
-	}
-	if !strings.Contains(string(got.Raw), "previous_response_id") {
-		t.Fatalf("previous_response_id should remain in raw retry payload: %s", got.Raw)
-	}
-}
-
-func TestPrepareResponsesWSRetryCreateKeepsPreviousResponseIDForFunctionCallOutput(t *testing.T) {
-	create := responsesWSCreateRequest{
-		Request: dto.OpenAIResponsesRequest{
-			Model:              "gpt-5.5",
-			PreviousResponseID: "resp_123",
-			Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
-		},
-		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":[{"type":"function_call_output","call_id":"call_1","output":"ok"}]}`),
-	}
-	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
-
-	got := prepareResponsesWSRetryCreate(create, apiErr)
-
-	if got.Request.PreviousResponseID != "resp_123" {
-		t.Fatalf("function_call_output retries must keep PreviousResponseID, got %q", got.Request.PreviousResponseID)
-	}
-	if !strings.Contains(string(got.Raw), "previous_response_id") {
-		t.Fatalf("previous_response_id should remain when input depends on a tool call: %s", got.Raw)
-	}
-}
-
-func TestPrepareResponsesWSRetryCreateReplaysStoredFunctionCallOutputState(t *testing.T) {
-	session := &responsesWSSession{toolCallsByResponseID: map[string][]dto.ResponsesOutput{
-		"resp_123": {{Type: "function_call", ID: "fc_1", CallId: "call_1", Name: "exec_command", Arguments: json.RawMessage(`"{\"cmd\":\"pwd\"}"`)}},
-	}}
-	create := responsesWSCreateRequest{
-		Request: dto.OpenAIResponsesRequest{
-			Model:              "gpt-5.5",
-			PreviousResponseID: "resp_123",
-			Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"/tmp"}]`),
-		},
-		Raw: json.RawMessage(`{"model":"gpt-5.5","previous_response_id":"resp_123","input":[{"type":"function_call_output","call_id":"call_1","output":"/tmp"}]}`),
-	}
-	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
-
-	got := session.prepareResponsesWSRetryCreate(create, apiErr)
-
-	if got.Request.PreviousResponseID != "" {
-		t.Fatalf("PreviousResponseID = %q, want empty after replay expansion", got.Request.PreviousResponseID)
-	}
-	var raw map[string]any
-	if err := common.Unmarshal(got.Raw, &raw); err != nil {
-		t.Fatalf("unmarshal raw: %v", err)
-	}
-	if _, ok := raw["previous_response_id"]; ok {
-		t.Fatalf("previous_response_id should be removed from replay retry payload: %s", got.Raw)
-	}
-	items, ok := raw["input"].([]any)
-	if !ok || len(items) != 2 {
-		t.Fatalf("input should contain replayed function_call plus output, got %#v", raw["input"])
-	}
-	first, _ := items[0].(map[string]any)
-	if first["type"] != "function_call" || first["call_id"] != "call_1" || first["name"] != "exec_command" {
-		t.Fatalf("unexpected replayed function call: %#v", first)
-	}
-	second, _ := items[1].(map[string]any)
-	if second["type"] != "function_call_output" || second["call_id"] != "call_1" {
-		t.Fatalf("unexpected function call output: %#v", second)
-	}
-}
-
-func TestResponsesWSToolCallArgumentsDeltasSurviveItemIDToCallIDMapping(t *testing.T) {
-	state := &responsesWSCallState{}
-
-	state.appendResponsesWSToolCallArguments("fc_1", `{"cmd":`)
-	state.observeResponsesWSToolCallItem(&dto.ResponsesOutput{
-		Type:   "function_call",
-		ID:     "fc_1",
-		CallId: "call_1",
-		Name:   "exec_command",
-	})
-	state.appendResponsesWSToolCallArguments("fc_1", `"pwd"}`)
-
-	call, ok := state.toolCalls["call_1"]
-	if !ok {
-		t.Fatal("tool call was not recorded under canonical call_id")
-	}
-	if got := call.ArgumentsString(); got != `{"cmd":"pwd"}` {
-		t.Fatalf("arguments = %q, want full merged JSON string", got)
-	}
-}
-
-func TestResponsesWSCanRetryStateErrorRejectsPreviousResponseContinuation(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	session := &responsesWSSession{c: ctx, client: &websocket.Conn{}}
-	state := &responsesWSCallState{create: responsesWSCreateRequest{Request: dto.OpenAIResponsesRequest{
-		Model:              "gpt-5.5",
-		PreviousResponseID: "resp_123",
-		Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
-	}}}
-	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
-
-	if session.canRetryTerminalUpstreamError(state, apiErr) {
-		t.Fatal("previous_response_id continuations depend on prior upstream state and must not retry on a fallback channel")
-	}
-}
-
-func TestResponsesWSCanRetryStateErrorAllowsReplayablePreviousResponseContinuation(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	session := &responsesWSSession{
-		c:      ctx,
-		client: &websocket.Conn{},
-		toolCallsByResponseID: map[string][]dto.ResponsesOutput{
-			"resp_123": {{Type: "function_call", ID: "fc_1", CallId: "call_1", Name: "exec_command", Arguments: json.RawMessage(`"{}"`)}},
-		},
-	}
-	state := &responsesWSCallState{create: responsesWSCreateRequest{Request: dto.OpenAIResponsesRequest{
-		Model:              "gpt-5.5",
-		PreviousResponseID: "resp_123",
-		Input:              json.RawMessage(`[{"type":"function_call_output","call_id":"call_1","output":"ok"}]`),
-	}}}
-	apiErr := newResponsesWSTextualUpstreamError("status_code=429, Previous response with id 'resp_123' not found.")
-
-	if !session.canRetryTerminalUpstreamError(state, apiErr) {
-		t.Fatal("stored function_call state should allow retry by replaying the missing tool call")
-	}
-}
-
 func TestResponsesWSInvalidRequestErrorUsesBadRequestStatus(t *testing.T) {
 	payload, err := buildResponsesWSErrorPayload("", newResponsesWSInvalidRequestError(errors.New("bad event")))
 	if err != nil {
@@ -444,33 +319,6 @@ func TestResponsesWSInvalidRequestErrorUsesBadRequestStatus(t *testing.T) {
 	}
 }
 
-func TestRemoveResponsesWSTransportFields(t *testing.T) {
-	payload := []byte(`{
-		"model": "gpt-5.3-codex-spark",
-		"stream": true,
-		"background": true,
-		"stream_options": {"include_usage": true},
-		"store": false
-	}`)
-
-	got, err := removeResponsesWSTransportFields(payload)
-	if err != nil {
-		t.Fatalf("removeResponsesWSTransportFields() error = %v", err)
-	}
-	var data map[string]any
-	if err := common.Unmarshal(got, &data); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-	for _, key := range []string{"stream", "background", "stream_options"} {
-		if _, ok := data[key]; ok {
-			t.Fatalf("transport field %q still present in %s", key, got)
-		}
-	}
-	if data["store"] != false {
-		t.Fatalf("store = %#v, want false", data["store"])
-	}
-}
-
 func TestToWebSocketURL(t *testing.T) {
 	tests := map[string]string{
 		"https://api.openai.com/v1/responses":             "wss://api.openai.com/v1/responses",
@@ -484,292 +332,6 @@ func TestToWebSocketURL(t *testing.T) {
 			t.Fatalf("toWebSocketURL(%q) = %q, want %q", input, got, want)
 		}
 	}
-}
-
-func TestHandleTargetWriteFailureWithStateReleasesCurrentAndClearsTarget(t *testing.T) {
-	target, cleanup := newTestResponsesWSTarget(t)
-	defer cleanup()
-
-	var committed *bool
-	session := &responsesWSSession{target: target}
-	state := &responsesWSCallState{
-		info: &relaycommon.RelayInfo{},
-		commitRate: func(success bool) {
-			committed = &success
-		},
-	}
-	session.current = state
-
-	apiErr := session.handleTargetWriteFailureWithState(state, errors.New("write failed"))
-
-	if apiErr == nil {
-		t.Fatal("apiErr is nil")
-	}
-	if session.target != nil {
-		t.Fatal("target was not cleared")
-	}
-	if session.getCurrent() != nil {
-		t.Fatal("current response was not released")
-	}
-	if committed == nil || *committed {
-		t.Fatalf("commit success = %v, want false", committed)
-	}
-}
-
-func TestHandleControlEventWriteFailureSendsResponsesError(t *testing.T) {
-	clientConn, serverConn, cleanupClient := newTestWebSocketPair(t)
-	defer cleanupClient()
-	target, cleanupTarget := newTestResponsesWSTarget(t)
-	defer cleanupTarget()
-
-	session := &responsesWSSession{
-		client: serverConn,
-		target: target,
-	}
-	apiErr := session.handleControlEventWriteFailure(errors.New("write failed"))
-	if apiErr != nil {
-		t.Fatalf("handleControlEventWriteFailure() error = %v", apiErr)
-	}
-	if session.target != nil {
-		t.Fatal("target was not cleared")
-	}
-
-	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
-		t.Fatalf("set read deadline: %v", err)
-	}
-	_, payload, err := clientConn.ReadMessage()
-	if err != nil {
-		t.Fatalf("read responses error event: %v", err)
-	}
-	var data struct {
-		Type   string `json:"type"`
-		Status int    `json:"status"`
-	}
-	if err := common.Unmarshal(payload, &data); err != nil {
-		t.Fatalf("unmarshal result: %v", err)
-	}
-	if data.Type != "error" || data.Status == 0 {
-		t.Fatalf("unexpected error event: %s", payload)
-	}
-}
-
-func TestObserveUpstreamFailedReleasesCurrent(t *testing.T) {
-	var committed *bool
-	session := &responsesWSSession{}
-	state := &responsesWSCallState{
-		info: &relaycommon.RelayInfo{},
-		commitRate: func(success bool) {
-			committed = &success
-		},
-	}
-	session.current = state
-
-	session.observeUpstreamMessage([]byte(`{"type":"response.failed"}`))
-
-	if session.getCurrent() != nil {
-		t.Fatal("current response was not released")
-	}
-	if committed == nil || *committed {
-		t.Fatalf("commit success = %v, want false", committed)
-	}
-}
-
-func TestObserveUpstreamMessageMarksFirstUpstreamEventAsFirstResponse(t *testing.T) {
-	info := newTestResponsesWSRelayInfo(t)
-	session := &responsesWSSession{}
-	session.current = &responsesWSCallState{info: info}
-	initialFirstResponseTime := info.FirstResponseTime
-
-	session.observeUpstreamMessage([]byte(`{"type":"response.created","response":{"id":"resp_1","status":"in_progress"}}`))
-
-	if !info.HasSendResponse() {
-		t.Fatal("first upstream websocket event should mark first response time")
-	}
-	if !info.FirstResponseTime.After(initialFirstResponseTime) {
-		t.Fatalf("first response time was not advanced on protocol event: got %s want after %s", info.FirstResponseTime, initialFirstResponseTime)
-	}
-
-	firstResponseTime := info.FirstResponseTime
-	session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"hello"}`))
-
-	if !info.FirstResponseTime.Equal(firstResponseTime) {
-		t.Fatalf("later output should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
-	}
-}
-
-func TestObserveUpstreamMessageMarksFunctionCallSkeletonAsFirstResponse(t *testing.T) {
-	info := newTestResponsesWSRelayInfo(t)
-	session := &responsesWSSession{}
-	session.current = &responsesWSCallState{info: info}
-
-	session.observeUpstreamMessage([]byte(`{"type":"response.output_item.added","item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"exec_command"}}`))
-
-	if !info.HasSendResponse() {
-		t.Fatal("function_call skeleton is the first upstream websocket event and should mark first response time")
-	}
-
-	firstResponseTime := info.FirstResponseTime
-	session.observeUpstreamMessage([]byte(`{"type":"response.function_call_arguments.delta","item_id":"fc_1","delta":"{\"cmd\":\"pwd\"}"}`))
-
-	if !info.FirstResponseTime.Equal(firstResponseTime) {
-		t.Fatalf("function_call arguments should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
-	}
-}
-
-func TestObserveUpstreamMessageFiltersWeeklyLimitNotice(t *testing.T) {
-	for _, percent := range []string{"25", "20", "10", "5"} {
-		t.Run(percent+"Percent", func(t *testing.T) {
-			info := newTestResponsesWSRelayInfo(t)
-			session := &responsesWSSession{}
-			session.current = &responsesWSCallState{info: info}
-
-			notice := fmt.Sprintf("Heads up, you have less than %s%% of your weekly limit left. Run /status for a breakdown.", percent)
-			message, err := common.Marshal(map[string]string{
-				"type":  "response.output_text.delta",
-				"delta": notice,
-			})
-			if err != nil {
-				t.Fatalf("marshal notice: %v", err)
-			}
-
-			_, forward, keepReading := session.observeUpstreamMessage(message)
-
-			if forward {
-				t.Fatal("weekly limit notice delta should not be forwarded to websocket client")
-			}
-			if !keepReading {
-				t.Fatal("weekly limit notice should be filtered without closing upstream reader")
-			}
-			if !info.HasSendResponse() {
-				t.Fatal("filtered weekly limit notice is still the first upstream websocket event and should mark FRT")
-			}
-
-			firstResponseTime := info.FirstResponseTime
-			_, forward, keepReading = session.observeUpstreamMessage([]byte(`{"type":"response.output_text.delta","delta":"real output"}`))
-			if !forward || !keepReading {
-				t.Fatalf("normal output should be forwarded and keep reading, got forward=%v keepReading=%v", forward, keepReading)
-			}
-			if !info.FirstResponseTime.Equal(firstResponseTime) {
-				t.Fatalf("normal output after filtered notice should not change first response time: got %s want %s", info.FirstResponseTime, firstResponseTime)
-			}
-		})
-	}
-}
-
-func TestObserveUpstreamMessageFiltersWeeklyLimitNoticeItemDone(t *testing.T) {
-	info := newTestResponsesWSRelayInfo(t)
-	session := &responsesWSSession{}
-	session.current = &responsesWSCallState{info: info}
-
-	_, forward, keepReading := session.observeUpstreamMessage([]byte(`{
-		"type":"response.output_item.done",
-		"item":{
-			"type":"message",
-			"id":"msg_1",
-			"status":"completed",
-			"role":"assistant",
-			"content":[{"type":"output_text","text":"Heads up, you have less than 5% of your weekly limit left. Run /status for a breakdown.","annotations":[]}]
-		}
-	}`))
-
-	if forward {
-		t.Fatal("weekly limit notice item.done should not be forwarded to websocket client")
-	}
-	if !keepReading {
-		t.Fatal("weekly limit notice item.done should be filtered without closing upstream reader")
-	}
-	if !info.HasSendResponse() {
-		t.Fatal("filtered weekly limit notice item.done is still the first upstream websocket event and should mark FRT")
-	}
-}
-
-func TestNormalizeResponsesWSTerminalMessageForClientInjectsEstimatedUsageAndOutput(t *testing.T) {
-	message := []byte(`{
-		"type":"response.completed",
-		"response":{
-			"id":"resp_1",
-			"status":"completed"
-		}
-	}`)
-	var streamResponse dto.ResponsesStreamResponse
-	if err := common.Unmarshal(message, &streamResponse); err != nil {
-		t.Fatalf("unmarshal stream response: %v", err)
-	}
-
-	state := &responsesWSCallState{
-		info:  newTestResponsesWSRelayInfo(t),
-		usage: &dto.Usage{PromptTokens: 11, CompletionTokens: 3},
-	}
-	got := normalizeResponsesWSTerminalMessageForClient(message, state, &streamResponse)
-
-	var payload struct {
-		Response struct {
-			Output []dto.ResponsesOutput `json:"output"`
-			Usage  *dto.Usage            `json:"usage"`
-		} `json:"response"`
-	}
-	if err := common.Unmarshal(got, &payload); err != nil {
-		t.Fatalf("unmarshal normalized message: %v; payload=%s", err, got)
-	}
-	if payload.Response.Output == nil {
-		t.Fatalf("response.output should be normalized to an empty array: %s", got)
-	}
-	if payload.Response.Usage == nil {
-		t.Fatalf("response.usage should be injected for websocket clients: %s", got)
-	}
-	if payload.Response.Usage.PromptTokens != 11 || payload.Response.Usage.InputTokens != 11 {
-		t.Fatalf("input usage = prompt:%d input:%d, want 11/11", payload.Response.Usage.PromptTokens, payload.Response.Usage.InputTokens)
-	}
-	if payload.Response.Usage.CompletionTokens != 3 || payload.Response.Usage.OutputTokens != 3 {
-		t.Fatalf("output usage = completion:%d output:%d, want 3/3", payload.Response.Usage.CompletionTokens, payload.Response.Usage.OutputTokens)
-	}
-	if payload.Response.Usage.TotalTokens != 14 {
-		t.Fatalf("total_tokens = %d, want 14", payload.Response.Usage.TotalTokens)
-	}
-}
-
-func TestNormalizeResponsesWSTerminalMessageForClientKeepsUpstreamUsage(t *testing.T) {
-	message := []byte(`{
-		"type":"response.completed",
-		"response":{
-			"id":"resp_1",
-			"status":"completed",
-			"usage":{"input_tokens":99,"output_tokens":1,"total_tokens":100}
-		}
-	}`)
-	var streamResponse dto.ResponsesStreamResponse
-	if err := common.Unmarshal(message, &streamResponse); err != nil {
-		t.Fatalf("unmarshal stream response: %v", err)
-	}
-
-	state := &responsesWSCallState{
-		info:  newTestResponsesWSRelayInfo(t),
-		usage: &dto.Usage{PromptTokens: 11, CompletionTokens: 3},
-	}
-	got := normalizeResponsesWSTerminalMessageForClient(message, state, &streamResponse)
-
-	var payload struct {
-		Response struct {
-			Usage *dto.Usage `json:"usage"`
-		} `json:"response"`
-	}
-	if err := common.Unmarshal(got, &payload); err != nil {
-		t.Fatalf("unmarshal normalized message: %v; payload=%s", err, got)
-	}
-	if payload.Response.Usage == nil {
-		t.Fatalf("response.usage missing: %s", got)
-	}
-	if payload.Response.Usage.InputTokens != 99 || payload.Response.Usage.OutputTokens != 1 || payload.Response.Usage.TotalTokens != 100 {
-		t.Fatalf("upstream usage was overwritten: %#v", payload.Response.Usage)
-	}
-}
-
-func newTestResponsesWSRelayInfo(t *testing.T) *relaycommon.RelayInfo {
-	t.Helper()
-	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
-	return relaycommon.GenRelayInfoResponses(ctx, &dto.OpenAIResponsesRequest{Model: "gpt-5.5"})
 }
 
 func newTestResponsesWSTarget(t *testing.T) (*websocket.Conn, func()) {
@@ -804,4 +366,78 @@ func newTestWebSocketPair(t *testing.T) (*websocket.Conn, *websocket.Conn, func(
 		server.Close()
 	}
 	return target, serverConn, cleanup
+}
+
+func TestResponsesWSMessageSizeLimit(t *testing.T) {
+	previous := constant.MaxRequestBodyMB
+	constant.MaxRequestBodyMB = 1
+	t.Cleanup(func() { constant.MaxRequestBodyMB = previous })
+	client, server, cleanup := newTestWebSocketPair(t)
+	defer cleanup()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	var admitted atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ResponsesWebSocketHelper(c, server, func(*http.Request, string, func(*gin.Context) *types.NewAPIError) *types.NewAPIError {
+			admitted.Store(true)
+			return nil
+		})
+	}()
+	_ = client.WriteMessage(websocket.TextMessage, []byte(strings.Repeat("x", (1<<20)+1)))
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, _, err := client.ReadMessage()
+	assert.True(t, websocket.IsCloseError(err, websocket.CloseMessageTooBig), "oversized message must be rejected before admission: %v", err)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("websocket request did not exit after oversized message")
+	}
+	assert.False(t, admitted.Load())
+}
+
+func TestResponsesWSShutdownInterruptsBusyWriter(t *testing.T) {
+	client, server, cleanupClient := newTestWebSocketPair(t)
+	defer cleanupClient()
+	target, peer, cleanupTarget := newTestWebSocketPair(t)
+	defer cleanupTarget()
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &responsesWSSession{ctx: ctx, cancel: cancel, client: server, target: target}
+	// A blocked network writer owns this lock. Closing the connection must
+	// remain possible so that writer can be interrupted.
+	s.targetWriteMu.Lock()
+	defer s.targetWriteMu.Unlock()
+	done := make(chan struct{})
+	go func() { s.shutdown(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("shutdown waited for the network writer")
+	}
+	require.NoError(t, peer.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err := peer.ReadMessage()
+	assert.Error(t, err)
+	require.NoError(t, client.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err = client.ReadMessage()
+	assert.Error(t, err)
+	assert.Nil(t, s.getTarget())
+}
+
+func TestResponsesWSPassthroughPreservesRawPricingParameters(t *testing.T) {
+	create, _, err := normalizeResponsesWSCreateEvent([]byte(`{"type":"response.create","generate":false,"response":{"model":"gpt-5.1","input":"hi","vendor":{"tier":"premium"},"stream":true}}`))
+	require.NoError(t, err)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(string(create.Body)))
+	c.Request.Header.Set("Content-Type", "application/json")
+	common.SetContextKey(c, constant.ContextKeyOriginalModel, create.Request.Model)
+	common.SetContextKey(c, constant.ContextKeyChannelType, constant.ChannelTypeOpenAI)
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, dto.ChannelSettings{PassThroughBodyEnabled: true})
+	info := relaycommon.GenRelayInfoResponses(c, &create.Request)
+	payload, apiErr := buildResponsesWSCreatePayload(c, info, create.Request, create.Generate)
+	require.Nil(t, apiErr)
+	assert.JSONEq(t, `{"type":"response.create","generate":false,"model":"gpt-5.1","input":"hi","vendor":{"tier":"premium"}}`, string(payload))
+	storage, err := common.GetBodyStorage(c)
+	require.NoError(t, err)
+	require.NoError(t, storage.Close())
 }

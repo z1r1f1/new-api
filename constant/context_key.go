@@ -15,10 +15,12 @@ const (
 	ContextKeyTokenKey               ContextKey = "token_key"
 	ContextKeyTokenId                ContextKey = "token_id"
 	ContextKeyTokenGroup             ContextKey = "token_group"
-	ContextKeyTokenSpecificChannelId ContextKey = "specific_channel_id"
+	ContextKeyOriginTasks            ContextKey = "origin_tasks"
+	ContextKeyChannelConstraints     ContextKey = "channel_constraints"
 	ContextKeyTokenModelLimitEnabled ContextKey = "token_model_limit_enabled"
 	ContextKeyTokenModelLimit        ContextKey = "token_model_limit"
 	ContextKeyTokenCrossGroupRetry   ContextKey = "token_cross_group_retry"
+	ContextKeyTokenAutoGroups        ContextKey = "token_auto_groups"
 
 	/* channel related keys */
 	ContextKeyChannelId                ContextKey = "channel_id"
@@ -70,13 +72,25 @@ const (
 	// ContextKeyPlaygroundDebugId stores the per-request playground debug capture id.
 	ContextKeyPlaygroundDebugId ContextKey = "playground_debug_id"
 
-	// ContextKeyRelayInfo stores the request-scoped relay info after validation.
+	// ContextKeyRelayInfo stores the request-scoped relay information after
+	// validation so downstream handlers can record request diagnostics.
 	ContextKeyRelayInfo ContextKey = "relay_info"
 
-	// ContextKeyConsumeLogRecorded marks that a successful consume-log row was persisted for this request.
+	// ContextKeyImageGenerationResponse stores an OpenAI-compatible image
+	// response captured by relay handlers for drawing-log persistence.
+	ContextKeyImageGenerationResponse ContextKey = "image_generation_response"
+
+	// ContextKeyConsumeLogRecorded marks that a successful consume-log row was persisted.
 	ContextKeyConsumeLogRecorded ContextKey = "consume_log_recorded"
 
-	// ContextKeyImageGenerationResponse stores an OpenAI-compatible image response
-	// captured by provider handlers so /v1/images/generations can be mirrored into drawing logs.
-	ContextKeyImageGenerationResponse ContextKey = "image_generation_response"
+	// ContextKeyAuditLogged marks that the current request has already recorded
+	// a manage/operation audit log inside the handler. When set, the admin-audit
+	// fallback in authHelper (finishAdminAudit) skips its record to avoid
+	// duplicate entries.
+	ContextKeyAuditLogged ContextKey = "audit_logged"
+
+	// ContextKeyTokenAuditParams contains only the API token operation's safe metadata.
+	ContextKeyTokenAuditParams ContextKey = "token_audit_params"
+	// ContextKeyTokenAuditSucceeded disambiguates token responses that exceed the audit buffer.
+	ContextKeyTokenAuditSucceeded ContextKey = "token_audit_succeeded"
 )

@@ -14,10 +14,9 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/router"
+	authservice "github.com/QuantumNous/new-api/service"
 	chatservice "github.com/QuantumNous/new-api/service/chat"
 	"github.com/centrifugal/protocol"
-	"github.com/gin-contrib/sessions"
-	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/gorilla/websocket"
@@ -46,17 +45,15 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
-	previousUsingSQLite := common.UsingSQLite
-	previousUsingMySQL := common.UsingMySQL
-	previousUsingPostgreSQL := common.UsingPostgreSQL
+	previousMainDatabaseType := common.MainDatabaseType()
 	previousRedisEnabled := common.RedisEnabled
 	previousGlobalAPIRateLimitEnabled := common.GlobalApiRateLimitEnable
+	previousSessionSecret := common.SessionSecret
 
-	common.UsingSQLite = true
-	common.UsingMySQL = false
-	common.UsingPostgreSQL = false
+	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.GlobalApiRateLimitEnable = false
+	common.SessionSecret = "chat-smoke-test-secret"
 
 	dsn := "file:" + strings.ReplaceAll(t.Name(), "/", "_") + "?mode=memory&cache=shared"
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -64,7 +61,7 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 
 	model.DB = db
 	model.LOG_DB = db
-	require.NoError(t, db.AutoMigrate(&model.User{}))
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
 	if migrateChatTables {
 		require.NoError(t, db.AutoMigrate(
 			&model.ChatConversation{},
@@ -82,11 +79,10 @@ func setupChatSmokeTestDBWithMigration(t *testing.T, migrateChatTables bool) *go
 		}
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
-		common.UsingSQLite = previousUsingSQLite
-		common.UsingMySQL = previousUsingMySQL
-		common.UsingPostgreSQL = previousUsingPostgreSQL
+		common.SetMainDatabaseType(previousMainDatabaseType)
 		common.RedisEnabled = previousRedisEnabled
 		common.GlobalApiRateLimitEnable = previousGlobalAPIRateLimitEnabled
+		common.SessionSecret = previousSessionSecret
 	})
 
 	return db
@@ -98,26 +94,16 @@ func TestChatUsersRouteListsEnabledPeers(t *testing.T) {
 	seedChatSmokeUser(t, 2, "bob", "Bob", common.RoleAdminUser, common.UserStatusEnabled)
 	seedChatSmokeUser(t, 3, "charlie", "Charlie", common.RoleAdminUser, common.UserStatusDisabled)
 	seedChatSmokeUser(t, 4, "dave", "Dave", common.RoleCommonUser, common.UserStatusEnabled)
+	accessToken := issueChatSmokeAccessToken(t, 1)
 
 	gin.SetMode(gin.TestMode)
 	root := gin.New()
-	root.Use(sessions.Sessions("session", cookie.NewStore([]byte("chat-users-test"))))
-	root.Use(func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", "alice")
-		session.Set("role", common.RoleCommonUser)
-		session.Set("id", 1)
-		session.Set("status", common.UserStatusEnabled)
-		session.Set("group", "default")
-		require.NoError(t, session.Save())
-		c.Next()
-	})
 
 	apiRouter := root.Group("/api")
 	router.SetChatRouter(root, apiRouter)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/chat/users", nil)
-	req.Header.Set("New-Api-User", "1")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	recorder := httptest.NewRecorder()
 
 	root.ServeHTTP(recorder, req)
@@ -138,26 +124,17 @@ func TestChatUsersRouteListsEnabledPeers(t *testing.T) {
 
 func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
 	db := setupChatSmokeTestDBWithoutChatTables(t)
+	seedChatSmokeUser(t, 1, "smoke-user-1", "Smoke User", common.RoleCommonUser, common.UserStatusEnabled)
+	accessToken := issueChatSmokeAccessToken(t, 1)
 
 	gin.SetMode(gin.TestMode)
 	root := gin.New()
-	root.Use(sessions.Sessions("session", cookie.NewStore([]byte("chat-missing-table-test"))))
-	root.Use(func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", "smoke-user-1")
-		session.Set("role", common.RoleCommonUser)
-		session.Set("id", 1)
-		session.Set("status", common.UserStatusEnabled)
-		session.Set("group", "default")
-		require.NoError(t, session.Save())
-		c.Next()
-	})
 
 	apiRouter := root.Group("/api")
 	router.SetChatRouter(root, apiRouter)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/chat/conversations", nil)
-	req.Header.Set("New-Api-User", "1")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 	recorder := httptest.NewRecorder()
 
 	root.ServeHTTP(recorder, req)
@@ -167,7 +144,11 @@ func TestChatConversationsRouteCreatesMissingChatTables(t *testing.T) {
 	var apiResp chatAPIResponse
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &apiResp))
 	require.True(t, apiResp.Success, apiResp.Message)
-	require.JSONEq(t, "[]", string(apiResp.Data))
+	var conversations []chatservice.ConversationResponse
+	require.NoError(t, common.Unmarshal(apiResp.Data, &conversations))
+	require.Len(t, conversations, 1)
+	require.True(t, conversations[0].IsDefault)
+	require.Equal(t, "__default_group__", conversations[0].DirectKey)
 	require.True(t, db.Migrator().HasTable(&model.ChatConversation{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatConversationMember{}))
 	require.True(t, db.Migrator().HasTable(&model.ChatMessage{}))
@@ -185,8 +166,18 @@ func seedChatSmokeUser(t *testing.T, id int, username string, displayName string
 		DisplayName: displayName,
 		Role:        role,
 		Status:      status,
+		AuthVersion: 1,
 		AffCode:     username + "-aff",
 	}).Error)
+}
+
+func issueChatSmokeAccessToken(t *testing.T, userID int) string {
+	t.Helper()
+
+	bundle, err := authservice.CreateLoginSession(userID, "test", "127.0.0.1", "chat-smoke-test")
+	require.NoError(t, err)
+	require.NotEmpty(t, bundle.AccessToken)
+	return bundle.AccessToken
 }
 
 func initializeChatSmokeTestRuntime(t *testing.T) *chatservice.RealtimeServer {
@@ -210,27 +201,11 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	setupChatSmokeTestDB(t)
 	seedChatSmokeUser(t, 1, "smoke-user-1", "Smoke User", common.RoleCommonUser, common.UserStatusEnabled)
 	seedChatSmokeUser(t, 2, "smoke-admin", "Smoke Admin", common.RoleAdminUser, common.UserStatusEnabled)
+	accessToken := issueChatSmokeAccessToken(t, 1)
 	initializeChatSmokeTestRuntime(t)
 
 	gin.SetMode(gin.TestMode)
 	root := gin.New()
-	store := cookie.NewStore([]byte("chat-smoke-test"))
-	root.Use(sessions.Sessions("session", store))
-
-	root.GET("/login", func(c *gin.Context) {
-		session := sessions.Default(c)
-		session.Set("username", "smoke-user-1")
-		session.Set("role", common.RoleCommonUser)
-		session.Set("id", 1)
-		session.Set("status", common.UserStatusEnabled)
-		session.Set("group", "default")
-		session.Set("user_group", "default")
-		if err := session.Save(); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": err.Error()})
-			return
-		}
-		c.Status(http.StatusNoContent)
-	})
 
 	apiRouter := root.Group("/api")
 	router.SetChatRouter(root, apiRouter)
@@ -239,22 +214,22 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	httpClient := server.Client()
-	loginResp, err := httpClient.Get(server.URL + "/login")
-	require.NoError(t, err)
-	require.Equal(t, http.StatusNoContent, loginResp.StatusCode)
-	require.NoError(t, loginResp.Body.Close())
+	unauthenticatedWS := dialChatWebSocket(t, server.URL)
+	sendChatWSCommand(t, unauthenticatedWS, 1, map[string]any{
+		"connect": map[string]any{},
+	})
+	unauthenticatedReply := readChatWSReply(t, unauthenticatedWS)
+	require.NotNil(t, unauthenticatedReply.Error)
+	require.EqualValues(t, 101, unauthenticatedReply.Error.Code)
+	require.NoError(t, unauthenticatedWS.Close())
 
-	cookies := loginResp.Cookies()
-	require.NotEmpty(t, cookies)
-	cookieHeader := buildCookieHeader(cookies)
-
-	wsConn := dialChatWebSocket(t, server.URL, cookieHeader)
+	wsConn := dialChatWebSocket(t, server.URL)
 	t.Cleanup(func() {
 		_ = wsConn.Close()
 	})
 
 	sendChatWSCommand(t, wsConn, 1, map[string]any{
-		"connect": map[string]any{},
+		"connect": map[string]any{"token": accessToken},
 	})
 	connectReply := readChatWSReply(t, wsConn)
 	require.NotNil(t, connectReply.Connect)
@@ -269,7 +244,7 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.NotNil(t, subscribeReply.Subscribe)
 	require.Nil(t, subscribeReply.Error)
 
-	conversation := createChatConversationViaHTTP(t, httpClient, server.URL, cookies, 2)
+	conversation := createChatConversationViaHTTP(t, httpClient, server.URL, accessToken, 2)
 	require.NotZero(t, conversation.Id)
 
 	userPublication := readChatWSReply(t, wsConn)
@@ -293,7 +268,7 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.NotNil(t, conversationSubscribeReply.Subscribe)
 	require.Nil(t, conversationSubscribeReply.Error)
 
-	message := sendChatMessageViaHTTP(t, httpClient, server.URL, cookies, conversation.Id, "hello from smoke test")
+	message := sendChatMessageViaHTTP(t, httpClient, server.URL, accessToken, conversation.Id, "hello from smoke test")
 	require.NotZero(t, message.Id)
 	require.Equal(t, "hello from smoke test", message.Body)
 
@@ -309,7 +284,7 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.Equal(t, message.Id, messageCreated.Message.Id)
 	require.Equal(t, message.Body, messageCreated.Message.Body)
 
-	reacted := reactChatMessageViaHTTP(t, httpClient, server.URL, cookies, conversation.Id, message.Id, "👍")
+	reacted := reactChatMessageViaHTTP(t, httpClient, server.URL, accessToken, conversation.Id, message.Id, "👍")
 	require.Len(t, reacted.Reactions, 1)
 	require.Equal(t, "👍", reacted.Reactions[0].Emoji)
 	require.Equal(t, 1, reacted.Reactions[0].Count)
@@ -331,7 +306,7 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.Equal(t, 1, messageReactionUpdated.Message.Reactions[0].Count)
 	require.False(t, messageReactionUpdated.Message.Reactions[0].ReactedByMe)
 
-	revoked := revokeChatMessageViaHTTP(t, httpClient, server.URL, cookies, conversation.Id, message.Id)
+	revoked := revokeChatMessageViaHTTP(t, httpClient, server.URL, accessToken, conversation.Id, message.Id)
 	require.Equal(t, message.Id, revoked.Id)
 	require.Empty(t, revoked.Body)
 	require.Greater(t, revoked.RevokedAt, int64(0))
@@ -350,7 +325,7 @@ func TestChatBrowserAndWebSocketSmoke(t *testing.T) {
 	require.Empty(t, messageRevoked.Message.Body)
 }
 
-func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, peerUserID int) *chatservice.ConversationResponse {
+func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL string, accessToken string, peerUserID int) *chatservice.ConversationResponse {
 	t.Helper()
 
 	payload, err := common.Marshal(map[string]any{"user_id": peerUserID})
@@ -359,10 +334,7 @@ func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL st
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/direct", bytes.NewReader(payload))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("New-Api-User", "1")
-	for _, cookie := range cookies {
-		req.AddCookie(cookie)
-	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
@@ -378,7 +350,7 @@ func createChatConversationViaHTTP(t *testing.T, client *http.Client, baseURL st
 	return &conversation
 }
 
-func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, body string) *chatservice.MessageResponse {
+func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, accessToken string, conversationID int, body string) *chatservice.MessageResponse {
 	t.Helper()
 
 	payload, err := common.Marshal(map[string]any{
@@ -390,10 +362,7 @@ func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, c
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages", bytes.NewReader(payload))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("New-Api-User", "1")
-	for _, cookie := range cookies {
-		req.AddCookie(cookie)
-	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
@@ -409,7 +378,7 @@ func sendChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, c
 	return &message
 }
 
-func reactChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, messageID int, emoji string) *chatservice.MessageResponse {
+func reactChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, accessToken string, conversationID int, messageID int, emoji string) *chatservice.MessageResponse {
 	t.Helper()
 
 	payload, err := common.Marshal(map[string]any{
@@ -420,10 +389,7 @@ func reactChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, 
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages/"+strconv.Itoa(messageID)+"/reactions", bytes.NewReader(payload))
 	require.NoError(t, err)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("New-Api-User", "1")
-	for _, cookie := range cookies {
-		req.AddCookie(cookie)
-	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
@@ -439,15 +405,12 @@ func reactChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, 
 	return &message
 }
 
-func revokeChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, cookies []*http.Cookie, conversationID int, messageID int) *chatservice.MessageResponse {
+func revokeChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string, accessToken string, conversationID int, messageID int) *chatservice.MessageResponse {
 	t.Helper()
 
 	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/chat/conversations/"+strconv.Itoa(conversationID)+"/messages/"+strconv.Itoa(messageID)+"/revoke", nil)
 	require.NoError(t, err)
-	req.Header.Set("New-Api-User", "1")
-	for _, cookie := range cookies {
-		req.AddCookie(cookie)
-	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	resp, err := client.Do(req)
 	require.NoError(t, err)
@@ -463,17 +426,15 @@ func revokeChatMessageViaHTTP(t *testing.T, client *http.Client, baseURL string,
 	return &message
 }
 
-func dialChatWebSocket(t *testing.T, baseURL string, cookieHeader string) *websocket.Conn {
+func dialChatWebSocket(t *testing.T, baseURL string) *websocket.Conn {
 	t.Helper()
 
 	wsURL := "ws" + strings.TrimPrefix(baseURL, "http") + "/api/chat/ws"
 	dialer := websocket.Dialer{
 		Subprotocols: []string{"centrifuge-json"},
 	}
-	header := http.Header{}
-	header.Set("Cookie", cookieHeader)
 
-	conn, resp, err := dialer.Dial(wsURL, header)
+	conn, resp, err := dialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	require.Equal(t, http.StatusSwitchingProtocols, resp.StatusCode)
@@ -521,12 +482,4 @@ func readChatWSReply(t *testing.T, conn *websocket.Conn) protocol.Reply {
 
 	t.Fatalf("failed to decode websocket reply: %s", string(payload))
 	return protocol.Reply{}
-}
-
-func buildCookieHeader(cookies []*http.Cookie) string {
-	parts := make([]string, 0, len(cookies))
-	for _, cookie := range cookies {
-		parts = append(parts, cookie.Name+"="+cookie.Value)
-	}
-	return strings.Join(parts, "; ")
 }
