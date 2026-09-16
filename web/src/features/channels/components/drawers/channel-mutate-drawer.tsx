@@ -40,6 +40,7 @@ import {
   Wand2,
 } from 'lucide-react'
 import {
+  type ChangeEvent,
   type ComponentProps,
   type ReactNode,
   useEffect,
@@ -131,6 +132,7 @@ import {
   getGroups,
   getPrefillGroups,
   getTaskPluginOptions,
+  importChannelsFromFiles,
   refreshCodexCredential,
 } from '../../api'
 import {
@@ -173,6 +175,7 @@ import {
   hasModelConfigChanged,
   findMissingModelsInMapping,
   validateModelMappingJson,
+  transformFormDataToCreatePayload,
 } from '../../lib'
 import {
   getChannelConfigurationSection,
@@ -422,6 +425,9 @@ export function ChannelMutateDrawer({
     useState(false)
   const [clipboardConnectionInfo, setClipboardConnectionInfo] =
     useState<ChannelConnectionInfo | null>(null)
+  const [credentialImportFiles, setCredentialImportFiles] = useState<File[]>([])
+  const [isCredentialImportPending, setIsCredentialImportPending] =
+    useState(false)
 
   const isEditing = Boolean(currentRow)
   const requestedSide = isEditing ? 'left' : 'right'
@@ -596,6 +602,33 @@ export function ChannelMutateDrawer({
     }
   }, [applyConnectionInfo, t])
 
+  const handleCredentialImportFilesChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = event.target.files ? [...event.target.files] : []
+      event.target.value = ''
+      if (files.length === 0) return
+
+      const hasUnsupportedFile = files.some((file) => {
+        const fileName = file.name.toLowerCase()
+        return !fileName.endsWith('.json') && !fileName.endsWith('.zip')
+      })
+      if (hasUnsupportedFile) {
+        toast.error(t('Only JSON and ZIP credential files are supported'))
+        return
+      }
+
+      setCredentialImportFiles(files)
+      toast.success(
+        t('Selected {{count}} credential file(s)', { count: files.length })
+      )
+    },
+    [t]
+  )
+
+  const handleClearCredentialImportFiles = useCallback(() => {
+    setCredentialImportFiles([])
+  }, [])
+
   useEffect(() => {
     if (!open || isEditing || showProviderPicker) {
       setClipboardConnectionInfo(null)
@@ -625,6 +658,7 @@ export function ChannelMutateDrawer({
   // Helper computed values
   const isBatchMode =
     multiKeyMode === 'batch' || multiKeyMode === 'multi_to_single'
+  const hasCredentialImportFiles = credentialImportFiles.length > 0
   const isChannelDetailLoading = isEditing && isChannelLoading
   const supportsMultiKeyAddMode =
     currentType !== 57 && !(currentType === 41 && vertexKeyType === 'api_key')
@@ -937,6 +971,7 @@ export function ChannelMutateDrawer({
     if (!open) {
       setModelConfiguration(null)
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+      setCredentialImportFiles([])
       loadedForm.current = null
       setProviderTarget(null)
       setChoosingProvider(true)
@@ -980,6 +1015,7 @@ export function ChannelMutateDrawer({
         channelData.data.status_code_mapping || ''
     } else if (!isEditing) {
       form.reset(CHANNEL_FORM_DEFAULT_VALUES)
+      setCredentialImportFiles([])
       initialModelsRef.current = []
       initialModelMappingRef.current = ''
       initialStatusCodeMappingRef.current = ''
@@ -1240,6 +1276,7 @@ export function ChannelMutateDrawer({
         queryKey: channelsQueryKeys.detail(channelId),
       })
     }
+    setCredentialImportFiles([])
     onOpenChange(false)
     setOpen(null)
   }, [channelId, queryClient, onOpenChange, setOpen])
@@ -1303,18 +1340,30 @@ export function ChannelMutateDrawer({
     onSuccess: handleSuccess,
   })
 
-  const isSubmitting = channelMutation.isPending || form.formState.isSubmitting
+  const isSubmitting =
+    channelMutation.isPending ||
+    form.formState.isSubmitting ||
+    isCredentialImportPending
 
   // Submit handler
   const onSubmit = useCallback(
     async (data: ChannelFormValues) => {
       if (isEditing && !channelData?.data) return
       if (!isEditing && (!providerTarget || !canEditSensitive)) return
+      if (!hasCredentialImportFiles && !data.name?.trim()) {
+        form.setError('name', {
+          type: 'manual',
+          message: t('Channel name is required'),
+        })
+        setConfigurationSection(getChannelConfigurationSection('name'))
+        setPendingErrorFocus('name')
+        return
+      }
       // Validate key is required when creating
-      if (!isEditing && !data.key?.trim()) {
+      if (!isEditing && !hasCredentialImportFiles && !data.key?.trim()) {
         form.setError('key', {
           type: 'manual',
-          message: ERROR_MESSAGES.REQUIRED_KEY,
+          message: t('API key is required'),
         })
         setConfigurationSection('connection')
         setPendingErrorFocus('key')
@@ -1422,6 +1471,30 @@ export function ChannelMutateDrawer({
         }
       }
 
+      if (!isEditing && hasCredentialImportFiles) {
+        setIsCredentialImportPending(true)
+        try {
+          const response = await importChannelsFromFiles(
+            transformFormDataToCreatePayload(data),
+            credentialImportFiles
+          )
+          if (!response.success) {
+            throw createServerError(response, t(ERROR_MESSAGES.CREATE_FAILED))
+          }
+          toast.success(
+            t('Parsed and created {{count}} channel(s)', {
+              count: response.data?.count ?? credentialImportFiles.length,
+            })
+          )
+          handleSuccess()
+        } catch (error: unknown) {
+          handleServerError(error, t(ERROR_MESSAGES.CREATE_FAILED))
+        } finally {
+          setIsCredentialImportPending(false)
+        }
+        return
+      }
+
       try {
         await channelMutation.mutateAsync(data)
       } catch {
@@ -1430,6 +1503,8 @@ export function ChannelMutateDrawer({
     },
     [
       isEditing,
+      hasCredentialImportFiles,
+      credentialImportFiles,
       providerTarget,
       canEditSensitive,
       sensitiveLocked,
@@ -1438,6 +1513,7 @@ export function ChannelMutateDrawer({
       confirmMissingModelMappings,
       confirmStatusCodeRisk,
       channelMutation,
+      handleSuccess,
       t,
     ]
   )
@@ -1494,6 +1570,7 @@ export function ChannelMutateDrawer({
       if (!v) {
         form.reset(CHANNEL_FORM_DEFAULT_VALUES)
         setClipboardConnectionInfo(null)
+        setCredentialImportFiles([])
       }
     },
     [onOpenChange, form, isSubmitting, showProviderPicker, providerTarget]
@@ -2217,7 +2294,9 @@ export function ChannelMutateDrawer({
             name='name'
             render={({ field }) => (
               <FormItem>
-                <FormLabel required>{t('Name')}</FormLabel>
+                <FormLabel required={!hasCredentialImportFiles}>
+                  {t('Name')}
+                </FormLabel>
                 <FormControl>
                   <Input placeholder={t(FIELD_PLACEHOLDERS.NAME)} {...field} />
                 </FormControl>
@@ -3779,6 +3858,46 @@ export function ChannelMutateDrawer({
 
             <ChannelAuthSection>
               {!isEditing && (
+                <FormItem>
+                  <FormLabel>{t('Credential files')}</FormLabel>
+                  <FormControl>
+                    <Input
+                      type='file'
+                      accept='.json,application/json,.zip,application/zip,application/x-zip-compressed'
+                      multiple
+                      onChange={handleCredentialImportFilesChange}
+                    />
+                  </FormControl>
+                  <FormDescription>
+                    {t(
+                      'Choose JSON or ZIP credential files exported from credential tools. The page settings above will be applied to every imported channel.'
+                    )}
+                  </FormDescription>
+                  {hasCredentialImportFiles && (
+                    <div className='bg-muted/40 flex flex-col gap-3 rounded-lg border border-dashed p-3 sm:flex-row sm:items-center sm:justify-between'>
+                      <div className='text-muted-foreground flex items-center gap-2 text-sm'>
+                        <FileText className='h-4 w-4' />
+                        <span>
+                          {t('Selected {{count}} credential file(s)', {
+                            count: credentialImportFiles.length,
+                          })}
+                        </span>
+                      </div>
+                      <Button
+                        type='button'
+                        variant='ghost'
+                        size='sm'
+                        onClick={handleClearCredentialImportFiles}
+                        className='w-fit'
+                      >
+                        {t('Clear')}
+                      </Button>
+                    </div>
+                  )}
+                </FormItem>
+              )}
+
+              {!isEditing && (
                 <FormField
                   control={form.control}
                   name='multi_key_mode'
@@ -3880,7 +3999,9 @@ export function ChannelMutateDrawer({
                   }
                   return (
                     <FormItem>
-                      <FormLabel required>{t('API Key')}</FormLabel>
+                      <FormLabel required={!hasCredentialImportFiles}>
+                        {t('API Key')}
+                      </FormLabel>
                       <FormControl>
                         <Textarea
                           placeholder={keyPlaceholder}

@@ -202,7 +202,7 @@ function addRequiredIssue(
 
 export const channelFormSchema = z
   .object({
-    name: z.string().min(1, ERROR_MESSAGES.REQUIRED_NAME),
+    name: z.string(),
     type: z.number().min(0, ERROR_MESSAGES.REQUIRED_TYPE),
     base_url: z.string().optional(),
     task_plugin_key: z.string().optional(),

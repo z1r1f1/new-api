@@ -424,6 +424,44 @@ test('selecting a plugin opens a prefilled channel and creates its explicit bind
   expect(screen.getByLabelText('API Key *')).toHaveValue('')
 })
 
+test('credential files create imported channels without a manual name or key', async () => {
+  const post = vi.spyOn(api, 'post').mockResolvedValue({
+    data: { success: true, data: { count: 1 } },
+  })
+  const user = userEvent.setup()
+  render(<ConfigurationHarness />)
+  await user.click(await screen.findByRole('option', { name: /Video A/ }))
+
+  const credentialFile = new File(
+    [JSON.stringify({ access_token: 'secret', account_id: 'account-1' })],
+    'credential.json',
+    { type: 'application/json' }
+  )
+  await user.upload(screen.getByLabelText('Credential files'), credentialFile)
+  fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), {
+    target: { value: '' },
+  })
+
+  await user.click(screen.getByRole('button', { name: 'Create Channel' }))
+  await waitFor(() => expect(post).toHaveBeenCalledTimes(1))
+
+  const [url, body] = post.mock.calls[0]
+  expect(url).toBe('/api/channel/import')
+  expect(body).toBeInstanceOf(FormData)
+  const formData = body as FormData
+  expect(formData.getAll('files')).toEqual([credentialFile])
+  expect(JSON.parse(String(formData.get('payload')))).toMatchObject({
+    mode: 'single',
+    channel: {
+      name: null,
+      type: 61,
+      key: null,
+      models: 'video-a-1',
+      group: 'default',
+    },
+  })
+})
+
 test('changing plugins preserves credentials and custom settings while applying existing model and address rules', async () => {
   const user = userEvent.setup()
   render(<ConfigurationHarness />)

@@ -1,7 +1,9 @@
 package controller
 
 import (
+	"bytes"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -56,6 +58,28 @@ func postAddChannel(t *testing.T, userID, role int, body string) *httptest.Respo
 	return recorder
 }
 
+func postImportChannel(t *testing.T, userID, role int, payload string, credential string) *httptest.ResponseRecorder {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	require.NoError(t, writer.WriteField("payload", payload))
+	file, err := writer.CreateFormFile("files", "credential.json")
+	require.NoError(t, err)
+	_, err = file.Write([]byte(credential))
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set("id", userID)
+	context.Set("role", role)
+	context.Request = httptest.NewRequest(http.MethodPost, "/api/channel/import", &body)
+	context.Request.Header.Set("Content-Type", writer.FormDataContentType())
+	ImportChannels(context)
+	return recorder
+}
+
 func TestAddChannelTaskPluginRequiresBindPermission(t *testing.T) {
 	setupTaskPluginBindChannelTest(t)
 	const key = "channel-bind"
@@ -84,6 +108,16 @@ export function parseTaskResult() { return {}; }
 	adminOtherType := postAddChannel(t, 2, common.RoleAdminUser, openaiBody)
 	assert.Contains(t, adminOtherType.Body.String(), `"success":true`)
 	assert.NotContains(t, adminOtherType.Body.String(), "task_plugin.bind")
+}
+
+func TestImportChannelsTaskPluginRequiresBindPermission(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+	payload := `{"mode":"single","channel":{"type":1,"name":"","key":"","models":"doc","group":"default","setting":"{\"task_plugin_key\":\"channel-bind-import\"}"}}`
+	credential := `{"channel_type":61,"api_key":"secret"}`
+
+	adminDenied := postImportChannel(t, 2, common.RoleAdminUser, payload, credential)
+	assert.Contains(t, adminDenied.Body.String(), "task plugin channels require the task_plugin.bind permission")
+	assert.Contains(t, adminDenied.Body.String(), `"success":false`)
 }
 
 func TestUpdateChannelTaskPluginRequiresBindPermission(t *testing.T) {

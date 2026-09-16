@@ -35,6 +35,7 @@ import type {
   GetChannelResponse,
   GetChannelsParams,
   GetChannelsResponse,
+  ImportChannelsResponse,
   MultiKeyManageParams,
   MultiKeyStatusResponse,
   SearchChannelsParams,
@@ -166,6 +167,24 @@ export async function createChannel(
   data: AddChannelRequest
 ): Promise<{ success: boolean; message?: string }> {
   const res = await api.post('/api/channel', data, channelActionConfig())
+  return res.data
+}
+
+export async function importChannelsFromFiles(
+  data: AddChannelRequest,
+  files: File[]
+): Promise<ImportChannelsResponse> {
+  const formData = new FormData()
+  formData.append('payload', JSON.stringify(data))
+  files.forEach((file) => {
+    formData.append('files', file)
+  })
+
+  const res = await api.post(
+    '/api/channel/import',
+    formData,
+    channelActionConfig()
+  )
   return res.data
 }
 
