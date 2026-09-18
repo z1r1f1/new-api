@@ -123,6 +123,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	}
 
 	AppendRelayLogAdminInfo(ctx, relayInfo, other)
+	AppendResponseModelLogInfo(relayInfo, other)
 	adminInfo := logOtherAdminInfoSnapshot(other)
 	AppendRequestProtocolInfo(ctx, other)
 	appendServiceTierInfo(ctx, relayInfo, adminInfo, other)
@@ -135,6 +136,22 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendFastServiceTierInfo(ctx, relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	return other
+}
+
+// AppendResponseModelLogInfo records an upstream model declaration when it is
+// useful for diagnosing a mapped model or a response-model mismatch.
+func AppendResponseModelLogInfo(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil || relayInfo.ResponseModel == nil || other == nil {
+		return
+	}
+	observation := relayInfo.ResponseModel
+	if !observation.Mismatch &&
+		observation.ReturnedModel == observation.RequestedModel &&
+		(observation.UpstreamModel == "" || observation.UpstreamModel == observation.RequestedModel) &&
+		(relayInfo.ChannelMeta == nil || !relayInfo.IsModelMapped) {
+		return
+	}
+	other.SetPublic("response_model", *observation)
 }
 
 func logOtherAdminInfoSnapshot(other *model.LogOther) map[string]any {

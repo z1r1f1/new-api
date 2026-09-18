@@ -721,7 +721,7 @@ type logTokenStatRow struct {
 	Other            string
 }
 
-func logOtherNumber(other map[string]interface{}, key string) float64 {
+func logOtherNumber(other map[string]any, key string) float64 {
 	if other == nil {
 		return 0
 	}
@@ -754,7 +754,7 @@ func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominato
 	if strings.TrimSpace(row.Other) == "" {
 		return 0, float64(row.PromptTokens)
 	}
-	other := make(map[string]interface{})
+	other := make(map[string]any)
 	if err := common.UnmarshalJsonStr(row.Other, &other); err != nil {
 		return 0, float64(row.PromptTokens)
 	}
@@ -762,6 +762,19 @@ func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominato
 	inputTokensTotal := logOtherNumber(other, "input_tokens_total")
 	if inputTokensTotal > 0 {
 		return cacheReadTokens, inputTokensTotal
+	}
+
+	usageSemantic := strings.ToLower(strings.TrimSpace(fmt.Sprint(other["usage_semantic"])))
+	adminInfo, _ := other["admin_info"].(map[string]any)
+	usageBillingPath := strings.ToLower(strings.TrimSpace(fmt.Sprint(adminInfo["usage_billing_path"])))
+	if usageSemantic == "anthropic" && strings.HasPrefix(usageBillingPath, "billing-usage-anthropic") {
+		cacheWriteTokens := logOtherNumber(other, "cache_write_tokens")
+		if cacheWriteTokens <= 0 {
+			cacheCreationTokens := logOtherNumber(other, "cache_creation_tokens")
+			splitCacheWriteTokens := logOtherNumber(other, "cache_creation_tokens_5m") + logOtherNumber(other, "cache_creation_tokens_1h")
+			cacheWriteTokens = max(cacheCreationTokens, splitCacheWriteTokens)
+		}
+		return cacheReadTokens, float64(row.PromptTokens) + cacheReadTokens + cacheWriteTokens
 	}
 	return cacheReadTokens, float64(row.PromptTokens)
 }
@@ -844,7 +857,7 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 			if strings.TrimSpace(row.Other) == "" {
 				continue
 			}
-			other := make(map[string]interface{})
+			other := make(map[string]any)
 			if err := common.UnmarshalJsonStr(row.Other, &other); err != nil {
 				continue
 			}
@@ -876,10 +889,10 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 		if err := cacheTx.FindInBatches(&rows, 1000, func(tx *gorm.DB, batch int) error {
 			for _, row := range rows {
 				cacheReadTokens, denominator := cacheHitRateParts(row)
-				if cacheReadTokens <= 0 || denominator <= 0 {
+				if denominator <= 0 {
 					continue
 				}
-				cacheReadTotal += cacheReadTokens
+				cacheReadTotal += max(cacheReadTokens, 0)
 				cacheDenominatorTotal += denominator
 			}
 			return nil

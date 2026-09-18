@@ -258,6 +258,7 @@ export function formatModelName(log: UsageLog): {
   name: string
   isMapped: boolean
   actualModel?: string
+  responseModel?: LogOtherData['response_model']
 } {
   const other = parseLogOther(log.other)
   const isMapped = !!(
@@ -270,6 +271,7 @@ export function formatModelName(log: UsageLog): {
     name: log.model_name,
     isMapped,
     actualModel: isMapped ? other.upstream_model_name : undefined,
+    responseModel: other?.response_model,
   }
 }
 
@@ -367,13 +369,35 @@ export function getCacheHitRate(
 ): number | null {
   const promptTokens = Number(log.prompt_tokens) || 0
   const explicitInputTokens = Number(other?.input_tokens_total)
-  const denominator =
+  let denominator =
     Number.isFinite(explicitInputTokens) && explicitInputTokens > 0
       ? explicitInputTokens
       : promptTokens
-  if (!Number.isFinite(denominator) || denominator <= 0) return null
 
   const cacheReadTokens = Number(other?.cache_tokens) || 0
+
+  const usageSemantic = String(other?.usage_semantic || '')
+    .trim()
+    .toLowerCase()
+  const usageBillingPath = String(other?.admin_info?.usage_billing_path || '')
+    .trim()
+    .toLowerCase()
+  if (
+    usageSemantic === 'anthropic' &&
+    usageBillingPath.startsWith('billing-usage-anthropic')
+  ) {
+    let cacheWriteTokens = Number(other?.cache_write_tokens) || 0
+    if (cacheWriteTokens <= 0) {
+      const cacheCreationTokens = Number(other?.cache_creation_tokens) || 0
+      const splitCacheWriteTokens =
+        (Number(other?.cache_creation_tokens_5m) || 0) +
+        (Number(other?.cache_creation_tokens_1h) || 0)
+      cacheWriteTokens = Math.max(cacheCreationTokens, splitCacheWriteTokens)
+    }
+    denominator = promptTokens + cacheReadTokens + cacheWriteTokens
+  }
+
+  if (!Number.isFinite(denominator) || denominator <= 0) return null
   if (!Number.isFinite(cacheReadTokens) || cacheReadTokens <= 0) return 0
 
   return Math.min(100, (cacheReadTokens / denominator) * 100)

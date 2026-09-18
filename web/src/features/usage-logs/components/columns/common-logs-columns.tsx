@@ -344,7 +344,8 @@ function buildTypeDetailSegments(
 
 export function useCommonLogsColumns(
   isAdmin: boolean,
-  isRoot: boolean
+  isRoot: boolean,
+  showWalletSource = false
 ): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
   const columns: ColumnDef<UsageLog>[] = [
@@ -674,6 +675,7 @@ export function useCommonLogsColumns(
             <ModelBadge
               modelName={modelInfo.name}
               actualModel={modelInfo.actualModel}
+              responseModel={modelInfo.responseModel}
             />
           </div>
         )
@@ -727,19 +729,12 @@ export function useCommonLogsColumns(
         const cacheWriteTokens = hasSplitCache
           ? cacheWrite5m + cacheWrite1h
           : other?.cache_creation_tokens || 0
-        const cacheHitRate = getCacheHitRate(log, other)
-
         return (
           <div className='flex flex-col gap-0.5'>
             <span className='font-mono text-xs font-medium tabular-nums'>
               {promptTokens.toLocaleString()} /{' '}
               {completionTokens.toLocaleString()}
             </span>
-            {cacheHitRate != null && (
-              <span className='text-muted-foreground/60 text-[11px]'>
-                {t('Hit Rate')} {formatPercent(cacheHitRate)}
-              </span>
-            )}
             {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
               <div className='flex items-center gap-1 text-[11px]'>
                 {cacheReadTokens > 0 && (
@@ -759,6 +754,24 @@ export function useCommonLogsColumns(
       },
     },
     {
+      id: 'cache_hit_rate',
+      header: t('Hit Rate'),
+      cell: ({ row }) => {
+        const log = row.original
+        if (!isDisplayableLogType(log.type)) return null
+
+        const rate = getCacheHitRate(log, parseLogOther(log.other))
+        return rate == null ? (
+          <span className='text-muted-foreground text-xs'>-</span>
+        ) : (
+          <span className='font-mono text-xs tabular-nums'>
+            {formatPercent(rate)}
+          </span>
+        )
+      },
+      meta: { label: t('Hit Rate') },
+    },
+    {
       accessorKey: 'quota',
       header: t('Cost'),
       cell: ({ row }) => {
@@ -767,7 +780,13 @@ export function useCommonLogsColumns(
 
         const quota = row.getValue('quota') as number
         const other = parseLogOther(log.other)
-        return <LogCostDisplay quota={quota} other={other} />
+        return (
+          <LogCostDisplay
+            quota={quota}
+            other={other}
+            showWalletSource={showWalletSource}
+          />
+        )
       },
     },
 

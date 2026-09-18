@@ -62,3 +62,36 @@ it('calculates a row cache hit rate from normalized input tokens', () => {
 it('does not produce a cache hit rate without input tokens', () => {
   expect(getCacheHitRate({ prompt_tokens: 0 }, {})).toBeNull()
 })
+
+it('uses the full Anthropic input total for cache hit rate', () => {
+  expect(
+    getCacheHitRate(
+      { prompt_tokens: 2 },
+      {
+        usage_semantic: 'anthropic',
+        cache_tokens: 198875,
+        cache_write_tokens: 1095,
+        admin_info: {
+          usage_billing_path: 'billing-usage-anthropic',
+        },
+      }
+    )
+  ).toBeCloseTo((198875 / 199972) * 100)
+})
+
+it('falls back to split Anthropic cache creation tokens', () => {
+  expect(
+    getCacheHitRate(
+      { prompt_tokens: 2 },
+      {
+        usage_semantic: 'anthropic',
+        cache_tokens: 100,
+        cache_creation_tokens_5m: 20,
+        cache_creation_tokens_1h: 30,
+        admin_info: {
+          usage_billing_path: 'billing-usage-anthropic-estimated',
+        },
+      }
+    )
+  ).toBeCloseTo((100 / 152) * 100)
+})

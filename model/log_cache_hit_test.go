@@ -14,49 +14,91 @@ func TestLogTokenStatRowIncludesIDForFindInBatchesCursor(t *testing.T) {
 	}
 }
 
-func TestCacheHitRatePartsUsesLoggedPromptTokensForAnthropicUsage(t *testing.T) {
-	other, err := common.Marshal(map[string]interface{}{
+func TestCacheHitRatePartsUsesFullInputForCanonicalAnthropicUsage(t *testing.T) {
+	other, err := common.Marshal(map[string]any{
+		"usage_semantic":     "anthropic",
+		"cache_tokens":       198875,
+		"cache_write_tokens": 1095,
+		"admin_info": map[string]any{
+			"usage_billing_path": "billing-usage-anthropic",
+		},
+	})
+	require.NoError(t, err)
+
+	cacheReadTokens, denominator := cacheHitRateParts(logTokenStatRow{
+		PromptTokens: 2,
+		Other:        string(other),
+	})
+
+	require.Equal(t, float64(198875), cacheReadTokens)
+	require.Equal(t, float64(199972), denominator)
+}
+
+func TestCacheHitRatePartsKeepsLegacyAnthropicPromptTotal(t *testing.T) {
+	other, err := common.Marshal(map[string]any{
 		"usage_semantic": "anthropic",
 		"cache_tokens":   71680,
 	})
-	if err != nil {
-		t.Fatalf("marshal other: %v", err)
-	}
+	require.NoError(t, err)
 
 	cacheReadTokens, denominator := cacheHitRateParts(logTokenStatRow{
 		PromptTokens: 73988,
 		Other:        string(other),
 	})
 
-	if cacheReadTokens != 71680 {
-		t.Fatalf("cacheReadTokens = %v, want 71680", cacheReadTokens)
-	}
-	if denominator != 73988 {
-		t.Fatalf("denominator = %v, want logged prompt tokens", denominator)
-	}
+	require.Equal(t, float64(71680), cacheReadTokens)
+	require.Equal(t, float64(73988), denominator)
 }
 
 func TestCacheHitRatePartsPrefersExplicitInputTokensTotal(t *testing.T) {
-	other, err := common.Marshal(map[string]interface{}{
+	other, err := common.Marshal(map[string]any{
 		"usage_semantic":     "openai",
 		"cache_tokens":       30,
 		"input_tokens_total": 180,
 	})
-	if err != nil {
-		t.Fatalf("marshal other: %v", err)
-	}
+	require.NoError(t, err)
 
 	cacheReadTokens, denominator := cacheHitRateParts(logTokenStatRow{
 		PromptTokens: 100,
 		Other:        string(other),
 	})
 
-	if cacheReadTokens != 30 {
-		t.Fatalf("cacheReadTokens = %v, want 30", cacheReadTokens)
+	require.Equal(t, float64(30), cacheReadTokens)
+	require.Equal(t, float64(180), denominator)
+}
+
+func TestSumUsedQuotaCacheHitRateIncludesCacheMisses(t *testing.T) {
+	truncateTables(t)
+
+	canonicalClaudeOther := func(cacheTokens, cacheWriteTokens int) string {
+		return common.MapToJsonStr(map[string]any{
+			"usage_semantic":     "anthropic",
+			"cache_tokens":       cacheTokens,
+			"cache_write_tokens": cacheWriteTokens,
+			"admin_info": map[string]any{
+				"usage_billing_path": "billing-usage-anthropic",
+			},
+		})
 	}
-	if denominator != 180 {
-		t.Fatalf("denominator = %v, want explicit input_tokens_total", denominator)
-	}
+
+	require.NoError(t, LOG_DB.Create([]Log{
+		{
+			CreatedAt:    1000,
+			Type:         LogTypeConsume,
+			PromptTokens: 10,
+			Other:        canonicalClaudeOther(80, 10),
+		},
+		{
+			CreatedAt:    1001,
+			Type:         LogTypeConsume,
+			PromptTokens: 100,
+			Other:        canonicalClaudeOther(0, 0),
+		},
+	}).Error)
+
+	stat, err := SumUsedQuota(LogTypeConsume, 1000, 1001, "", "", "", 0, "", "", "", "")
+	require.NoError(t, err)
+	require.InDelta(t, 40, stat.AvgCacheHitRate, 0.000001)
 }
 
 func TestSumUsedQuotaRatesFollowSelectedTimeRange(t *testing.T) {
