@@ -759,11 +759,6 @@ func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominato
 		return 0, float64(row.PromptTokens)
 	}
 	cacheReadTokens = logOtherNumber(other, "cache_tokens")
-	inputTokensTotal := logOtherNumber(other, "input_tokens_total")
-	if inputTokensTotal > 0 {
-		return cacheReadTokens, inputTokensTotal
-	}
-
 	usageSemantic := strings.ToLower(strings.TrimSpace(fmt.Sprint(other["usage_semantic"])))
 	adminInfo, _ := other["admin_info"].(map[string]any)
 	usageBillingPath := strings.ToLower(strings.TrimSpace(fmt.Sprint(adminInfo["usage_billing_path"])))
@@ -775,6 +770,10 @@ func cacheHitRateParts(row logTokenStatRow) (cacheReadTokens float64, denominato
 			cacheWriteTokens = max(cacheCreationTokens, splitCacheWriteTokens)
 		}
 		return cacheReadTokens, float64(row.PromptTokens) + cacheReadTokens + cacheWriteTokens
+	}
+	inputTokensTotal := logOtherNumber(other, "input_tokens_total")
+	if inputTokensTotal > 0 {
+		return cacheReadTokens, inputTokensTotal
 	}
 	return cacheReadTokens, float64(row.PromptTokens)
 }

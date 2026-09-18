@@ -19,6 +19,7 @@ func TestCacheHitRatePartsUsesFullInputForCanonicalAnthropicUsage(t *testing.T) 
 		"usage_semantic":     "anthropic",
 		"cache_tokens":       198875,
 		"cache_write_tokens": 1095,
+		"input_tokens_total": 999999,
 		"admin_info": map[string]any{
 			"usage_billing_path": "billing-usage-anthropic",
 		},
