@@ -163,7 +163,29 @@ beforeEach(() => {
       return { data: { success: true, data: pluginOptions } }
     }
     if (url === '/api/channel/models') {
-      return { data: { success: true, data: [{ id: 'custom-model' }] } }
+      return {
+        data: {
+          success: true,
+          data: [
+            { id: 'custom-model' },
+            { id: 'gpt-related' },
+            { id: 'deepseek-chat' },
+            { id: 'deepseek-reasoner' },
+            { id: 'gemini-pro' },
+          ],
+        },
+      }
+    }
+    if (url === '/api/models') {
+      return {
+        data: {
+          success: true,
+          data: {
+            1: ['gpt-related'],
+            43: ['deepseek-chat', 'deepseek-reasoner'],
+          },
+        },
+      }
     }
     if (url === '/api/channel/default_base_urls') {
       return {
@@ -253,6 +275,31 @@ test('changing built-in providers updates server-provided URL placeholders witho
     'placeholder',
     'Leave empty to use default'
   )
+})
+
+test('Fill Related Models uses only the selected channel type model list', async () => {
+  const user = userEvent.setup()
+  render(<ConfigurationHarness />)
+
+  await user.click(screen.getByRole('option', { name: /^DeepSeek / }))
+  await user.click(screen.getByRole('button', { name: 'Fill Related Models' }))
+
+  const models = screen.getByRole('group', { name: 'Models' })
+  expect(
+    within(models).getByRole('button', { name: 'deepseek-chat' })
+  ).toBeVisible()
+  expect(
+    within(models).getByRole('button', { name: 'deepseek-reasoner' })
+  ).toBeVisible()
+  expect(
+    within(models).queryByRole('button', { name: 'custom-model' })
+  ).not.toBeInTheDocument()
+  expect(
+    within(models).queryByRole('button', { name: 'gpt-related' })
+  ).not.toBeInTheDocument()
+  expect(
+    within(models).queryByRole('button', { name: 'gemini-pro' })
+  ).not.toBeInTheDocument()
 })
 
 test.each([

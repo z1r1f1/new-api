@@ -132,6 +132,7 @@ import {
   getChannel,
   getChannelDefaultBaseURLs,
   getGroups,
+  getModelsByChannelType,
   getPrefillGroups,
   getTaskPluginOptions,
   importChannelsFromFiles,
@@ -559,6 +560,13 @@ export function ChannelMutateDrawer({
     enabled: open && !showProviderPicker,
   })
 
+  // Fetch the authoritative model list for each channel type
+  const { data: modelsByChannelTypeData } = useQuery({
+    queryKey: ['channel_models_by_type'],
+    queryFn: async () => requireServerSuccess(await getModelsByChannelType()),
+    enabled: open && !showProviderPicker,
+  })
+
   // Fetch prefill model groups
   const { data: prefillGroupsData } = useQuery({
     queryKey: ['prefill_groups', 'model'],
@@ -755,17 +763,11 @@ export function ChannelMutateDrawer({
     [allModelsData]
   )
 
-  // Get basic models for the current channel type
-  const basicModels = useMemo(() => {
-    if (!allModelsList.length) return []
-    // Filter models based on common patterns for specific types
-    if (currentType === 1) {
-      return allModelsList.filter(
-        (model) => model.startsWith('gpt-') || model.startsWith('text-')
-      )
-    }
-    return allModelsList
-  }, [allModelsList, currentType])
+  // Get the server-defined models for the current channel type
+  const basicModels = useMemo(
+    () => modelsByChannelTypeData?.data?.[currentType] || [],
+    [modelsByChannelTypeData, currentType]
+  )
 
   // Get prefill groups
   const prefillGroups = useMemo(
