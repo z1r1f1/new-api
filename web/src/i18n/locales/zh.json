@@ -716,6 +716,8 @@
     "Average tokens per second sustained per group": "各分组持续输出的平均每秒 token 数",
     "Average TPM": "平均 TPM",
     "Average TTFT": "平均首 Token 延迟",
+    "Avg Cache Hit Rate": "平均缓存命中率",
+    "Avg Total/FRT": "平均总耗时/首响应耗时",
     "Awake engines": "已唤醒引擎数",
     "AWS": "AWS",
     "AWS Bedrock Claude Compat": "AWS Bedrock Claude 兼容模板",

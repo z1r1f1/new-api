@@ -716,6 +716,8 @@
     "Average tokens per second sustained per group": "Tokens par seconde soutenus en moyenne par groupe",
     "Average TPM": "TPM moyen",
     "Average TTFT": "TTFT moyen",
+    "Avg Cache Hit Rate": "Taux moyen de succès du cache",
+    "Avg Total/FRT": "Durée moy. totale/première réponse",
     "Awake engines": "Moteurs actifs",
     "AWS": "AWS",
     "AWS Bedrock Claude Compat": "AWS Bedrock Claude Compat",

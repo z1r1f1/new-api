@@ -716,6 +716,8 @@
     "Average tokens per second sustained per group": "Số token mỗi giây trung bình duy trì cho từng nhóm",
     "Average TPM": "TPM trung bình",
     "Average TTFT": "TTFT trung bình",
+    "Avg Cache Hit Rate": "Tỷ lệ trúng bộ nhớ đệm trung bình",
+    "Avg Total/FRT": "Thời gian tổng/phản hồi đầu trung bình",
     "Awake engines": "Số engine đang hoạt động",
     "AWS": "AWS",
     "AWS Bedrock Claude Compat": "AWS Bedrock Claude tương thích",

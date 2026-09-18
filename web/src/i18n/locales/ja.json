@@ -716,6 +716,8 @@
     "Average tokens per second sustained per group": "グループごとに持続する平均スループット (tokens/秒)",
     "Average TPM": "平均TPM",
     "Average TTFT": "平均 TTFT",
+    "Avg Cache Hit Rate": "平均キャッシュヒット率",
+    "Avg Total/FRT": "平均合計時間/初回応答時間",
     "Awake engines": "稼働中のエンジン数",
     "AWS": "AWS",
     "AWS Bedrock Claude Compat": "AWS Bedrock Claude 互換テンプレート",

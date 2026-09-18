@@ -716,6 +716,8 @@
     "Average tokens per second sustained per group": "Средняя устойчивая пропускная способность (токенов/с) по группам",
     "Average TPM": "Среднее число транзакций в минуту",
     "Average TTFT": "Средний TTFT",
+    "Avg Cache Hit Rate": "Средний процент попаданий в кэш",
+    "Avg Total/FRT": "Среднее общее время/время первого ответа",
     "Awake engines": "Активные движки",
     "AWS": "AWS",
     "AWS Bedrock Claude Compat": "AWS Bedrock Claude совместимость",
