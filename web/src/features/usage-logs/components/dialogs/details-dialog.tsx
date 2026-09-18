@@ -614,6 +614,15 @@ export function DetailsDialog(props: DetailsDialogProps) {
   const useChannel = other?.admin_info?.use_channel
   const channelChain =
     useChannel && useChannel.length > 0 ? useChannel.join(' → ') : undefined
+  const requestHeaders =
+    props.isAdmin &&
+    adminInfo?.request_headers &&
+    typeof adminInfo.request_headers === 'object' &&
+    !Array.isArray(adminInfo.request_headers)
+      ? Object.entries(adminInfo.request_headers).sort(([left], [right]) =>
+          left.localeCompare(right)
+        )
+      : []
   const reasoningEffortVariant = getReasoningEffortVariant(
     other?.reasoning_effort
   )
@@ -746,6 +755,14 @@ export function DetailsDialog(props: DetailsDialogProps) {
             />
           )}
         </div>
+
+        {requestHeaders.length > 0 && (
+          <DetailSection label={t('Request Headers')}>
+            {requestHeaders.map(([name, value]) => (
+              <DetailRow key={name} label={name} value={value} mono />
+            ))}
+          </DetailSection>
+        )}
 
         {/* Request conversion (admin only, not for refund) */}
         {showConversion && (

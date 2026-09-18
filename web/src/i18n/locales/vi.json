@@ -4679,6 +4679,7 @@
     "Request Header Field": "Trường header yêu cầu",
     "Request Header Override": "Ghi đè header yêu cầu",
     "Request Header Overrides": "Ghi đè Tiêu đề Yêu cầu",
+    "Request Headers": "Tiêu đề yêu cầu",
     "Request headers must be a JSON object with string values.": "Tiêu đề yêu cầu phải là đối tượng JSON có giá trị chuỗi.",
     "Request ID": "ID yêu cầu",
     "Request Limits": "Hạn mức yêu cầu",

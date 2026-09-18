@@ -4679,6 +4679,7 @@
     "Request Header Field": "请求头字段",
     "Request Header Override": "请求头覆盖",
     "Request Header Overrides": "请求头覆盖",
+    "Request Headers": "请求头",
     "Request headers must be a JSON object with string values.": "请求头必须是值为字符串的 JSON 对象。",
     "Request ID": "请求 ID",
     "Request Limits": "请求限制",

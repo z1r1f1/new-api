@@ -20,9 +20,12 @@ var sensitiveHeaderNames = map[string]bool{
 	"set-cookie":             true,
 }
 
+const redactedRequestHeaderValue = "[REDACTED]"
+
 // CleanRequestHeadersForLog returns a copy of the request headers map with
-// authentication-related headers removed. Returns nil when the input is empty
-// or when all headers are filtered out.
+// authentication-related values redacted. Header names are retained so admins
+// can see the complete request-header shape without storing usable secrets.
+// Returns nil when the input is empty or contains no valid header names.
 func CleanRequestHeadersForLog(headers map[string]string) map[string]string {
 	if len(headers) == 0 {
 		return nil
@@ -31,8 +34,11 @@ func CleanRequestHeadersForLog(headers map[string]string) map[string]string {
 	for k, v := range headers {
 		key := strings.TrimSpace(k)
 		value := strings.TrimSpace(v)
-		if key == "" || value == "" || isSensitiveRequestHeaderForLog(key) {
+		if key == "" {
 			continue
+		}
+		if isSensitiveRequestHeaderForLog(key) {
+			value = redactedRequestHeaderValue
 		}
 		filtered[key] = value
 	}
@@ -54,24 +60,27 @@ func isSensitiveRequestHeaderForLog(header string) bool {
 }
 
 func safeRequestHeadersFromContext(ctx *gin.Context) map[string]string {
-	if ctx == nil || ctx.Request == nil || len(ctx.Request.Header) == 0 {
+	if ctx == nil || ctx.Request == nil {
 		return nil
 	}
-	headers := make(map[string]string, len(ctx.Request.Header))
-	for key := range ctx.Request.Header {
-		value := strings.TrimSpace(ctx.Request.Header.Get(key))
-		if value == "" {
-			continue
+	headers := make(map[string]string, len(ctx.Request.Header)+1)
+	if host := strings.TrimSpace(ctx.Request.Host); host != "" {
+		headers["Host"] = host
+	}
+	for key, values := range ctx.Request.Header {
+		cleanValues := make([]string, 0, len(values))
+		for _, value := range values {
+			cleanValues = append(cleanValues, strings.TrimSpace(value))
 		}
-		headers[key] = value
+		headers[key] = strings.Join(cleanValues, ", ")
 	}
 	return CleanRequestHeadersForLog(headers)
 }
 
-// AppendRequestHeadersAdminInfo records non-sensitive request headers in the
-// admin-only log payload. Authentication headers, cookies, token-like headers,
-// and API-key/secret headers are intentionally excluded.
-func AppendRequestHeadersAdminInfo(ctx *gin.Context, adminInfo map[string]interface{}) {
+// AppendRequestHeadersAdminInfo records request headers in the admin-only log
+// payload. Authentication headers, cookies, token-like headers, and API-key or
+// secret headers retain their names but use a redacted value.
+func AppendRequestHeadersAdminInfo(ctx *gin.Context, adminInfo map[string]any) {
 	if adminInfo == nil {
 		return
 	}

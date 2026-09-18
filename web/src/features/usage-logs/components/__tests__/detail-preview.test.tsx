@@ -213,6 +213,53 @@ test.each([true, false])(
   }
 )
 
+test('admin log details display every recorded request header', async () => {
+  const preview = renderPreview({
+    admin_info: {
+      request_headers: {
+        Authorization: '[REDACTED]',
+        'Content-Type': 'application/json',
+        Host: 'api.example.com',
+        'X-Trace-Id': 'trace-1',
+      },
+    },
+  })
+
+  fireEvent.click(preview)
+
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(dialog.getByText('Request Headers')).toBeVisible()
+  expect(dialog.getByText('Authorization')).toBeVisible()
+  expect(dialog.getByText('[REDACTED]')).toBeVisible()
+  expect(dialog.getByText('Content-Type')).toBeVisible()
+  expect(dialog.getByText('application/json')).toBeVisible()
+  expect(dialog.getByText('Host')).toBeVisible()
+  expect(dialog.getByText('api.example.com')).toBeVisible()
+  expect(dialog.getByText('X-Trace-Id')).toBeVisible()
+  expect(dialog.getByText('trace-1')).toBeVisible()
+})
+
+test('non-admin log details do not expose recorded request headers', async () => {
+  const preview = renderPreview(
+    {
+      admin_info: {
+        request_headers: {
+          Authorization: '[REDACTED]',
+          'X-Trace-Id': 'trace-1',
+        },
+      },
+    },
+    false
+  )
+
+  fireEvent.click(preview)
+
+  const dialog = within(await screen.findByRole('dialog'))
+  expect(dialog.queryByText('Request Headers')).not.toBeInTheDocument()
+  expect(dialog.queryByText('Authorization')).not.toBeInTheDocument()
+  expect(dialog.queryByText('trace-1')).not.toBeInTheDocument()
+})
+
 test.each([
   {
     expression: 'tier("music", u("clips") * 0.25)',

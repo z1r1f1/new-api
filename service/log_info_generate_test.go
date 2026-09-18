@@ -9,6 +9,7 @@ import (
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateTextOtherInfoRecordsFastServiceTierOnWhenRequestHasFast(t *testing.T) {
@@ -253,7 +254,7 @@ func TestGenerateTextOtherInfoRecordsRequestProtocol(t *testing.T) {
 	}
 }
 
-func TestGenerateTextOtherInfoRecordsSafeRequestHeadersInAdminInfo(t *testing.T) {
+func TestGenerateTextOtherInfoRecordsAllRequestHeadersWithSensitiveValuesRedacted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
 	ctx.Request = httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"gpt-5.5"}`))
@@ -264,6 +265,8 @@ func TestGenerateTextOtherInfoRecordsSafeRequestHeadersInAdminInfo(t *testing.T)
 	ctx.Request.Header.Set("Cookie", "sid=secret")
 	ctx.Request.Header.Set("Api-Key", "secret")
 	ctx.Request.Header.Set("X-Session-Token", "secret")
+	ctx.Request.Header.Add("X-Forwarded-For", "192.0.2.1")
+	ctx.Request.Header.Add("X-Forwarded-For", "198.51.100.2")
 	now := time.Now()
 
 	other := GenerateTextOtherInfo(ctx, &relaycommon.RelayInfo{
@@ -273,29 +276,18 @@ func TestGenerateTextOtherInfoRecordsSafeRequestHeadersInAdminInfo(t *testing.T)
 	}, 1, 1, 1, 0, 0, 0, -1)
 	snapshot := other.Snapshot()
 
-	adminInfo, ok := snapshot["admin_info"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected admin_info map, got %#v", snapshot["admin_info"])
-	}
+	adminInfo, ok := snapshot["admin_info"].(map[string]any)
+	require.True(t, ok, "expected admin_info map, got %#v", snapshot["admin_info"])
 	headers, ok := adminInfo["request_headers"].(map[string]string)
-	if !ok {
-		t.Fatalf("expected admin request_headers map, got %#v", adminInfo["request_headers"])
-	}
-	if headers["Content-Type"] != "application/json" {
-		t.Fatalf("expected Content-Type header, got %#v", headers)
-	}
-	if headers["User-Agent"] != "codex-test" {
-		t.Fatalf("expected User-Agent header, got %#v", headers)
-	}
-	if headers["X-Client-Request-Id"] != "req-1" {
-		t.Fatalf("expected X-Client-Request-Id header, got %#v", headers)
-	}
+	require.True(t, ok, "expected admin request_headers map, got %#v", adminInfo["request_headers"])
+	require.Equal(t, "example.com", headers["Host"])
+	require.Equal(t, "application/json", headers["Content-Type"])
+	require.Equal(t, "codex-test", headers["User-Agent"])
+	require.Equal(t, "req-1", headers["X-Client-Request-Id"])
+	require.Equal(t, "192.0.2.1, 198.51.100.2", headers["X-Forwarded-For"])
 	for _, sensitive := range []string{"Authorization", "Cookie", "Api-Key", "X-Session-Token"} {
-		if _, ok := headers[sensitive]; ok {
-			t.Fatalf("expected sensitive header %s to be filtered, got %#v", sensitive, headers)
-		}
+		require.Equal(t, "[REDACTED]", headers[sensitive], "expected %s to be redacted", sensitive)
 	}
-	if _, ok := snapshot["request_headers"]; ok {
-		t.Fatalf("request_headers must stay under admin_info, got top-level %#v", snapshot["request_headers"])
-	}
+	_, topLevelHeaders := snapshot["request_headers"]
+	require.False(t, topLevelHeaders, "request_headers must stay under admin_info")
 }

@@ -4679,6 +4679,7 @@
     "Request Header Field": "リクエストヘッダーフィールド",
     "Request Header Override": "リクエストヘッダー上書き",
     "Request Header Overrides": "リクエストヘッダーの上書き",
+    "Request Headers": "リクエストヘッダー",
     "Request headers must be a JSON object with string values.": "リクエストヘッダーは値が文字列の JSON オブジェクトである必要があります。",
     "Request ID": "リクエストID",
     "Request Limits": "リクエスト制限",

@@ -4679,6 +4679,7 @@
     "Request Header Field": "Поле заголовка запроса",
     "Request Header Override": "Переопределение заголовков запроса",
     "Request Header Overrides": "Переопределения заголовков запроса",
+    "Request Headers": "Заголовки запроса",
     "Request headers must be a JSON object with string values.": "Заголовки должны быть объектом JSON со строковыми значениями.",
     "Request ID": "ID запроса",
     "Request Limits": "Лимиты запросов",

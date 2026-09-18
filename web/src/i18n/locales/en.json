@@ -4679,6 +4679,7 @@
     "Request Header Field": "Request Header Field",
     "Request Header Override": "Request Header Override",
     "Request Header Overrides": "Request Header Overrides",
+    "Request Headers": "Request Headers",
     "Request headers must be a JSON object with string values.": "Request headers must be a JSON object with string values.",
     "Request ID": "Request ID",
     "Request Limits": "Request Limits",

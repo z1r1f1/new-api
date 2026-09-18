@@ -161,7 +161,7 @@ Do **not** persist or display the raw matched affinity value in usage logs. Use 
 
 ### 2. Signatures
 
-- Backend append helper: `service.AppendRequestHeadersAdminInfo(ctx *gin.Context, adminInfo map[string]interface{})`.
+- Backend append helper: `service.AppendRequestHeadersAdminInfo(ctx *gin.Context, adminInfo map[string]any)`.
 - Stored field: `Log.Other.admin_info.request_headers`, encoded as a JSON object of header name to string value.
 - Frontend display: default usage-log details reads `other.admin_info.request_headers` and renders it only when `props.isAdmin` is true.
 
@@ -169,27 +169,28 @@ Do **not** persist or display the raw matched affinity value in usage logs. Use 
 
 - Request headers must be stored only under `admin_info`, never as top-level `Other.request_headers`.
 - Non-admin log serialization already strips `admin_info`; keep request-header diagnostics behind that boundary.
-- Filter authentication and credential-like headers before persistence, including at least authorization/proxy authorization, cookies, API-key headers, token-like headers, secret-like headers, and websocket auth protocol headers.
-- Empty header names/values are skipped.
+- Retain every valid header name, including `Host`; join multiple values in arrival order with `, ` so the complete header shape remains visible.
+- Replace authentication and credential-like values with `[REDACTED]` before persistence, including at least authorization/proxy authorization, cookies, API-key headers, token-like headers, secret-like headers, and websocket auth protocol headers.
+- Skip only empty header names. An explicitly empty non-sensitive header value remains an empty string.
 
 ### 4. Validation & Error Matrix
 
 - Admin log details + safe headers -> display sorted header rows.
 - Non-admin log details -> no request-header rows even if the backend payload accidentally includes admin info.
-- Request contains `Authorization`, `Cookie`, `Api-Key`, token, or secret headers -> those keys are absent from `admin_info.request_headers`.
-- Request contains no safe headers -> omit `request_headers`.
+- Request contains `Authorization`, `Cookie`, `Api-Key`, token, or secret headers -> retain each header name and store `[REDACTED]` instead of its value.
+- Request contains no valid header names and no `Host` -> omit `request_headers`.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: admins can see `Content-Type`, `User-Agent`, or `X-Client-Request-Id` in a failing request detail.
+- Good: admins can see `Host`, `Content-Type`, `User-Agent`, `X-Client-Request-Id`, and the presence of a redacted `Authorization` header in a failing request detail.
 - Base: existing `admin_info.use_channel` and channel affinity diagnostics remain unchanged.
 - Bad: saving request headers at top-level `Other`, because user log responses can expose top-level fields.
 - Bad: persisting raw auth headers, cookies, API keys, tokens, or secrets for convenience.
 
 ### 6. Tests Required
 
-- `service`: regression test proving `GenerateTextOtherInfo` stores safe request headers under `admin_info.request_headers`, filters sensitive headers, and does not write a top-level `request_headers` field.
-- `web/default`: usage-log format test proving request-header rows are returned for admins only and blank keys/values are filtered.
+- `service`: regression test proving `GenerateTextOtherInfo` stores all request-header names under `admin_info.request_headers`, includes `Host`, preserves multiple values, redacts sensitive values, and does not write a top-level `request_headers` field.
+- `web`: usage-log detail tests proving request-header rows are rendered for admins only and redacted values remain visible as diagnostics.
 - Run targeted Go service tests and default frontend typecheck after touching this contract.
 
 ### 7. Wrong vs Correct
@@ -226,6 +227,6 @@ Use levels according to observed intent:
 
 - Do not use `log.Println` for new request-level code; use `logger.*` or `common.SysLog`.
 - Do not expose `admin_info` or raw `Other` fields directly to non-admin users.
-- Do not log unmasked URLs, keys, credentials, request headers, or prompt bodies.
+- Do not log unmasked URLs, keys, credentials, raw sensitive request-header values, or prompt bodies.
 - Do not create new persistent log type numeric values with `iota`.
 - Do not forget that `LOG_DB` may differ from `DB`.
