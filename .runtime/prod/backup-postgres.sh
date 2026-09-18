@@ -8,7 +8,7 @@ DB_NAME="new-api"
 BACKUP_DIR="$REPO_DIR/.runtime/prod/backups"
 LOG_FILE="$BACKUP_DIR/backup-postgres.log"
 LOCK_FILE="$BACKUP_DIR/backup-postgres.lock"
-RETENTION_DAYS="${RETENTION_DAYS:-30}"
+RETENTION_DAYS="${RETENTION_DAYS:-7}"
 
 mkdir -p "$BACKUP_DIR"
 cd "$REPO_DIR"
@@ -39,6 +39,7 @@ trap cleanup EXIT
   echo "[$(/bin/date '+%F %T %z')] backup success: $OUT size=$size"
 
   if [[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] && [ "$RETENTION_DAYS" -gt 0 ]; then
-    /usr/bin/find "$BACKUP_DIR" -maxdepth 1 -type f -name 'new-api-*-postgres.sql.gz' -mtime +"$RETENTION_DAYS" -print -delete | sed 's/^/[retention deleted] /' || true
+    retention_mtime=$((RETENTION_DAYS - 1))
+    /usr/bin/find "$BACKUP_DIR" -maxdepth 1 -type f -name 'new-api-*-postgres.sql.gz' -mtime +"$retention_mtime" -print -delete | sed 's/^/[retention deleted] /' || true
   fi
 } >> "$LOG_FILE" 2>&1

@@ -46,3 +46,13 @@ go.work
 go.work.sum
 
 .gitnexus
+
+# Local deployment artifacts and production data.
+.runtime/deploy/.last-apply-stamp
+.runtime/deploy/new-api.before-*
+.runtime/deploy/new-api.previous-deploy-file.*
+.runtime/last-new-api-rollback-tag
+.runtime/prod/.env.bak.*
+.runtime/prod/backups/
+.runtime/prod/postgres/
+.runtime/prod/redis/
