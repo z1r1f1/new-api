@@ -16,3 +16,15 @@
 - **Pages:** session-log-2026-05-26-6-p3vk69.md
 - **Summary:** Auto-captured session log for omx-1779756178586-p3vk69
 
+## [2026-06-05T02:27:44.757Z] session-end
+- **Pages:** session-log-2026-06-05-8-jhfg8j.md
+- **Summary:** Auto-captured session log for omx-1780626457688-jhfg8j
+
+## [2026-06-12T09:39:36.737Z] session-end
+- **Pages:** session-log-2026-06-12-1-39xci1.md
+- **Summary:** Auto-captured session log for omx-1781257168671-39xci1
+
+## [2026-06-12T12:35:48.141Z] session-end
+- **Pages:** session-log-2026-06-12-1-0xmqnq.md
+- **Summary:** Auto-captured session log for omx-1781267410211-0xmqnq
+
