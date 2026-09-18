@@ -29,10 +29,14 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import dayjs from '@/lib/dayjs'
-import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatPercent,
+  formatTimestampToDate,
+} from '@/lib/format'
 
 import type { UsageLog } from '../data/schema'
-import { formatModelName, parseLogOther } from '../lib/format'
+import { formatModelName, getCacheHitRate, parseLogOther } from '../lib/format'
 import {
   getLogTypeConfig,
   isDisplayableLogType,
@@ -133,6 +137,7 @@ export function CommonLogMobileCard<TData>(props: {
       (other?.cache_creation_tokens_1h || 0) ||
     other?.cache_creation_tokens ||
     0
+  const cacheHitRate = getCacheHitRate(log, other)
   const showTokens =
     displayable &&
     props.cells.has('prompt_tokens') &&
@@ -300,6 +305,14 @@ export function CommonLogMobileCard<TData>(props: {
               {log.completion_tokens.toLocaleString()}
             </span>
           </span>
+          {cacheHitRate != null && (
+            <span>
+              {t('Hit Rate')}{' '}
+              <span className='text-foreground tabular-nums'>
+                {formatPercent(cacheHitRate)}
+              </span>
+            </span>
+          )}
           {cacheRead > 0 && (
             <span>
               {t('Cache')} ↓ {cacheRead.toLocaleString()}

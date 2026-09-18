@@ -49,7 +49,11 @@ import { taskUsageUnitLabel } from '@/features/pricing/lib/task-price-display'
 import type { BillingUsageSchema } from '@/features/pricing/types'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatPercent,
+  formatTimestampToDate,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
@@ -59,6 +63,7 @@ import {
   decodeBillingExprB64,
   getTieredBillingSummary,
   hasAnyCacheTokens,
+  getCacheHitRate,
   parseLogOther,
   isViolationFeeLog,
   renderAuditContent,
@@ -722,6 +727,7 @@ export function useCommonLogsColumns(
         const cacheWriteTokens = hasSplitCache
           ? cacheWrite5m + cacheWrite1h
           : other?.cache_creation_tokens || 0
+        const cacheHitRate = getCacheHitRate(log, other)
 
         return (
           <div className='flex flex-col gap-0.5'>
@@ -729,6 +735,11 @@ export function useCommonLogsColumns(
               {promptTokens.toLocaleString()} /{' '}
               {completionTokens.toLocaleString()}
             </span>
+            {cacheHitRate != null && (
+              <span className='text-muted-foreground/60 text-[11px]'>
+                {t('Hit Rate')} {formatPercent(cacheHitRate)}
+              </span>
+            )}
             {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
               <div className='flex items-center gap-1 text-[11px]'>
                 {cacheReadTokens > 0 && (

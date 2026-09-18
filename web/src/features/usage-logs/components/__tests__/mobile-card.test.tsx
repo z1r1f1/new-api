@@ -168,6 +168,9 @@ it('keeps input, output and cache quantities readable without empty metric cells
   expect(screen.getByText('Output')).toBeVisible()
   expect(screen.getByText(/300/)).toBeVisible()
   expect(screen.getByText('Cache ↑ 200')).toBeVisible()
+  const hitRate = screen.getByText('Hit Rate')
+  expect(hitRate).toBeVisible()
+  expect(hitRate.parentElement).toHaveTextContent('25%')
 })
 
 it('shows the established empty state when no logs exist', () => {

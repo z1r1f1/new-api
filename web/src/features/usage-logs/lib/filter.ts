@@ -47,9 +47,10 @@ export function buildSearchParams(
   switch (logCategory) {
     case 'common': {
       const commonFilters = filters as CommonLogFilters
+      const channelId = commonFilters.channelId || commonFilters.channel
       return {
         ...baseParams,
-        ...(commonFilters.channelId && { channelId: commonFilters.channelId }),
+        ...(channelId && { channelId }),
         ...(commonFilters.channelName && {
           channelName: commonFilters.channelName,
         }),

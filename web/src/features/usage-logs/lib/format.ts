@@ -357,6 +357,28 @@ export function hasAnyCacheTokens(
   )
 }
 
+/**
+ * Calculate the per-request cache read hit rate using the same denominator as
+ * the backend statistics endpoint.
+ */
+export function getCacheHitRate(
+  log: Pick<UsageLog, 'prompt_tokens'>,
+  other: LogOtherData | null | undefined
+): number | null {
+  const promptTokens = Number(log.prompt_tokens) || 0
+  const explicitInputTokens = Number(other?.input_tokens_total)
+  const denominator =
+    Number.isFinite(explicitInputTokens) && explicitInputTokens > 0
+      ? explicitInputTokens
+      : promptTokens
+  if (!Number.isFinite(denominator) || denominator <= 0) return null
+
+  const cacheReadTokens = Number(other?.cache_tokens) || 0
+  if (!Number.isFinite(cacheReadTokens) || cacheReadTokens <= 0) return 0
+
+  return Math.min(100, (cacheReadTokens / denominator) * 100)
+}
+
 export function getTieredBillingSummary(
   other: LogOtherData | null
 ): TieredBillingSummary | null {

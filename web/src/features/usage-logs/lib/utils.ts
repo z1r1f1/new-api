@@ -164,6 +164,12 @@ export function buildApiParams(config: {
 }): GetLogsParams {
   const { page, pageSize, searchParams, columnFilters = [], isAdmin } = config
 
+  const parseChannelId = (value: unknown): number | undefined => {
+    if (value === undefined || value === null || value === '') return undefined
+    const channelId = Number(value)
+    return Number.isInteger(channelId) && channelId > 0 ? channelId : undefined
+  }
+
   // Helper to process type parameter (single value from array)
   const processType = (value: unknown): number | undefined => {
     const parseType = (raw: unknown): number | undefined => {
@@ -182,7 +188,9 @@ export function buildApiParams(config: {
 
   // Build base params from search params. Common logs keep channel name
   // and channel id as separate filters; do not mirror channel_id into channel.
-  const channelId = Number(searchParams.channelId) || 0
+  const channelId = parseChannelId(
+    searchParams.channelId ?? searchParams.channel
+  )
   const channelName = String(searchParams.channelName || '').trim()
   const params: GetLogsParams = {
     p: page,
@@ -192,7 +200,7 @@ export function buildApiParams(config: {
     ...(searchParams.token ? { token_name: String(searchParams.token) } : {}),
     ...(searchParams.group ? { group: String(searchParams.group) } : {}),
     ...(searchParams.ip ? { ip: String(searchParams.ip) } : {}),
-    ...(isAdmin && channelId > 0 ? { channel_id: channelId } : {}),
+    ...(isAdmin && channelId !== undefined ? { channel_id: channelId } : {}),
     ...(isAdmin && channelName ? { channel_name: channelName } : {}),
     ...(isAdmin && searchParams.username
       ? { username: String(searchParams.username) }
@@ -230,7 +238,12 @@ export function buildApiParams(config: {
         case 'channel':
         case 'channel_id':
           if (isAdmin) {
-            params.channel_id = Number(value) || 0
+            const filteredChannelId = parseChannelId(value)
+            if (filteredChannelId === undefined) {
+              delete params.channel_id
+            } else {
+              params.channel_id = filteredChannelId
+            }
           }
           break
         case 'channel_name':
