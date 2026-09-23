@@ -1,6 +1,7 @@
 package perfmetrics
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"math"
@@ -91,6 +92,41 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	})
 }
 
+// RecordTaskResult samples one async task exactly once, at its terminal
+// transition, after the polling status CAS is won. Latency is the end-to-end
+// task duration (second resolution, unlike the ms-resolution relay samples);
+// throughput is only present when the provider reports tokens.
+func RecordTaskResult(task *model.Task, result *relaycommon.TaskInfo) {
+	if task == nil {
+		return
+	}
+	modelName := task.Properties.OriginModelName
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.OriginModelName != "" {
+		modelName = bc.OriginModelName
+	}
+	endTs := task.FinishTime
+	if endTs <= 0 {
+		endTs = time.Now().Unix()
+	}
+	sample := Sample{
+		Model:   modelName,
+		Group:   task.Group,
+		Success: task.Status == model.TaskStatusSuccess,
+	}
+	if task.SubmitTime > 0 && endTs > task.SubmitTime {
+		sample.LatencyMs = (endTs - task.SubmitTime) * 1000
+	}
+	if sample.Success && result != nil {
+		tokens := int64(cmp.Or(result.TotalTokens, result.CompletionTokens))
+		genStart := cmp.Or(task.StartTime, task.SubmitTime)
+		if tokens > 0 && genStart > 0 && endTs > genStart {
+			sample.OutputTokens = tokens
+			sample.GenerationMs = (endTs - genStart) * 1000
+		}
+	}
+	Record(sample)
+}
+
 func Record(sample Sample) {
 	setting := perf_metrics_setting.GetSetting()
 	if !setting.Enabled || sample.Model == "" {
@@ -113,15 +149,20 @@ func Record(sample Sample) {
 	recordRedis(key, sample)
 }
 
+// queryWindow covers the current partial hour plus the preceding complete
+// hours, so every reader shares the same hourly buckets.
+func queryWindow(now time.Time, hours int) (int64, int64) {
+	if hours <= 0 {
+		hours = 24
+	}
+	hours = min(hours, 24*30)
+	endTs := now.Unix()
+	return endTs - endTs%3600 - int64(hours-1)*3600, endTs
+}
+
 func Query(params QueryParams) (QueryResult, error) {
-	if params.Hours <= 0 {
-		params.Hours = 24
-	}
-	if params.Hours > 24*30 {
-		params.Hours = 24 * 30
-	}
-	endTs := time.Now().Unix()
-	startTs := endTs - int64(params.Hours)*3600
+	startTs, endTs := queryWindow(time.Now(), params.Hours)
+	allowedGroups := allowedGroupSet(params.AllowedGroups)
 
 	merged := map[bucketKey]counters{}
 	rows, err := model.GetPerfMetrics(params.Model, params.Group, startTs, endTs)
@@ -129,6 +170,11 @@ func Query(params QueryParams) (QueryResult, error) {
 		return QueryResult{}, err
 	}
 	for _, row := range rows {
+		if allowedGroups != nil {
+			if _, ok := allowedGroups[row.Group]; !ok {
+				continue
+			}
+		}
 		mergeCounters(merged, bucketKey{
 			model:    row.ModelName,
 			group:    row.Group,
@@ -152,22 +198,22 @@ func Query(params QueryParams) (QueryResult, error) {
 		if params.Group != "" && k.group != params.Group {
 			return true
 		}
+		if allowedGroups != nil {
+			if _, ok := allowedGroups[k.group]; !ok {
+				return true
+			}
+		}
 		mergeCounters(merged, k, value.(*atomicBucket).snapshot())
 		return true
 	})
 
-	return buildQueryResult(params.Model, merged), nil
+	result := buildQueryResult(params.Model, merged)
+	result.WindowStart, result.WindowEnd = startTs, endTs
+	return result, nil
 }
 
 func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
-	if hours <= 0 {
-		hours = 24
-	}
-	if hours > 24*30 {
-		hours = 24 * 30
-	}
-	endTs := time.Now().Unix()
-	startTs := endTs - int64(hours)*3600
+	startTs, endTs := queryWindow(time.Now(), hours)
 	allowedGroups := allowedGroupSet(groups)
 
 	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
@@ -210,7 +256,17 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		return true
 	})
 
-	return SummaryAllResult{Models: buildSummaryModels(buckets)}, nil
+	all := counters{}
+	for _, value := range buckets {
+		all.requestCount += value.requestCount
+		all.successCount += value.successCount
+		all.totalLatencyMs += value.totalLatencyMs
+		all.outputTokens += value.outputTokens
+		all.generationMs += value.generationMs
+	}
+	return SummaryAllResult{
+		Summary: summarize(all), WindowStart: startTs, WindowEnd: endTs, Models: buildSummaryModels(buckets),
+	}, nil
 }
 
 func buildSummaryModels(buckets map[bucketKey]counters) []ModelSummary {
@@ -350,6 +406,7 @@ func mergeCounters(merged map[bucketKey]counters, key bucketKey, value counters)
 
 func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResult {
 	groupBuckets := map[string]map[int64]counters{}
+	modelBuckets := map[bucketKey]counters{}
 	for key, value := range merged {
 		if value.requestCount == 0 {
 			continue
@@ -358,6 +415,7 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 			groupBuckets[key.group] = map[int64]counters{}
 		}
 		groupBuckets[key.group][key.bucketTs] = value
+		mergeCounters(modelBuckets, bucketKey{model: modelName, bucketTs: key.bucketTs}, value)
 	}
 
 	groups := make([]string, 0, len(groupBuckets))
@@ -366,6 +424,7 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 	}
 	sort.Strings(groups)
 
+	all := counters{}
 	results := make([]GroupResult, 0, len(groups))
 	for _, group := range groups {
 		buckets := groupBuckets[group]
@@ -390,6 +449,11 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 			total.generationMs += value.generationMs
 			series = append(series, bucketPoint(ts, value))
 		}
+		all.requestCount += total.requestCount
+		all.successCount += total.successCount
+		all.totalLatencyMs += total.totalLatencyMs
+		all.outputTokens += total.outputTokens
+		all.generationMs += total.generationMs
 
 		results = append(results, GroupResult{
 			Group:        group,
@@ -400,11 +464,31 @@ func buildQueryResult(modelName string, merged map[bucketKey]counters) QueryResu
 			Series:       series,
 		})
 	}
+	modelSeries := make([]BucketPoint, 0, len(modelBuckets))
+	for key, value := range modelBuckets {
+		modelSeries = append(modelSeries, bucketPoint(key.bucketTs, value))
+	}
+	sort.Slice(modelSeries, func(i, j int) bool {
+		return modelSeries[i].Ts < modelSeries[j].Ts
+	})
 
 	return QueryResult{
 		ModelName:    modelName,
 		SeriesSchema: seriesSchema,
+		Summary:      summarize(all),
+		Series:       modelSeries,
 		Groups:       results,
+	}
+}
+
+func summarize(total counters) *Summary {
+	if total.requestCount <= 0 {
+		return nil
+	}
+	return &Summary{
+		AvgLatencyMs: avg(total.totalLatencyMs, total.requestCount),
+		SuccessRate:  math.Round(successRate(total)*100) / 100,
+		AvgTps:       math.Round(avgTps(total)*100) / 100,
 	}
 }
 

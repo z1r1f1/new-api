@@ -218,3 +218,68 @@ func TestMigrationSchemaStability(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskPluginLongTextMigration(t *testing.T) {
+	type legacyTaskPlugin struct {
+		Id         int64  `gorm:"primaryKey"`
+		Key        string `gorm:"size:128;not null;uniqueIndex:uk_task_plugin_key_version,priority:1"`
+		APIVersion int    `gorm:"not null"`
+		Version    string `gorm:"size:64;not null;uniqueIndex:uk_task_plugin_key_version,priority:2"`
+		Source     string `gorm:"type:text;not null"`
+		SourceHash string `gorm:"size:64;not null"`
+		Icon       string `gorm:"size:524288"`
+		Enabled    bool   `gorm:"not null"`
+		Active     bool   `gorm:"not null;index"`
+		CreatedAt  int64  `gorm:"not null"`
+		Remark     string `gorm:"type:text"`
+	}
+
+	for _, dialect := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(dialect, func(t *testing.T) {
+			var dsn string
+			switch dialect {
+			case "sqlite":
+				dsn = "local"
+				previousPath := common.SQLitePath
+				common.SQLitePath = filepath.Join(t.TempDir(), "task-plugin-migration.db")
+				t.Cleanup(func() { common.SQLitePath = previousPath })
+			case "mysql":
+				dsn = os.Getenv("TEST_MYSQL_DSN")
+			case "postgres":
+				dsn = os.Getenv("TEST_POSTGRES_DSN")
+			}
+			if dsn == "" {
+				t.Skip("test database DSN is not configured")
+			}
+			t.Setenv("MIGRATION_TEST_DSN", dsn)
+			db, _, err := chooseDB("MIGRATION_TEST_DSN", false)
+			require.NoError(t, err)
+			sqlDB, err := db.DB()
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+			const table = "task_plugin_long_text_migration_test"
+			t.Cleanup(func() { require.NoError(t, db.Migrator().DropTable(table)) })
+
+			require.NoError(t, db.Table(table).AutoMigrate(&legacyTaskPlugin{}))
+			original := legacyTaskPlugin{Key: "large-plugin", APIVersion: 1, Version: "1.0.0", Source: "old source", SourceHash: "old-hash", Icon: "old icon"}
+			require.NoError(t, db.Table(table).Create(&original).Error)
+			require.NoError(t, db.Table(table).AutoMigrate(&TaskPlugin{}))
+			updated := TaskPlugin{Key: "large-plugin", APIVersion: 1, Version: "2.0.0", Source: LongText(strings.Repeat("s", 80*1024)), SourceHash: "new-hash", Icon: LongText(strings.Repeat("i", 100*1024))}
+			require.NoError(t, db.Table(table).Create(&updated).Error)
+
+			var saved []TaskPlugin
+			require.NoError(t, db.Table(table).Order("id").Find(&saved).Error)
+			require.Len(t, saved, 2)
+			assert.Equal(t, LongText("old source"), saved[0].Source)
+			assert.Equal(t, LongText("old icon"), saved[0].Icon)
+			assert.Equal(t, updated.Source, saved[1].Source)
+			assert.Equal(t, updated.Icon, saved[1].Icon)
+			duplicate := TaskPlugin{Key: updated.Key, APIVersion: 1, Version: updated.Version, Source: "duplicate", SourceHash: "duplicate"}
+			require.Error(t, db.Table(table).Create(&duplicate).Error)
+
+			recorder := &migrationSQLRecorder{}
+			require.NoError(t, db.Session(&gorm.Session{Logger: recorder}).Table(table).AutoMigrate(&TaskPlugin{}))
+			assert.Empty(t, recorder.schemaMutations())
+		})
+	}
+}
