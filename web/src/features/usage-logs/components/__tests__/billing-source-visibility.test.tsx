@@ -68,6 +68,7 @@ async function renderLogs(props: {
       type: 2,
       content: '',
       quota: 5000,
+      ip: index === 0 ? '203.0.113.42' : '',
       other: JSON.stringify({ billing_source: source }),
     })
   )
@@ -127,6 +128,22 @@ afterEach(() => {
   useSystemConfigStore.setState(useSystemConfigStore.getInitialState(), true)
   localStorage.clear()
 })
+
+test.each([ROLE.ADMIN, ROLE.USER])(
+  'shows recorded IP addresses in the usage log table for role %s',
+  async (role) => {
+    await renderLogs({
+      role,
+      enabledPlans: [],
+      activeSubscription: false,
+    })
+
+    expect(
+      screen.getByRole('columnheader', { name: 'IP Address' })
+    ).toBeVisible()
+    expect(screen.getByText('203.0.113.42')).toBeVisible()
+  }
+)
 
 test.each([{ enabledPlans: [] }, { enabledPlans: [false] }])(
   'hides the wallet icon in admin view when no plan is enabled but keeps the subscription marker ($enabledPlans)',

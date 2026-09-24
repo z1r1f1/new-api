@@ -610,6 +610,17 @@ export function useCommonLogsColumns(
     }
 
     columns.push({
+      accessorKey: 'ip',
+      header: t('IP Address'),
+      cell: ({ row }) => (
+        <span className='block max-w-[180px] font-mono text-xs break-all'>
+          {row.original.ip || '—'}
+        </span>
+      ),
+      size: 180,
+    })
+
+    columns.push({
       accessorKey: 'token_name',
       header: t('Token'),
       cell: function TokenNameCell({ row }) {
