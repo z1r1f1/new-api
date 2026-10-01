@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"regexp"
 	"strings"
 	"sync"
@@ -559,7 +560,28 @@ func doRequest(c *gin.Context, req *http.Request, info *common.RelayInfo) (*http
 		}
 	}
 
+	timing := common2.GetRequestTiming(c)
+	var timingAttempt int
+	if timing != nil {
+		timingAttempt = timing.BeginUpstreamAttempt(time.Now())
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+			GotConn: func(httptrace.GotConnInfo) {
+				timing.MarkUpstreamAttempt(timingAttempt, common2.TimingUpstreamConnected, time.Now())
+			},
+			WroteRequest: func(writeInfo httptrace.WroteRequestInfo) {
+				if writeInfo.Err == nil {
+					timing.MarkUpstreamAttempt(timingAttempt, common2.TimingUpstreamBodySent, time.Now())
+				}
+			},
+			GotFirstResponseByte: func() {
+				timing.MarkUpstreamAttempt(timingAttempt, common2.TimingUpstreamFirstByte, time.Now())
+			},
+		}))
+	}
 	resp, err := relayClient.Do(req)
+	if timing != nil && resp != nil {
+		timing.MarkUpstreamAttempt(timingAttempt, common2.TimingUpstreamHeaders, time.Now())
+	}
 	if err != nil {
 		logger.LogError(c, "do request failed: "+err.Error())
 		return nil, types.NewError(err, types.ErrorCodeDoRequestFailed, types.ErrOptionWithHideErrMsg("upstream error: do request failed"))

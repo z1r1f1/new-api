@@ -100,6 +100,9 @@ func Distribute() func(c *gin.Context) {
 		if pinned || shouldSelectChannel {
 			usingGroup := common.GetContextKeyString(c, constant.ContextKeyUsingGroup)
 			var selectErr *service.ChannelSelectError
+			if timing := common.GetRequestTiming(c); timing != nil {
+				timing.Mark(common.TimingSelectStart, time.Now())
+			}
 			channel, _, selectErr = service.SelectChannelForRequest(c, modelRequest.Model, &service.RetryParam{
 				Ctx:         c,
 				ModelName:   modelRequest.Model,
@@ -121,7 +124,11 @@ func Distribute() func(c *gin.Context) {
 				return
 			}
 		}
-		common.SetContextKey(c, constant.ContextKeyRequestStartTime, time.Now())
+		selectedAt := time.Now()
+		common.SetContextKey(c, constant.ContextKeyRequestStartTime, selectedAt)
+		if timing := common.GetRequestTiming(c); timing != nil {
+			timing.Mark(common.TimingChannelSelected, selectedAt)
+		}
 		SetupContextForSelectedChannel(c, channel, modelRequest.Model)
 		c.Next()
 		if channel != nil && c.Writer != nil && c.Writer.Status() < http.StatusBadRequest {

@@ -210,6 +210,48 @@ other["admin_info"] = adminInfo
 
 ---
 
+## Scenario: Proxy request timing diagnostics
+
+### 1. Scope / Trigger
+Requests carrying a valid 32-character hexadecimal `X-New-Api-Perf-Id` emit
+one `perf8999` summary after handling. Unmarked requests do not emit it.
+
+### 2. Signatures
+`middleware.RequestTiming()` installs `common.RequestTiming` in Gin context.
+`BeginUpstreamAttempt(time.Time) int` starts one `Client.Do` invocation;
+`MarkUpstreamAttempt(int, RequestTimingStage, time.Time)` records its callbacks.
+
+### 3. Contracts
+The JSON includes `nginx_id`, `app_id`, method, route pattern, status, body size,
+`events_ms`, `durations_ms`, and nonzero `upstream_attempts`. Marshal through
+`common.Marshal`. Never include raw query strings, bodies, or authentication
+headers; use Gin's route pattern rather than a raw path containing private IDs.
+Inbound and initial channel-selection events retain their first timestamps.
+Outbound events represent the last application-level attempt. Beginning a new
+attempt atomically clears only outbound stages; late callbacks from old IDs
+are ignored. Transparent retries inside `net/http` share their `Client.Do` ID.
+
+### 4. Validation & Error Matrix
+Invalid marker: no tracing. Failed `WroteRequest`: no `upstream_body_sent`.
+Missing or inverted endpoints: omit that duration rather than fabricate one.
+
+### 5. Good/Base/Bad Cases
+Good: a failed first call and successful retry produce separate final-attempt
+connection/send/wait measurements and an attempt count of two.
+Base: successful requests retain ordinary status, bodies, and headers.
+Bad: combine the first call's start with the retry's connection timestamp.
+
+### 6. Tests Required
+Keep timing regressions in `relay/channel/api_request_timing_test.go`: fixed
+timestamp durations, body-read reuse, marker filtering, real successful HTTP,
+failed-body writes, and old callback rejection. Avoid sleeps and latency bounds.
+Existing distributor and consume-log tests cover their integration points.
+
+### 7. Wrong vs Correct
+Wrong: mark body-sent unconditionally or call generic `Mark` from old callbacks.
+Correct: check `WroteRequestInfo.Err` and carry the captured attempt ID through
+all outbound callbacks and the response-header timestamp.
+
 ## Log Levels
 
 Use levels according to observed intent:

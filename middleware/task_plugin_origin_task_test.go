@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -365,6 +366,8 @@ func TestDistributeHonorsOriginTaskChannelPin(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("resolved_task_model", "resolved-model")
+	timing := common.NewRequestTiming("0123456789abcdef0123456789abcdef", time.Now())
+	common.SetRequestTiming(c, timing)
 	service.GetChannelConstraints(c).AddPin(dto.ChannelPin{
 		ChannelId: channel.Id,
 		Source:    dto.PinSourceOriginTask,
@@ -380,6 +383,10 @@ func TestDistributeHonorsOriginTaskChannelPin(t *testing.T) {
 	}
 	assert.True(t, nextCalled)
 	assert.Equal(t, channel.Id, common.GetContextKeyInt(c, constant.ContextKeyChannelId))
+	snapshot := timing.Snapshot(time.Now())
+	assert.Contains(t, snapshot.EventsMS, string(common.TimingSelectStart))
+	assert.Contains(t, snapshot.EventsMS, string(common.TimingChannelSelected))
+	assert.Contains(t, snapshot.DurationsMS, "pre_channel")
 }
 
 func TestDistributeTokenPinBeatsOriginPin(t *testing.T) {

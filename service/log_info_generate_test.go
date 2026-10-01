@@ -6,11 +6,31 @@ import (
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGenerateTextOtherInfoRecordsFirstStreamDataTime(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = httptest.NewRequest("POST", "/v1/messages", strings.NewReader(`{"model":"test"}`))
+	started := time.Now().Add(-100 * time.Millisecond)
+	timing := common.NewRequestTiming("0123456789abcdef0123456789abcdef", started)
+	common.SetRequestTiming(ctx, timing)
+	firstData := started.Add(70 * time.Millisecond)
+	relayInfo := &relaycommon.RelayInfo{
+		StartTime: started.Add(20 * time.Millisecond), FirstResponseTime: firstData,
+		ChannelMeta: &relaycommon.ChannelMeta{}, IsStream: true,
+	}
+
+	GenerateTextOtherInfo(ctx, relayInfo, 1, 1, 1, 0, 0, 0, 1)
+	snapshot := timing.Snapshot(time.Now())
+	assert.EqualValues(t, 70, snapshot.EventsMS[string(common.TimingFirstData)])
+}
 
 func TestGenerateTextOtherInfoRecordsFastServiceTierOnWhenRequestHasFast(t *testing.T) {
 	gin.SetMode(gin.TestMode)
