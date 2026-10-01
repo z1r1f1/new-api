@@ -281,6 +281,47 @@ When adding or modifying a channel:
 - update stream support registration if needed;
 - add focused tests near the adapter.
 
+### Native OpenAI effort and service tier forwarding
+
+#### 1. Scope / Trigger
+Verify native OpenAI request forwarding after upstream merges or relay changes.
+
+#### 2. Signatures
+`TextHelper` and `ResponsesHelper` send native requests through the OpenAI adaptor.
+`RemoveDisabledFields` applies `ChannelOtherSettings.AllowServiceTier`.
+
+#### 3. Contracts
+- Responses uses `reasoning.effort`; Chat Completions uses `reasoning_effort`.
+- Native effort values such as `ultra` remain unchanged when no model modifier,
+  reasoning projection, or protocol conversion applies. Canonical conversion
+  validation is a separate contract and need not accept every native value.
+- `service_tier` is omitted by default. With `allow_service_tier: true`,
+  `priority` is preserved and the `fast` alias becomes `priority`.
+- Request-body passthrough preserves the original JSON, including the tier.
+- Browser chat and Playground routes added locally must have explicit access
+  token route declarations. Keep browser-only routes session-only; endpoints
+  that authenticate independently belong in the route-coverage exemptions.
+
+#### 4. Validation & Error Matrix
+Native `ultra` reaches upstream; disabled service-tier forwarding omits only
+the tier. Unsupported cross-protocol effort still returns its classified 400.
+
+#### 5. Good/Base/Bad Cases
+Good: streaming Responses forwards `reasoning.effort: ultra` and an allowed
+`service_tier: priority`. Base: the same effort survives default tier filtering.
+Bad: treating effort as a service tier or silently enabling paid priority.
+
+#### 6. Tests Required
+`relay/openai_request_forwarding_test.go` captures real outbound HTTP JSON for
+both native endpoints, including streaming, tier filtering, the fast alias,
+absence, and passthrough. `router/access_token_scope_test.go` checks local routes
+against the scoped access token declarations and independent-auth exemptions.
+
+#### 7. Wrong vs Correct
+Wrong: replace `ultra` with `priority` or infer forwarding from DTO fields alone.
+Correct: preserve effort separately and assert the JSON received by upstream
+under the actual channel configuration.
+
 ### Payment gateway availability: user entry vs webhook callback
 
 #### 1. Scope / Trigger
