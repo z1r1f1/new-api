@@ -16,6 +16,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/tokenkit"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -718,7 +719,7 @@ func normalizeDeepSeekResponsesUsage(usage dto.Usage, info *relaycommon.RelayInf
 	}
 	if out.CompletionTokens == 0 && choices != nil {
 		for _, choice := range choices {
-			out.CompletionTokens += service.CountTextToken(choice.Message.StringContent()+choice.Message.GetReasoningContent(), info.UpstreamModelName)
+			out.CompletionTokens += tokenkit.Count(info.UpstreamModelName, choice.Message.StringContent()+choice.Message.GetReasoningContent())
 		}
 		out.OutputTokens = out.CompletionTokens
 	}
