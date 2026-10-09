@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { beforeEach, describe, test } from 'node:test'
+
 import type {
   Message,
   PendingImageGenerationTask,
@@ -37,7 +38,7 @@ class MemoryStorage implements Storage {
   }
 
   key(index: number): string | null {
-    return Array.from(this.store.keys())[index] ?? null
+    return [...this.store.keys()][index] ?? null
   }
 
   removeItem(key: string): void {

@@ -29,7 +29,9 @@ export interface ImageReferenceParseResult {
 }
 
 export function normalizeImageReferenceUrl(url: string): string {
-  return String(url || '').trim().replace(/[\r\n]/g, '')
+  return String(url || '')
+    .trim()
+    .replaceAll(/[\r\n]/g, '')
 }
 
 export function toAbsoluteImageReferenceUrl(url: string): string {
@@ -42,7 +44,6 @@ export function toAbsoluteImageReferenceUrl(url: string): string {
   }
   return `${window.location.origin}${normalized}`
 }
-
 
 export async function blobToDataUrl(blobUrl: string): Promise<string> {
   if (!blobUrl.startsWith('blob:')) return blobUrl
@@ -94,7 +95,7 @@ export function parseImageReferencesFromText(
       imageUrls.push(normalizeImageReferenceUrl(url))
       return '\n'
     })
-    .replace(/\n{3,}/g, '\n\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
     .trim()
 
   return {

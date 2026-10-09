@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Ban,
@@ -28,11 +27,11 @@ import {
   Volume2,
   VolumeX,
 } from 'lucide-react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { getUserAvatarStyle } from '@/lib/avatar'
-import { formatNumber, formatQuota, formatTimestamp } from '@/lib/format'
-import { ROLE, getRoleLabelKey } from '@/lib/roles'
+
+import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -54,7 +53,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ConfirmDialog } from '@/components/confirm-dialog'
 import {
   getGroups,
   getUser,
@@ -64,6 +62,10 @@ import {
 import { UserQuotaDialog } from '@/features/users/components/user-quota-dialog'
 import { USER_STATUS } from '@/features/users/constants'
 import type { ManageUserAction, User } from '@/features/users/types'
+import { getUserAvatarStyle } from '@/lib/avatar'
+import { formatNumber, formatQuota, formatTimestamp } from '@/lib/format'
+import { ROLE, getRoleLabelKey } from '@/lib/roles'
+
 import { setChatMemberMuted } from '../api'
 import { getChatUserDisplayName, getChatUserInitial } from '../lib/format'
 import {
@@ -180,8 +182,9 @@ export function ChatUserProfileDialog(props: ChatUserProfileDialogProps) {
 
   const muteMutation = useMutation({
     mutationFn: async (muted: boolean) => {
-      if (!props.user || !props.conversation)
+      if (!props.user || !props.conversation) {
         throw new Error('No user selected')
+      }
       return setChatMemberMuted(props.conversation.id, props.user.id, { muted })
     },
     onSuccess: (response, muted) => {

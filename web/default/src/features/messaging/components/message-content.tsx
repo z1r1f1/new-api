@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+
 import { cn } from '@/lib/utils'
+
 import {
   extractMessageContentParts,
   extractMessageReplyReference,
@@ -39,7 +41,13 @@ export function MessageContent(props: MessageContentProps) {
     null
   )
   const replyReference = extractMessageReplyReference(props.body)
-  const parts = extractMessageContentParts(props.body)
+  const occurrences = new Map<string, number>()
+  const parts = extractMessageContentParts(props.body).map((part) => {
+    const identity = JSON.stringify(part)
+    const occurrence = occurrences.get(identity) ?? 0
+    occurrences.set(identity, occurrence + 1)
+    return { part, key: `${identity}:${occurrence}` }
+  })
 
   return (
     <>
@@ -56,27 +64,22 @@ export function MessageContent(props: MessageContentProps) {
             }
           />
         )}
-        {parts.map((part, index) => {
+        {parts.map(({ part, key }) => {
           if (part.type === 'text') {
             if (!part.text) return null
             return (
-              <span key={`text-${index}`} className='whitespace-pre-wrap'>
+              <span key={key} className='whitespace-pre-wrap'>
                 {part.text}
               </span>
             )
           }
           if (part.type === 'sticker') {
-            return (
-              <ChatStickerContent
-                key={`sticker-${index}`}
-                sticker={part.sticker}
-              />
-            )
+            return <ChatStickerContent key={key} sticker={part.sticker} />
           }
           const alt = part.alt || t('Image Preview')
           return (
             <button
-              key={`image-${index}`}
+              key={key}
               type='button'
               onClick={() => setPreviewImage({ src: part.src, alt })}
               className='focus-visible:ring-ring block max-w-full cursor-zoom-in rounded-2xl text-left transition-transform outline-none hover:scale-[1.01] focus-visible:ring-2 focus-visible:ring-offset-2'
@@ -136,7 +139,8 @@ function ReplyReferenceBlock(props: ReplyReferenceBlockProps) {
       (props.mine
         ? 'cursor-pointer hover:bg-white/45 focus-visible:ring-green-700/40'
         : 'cursor-pointer hover:bg-muted focus-visible:ring-ring'),
-    props.onClick && 'outline-none focus-visible:ring-2 focus-visible:ring-offset-2'
+    props.onClick &&
+      'outline-none focus-visible:ring-2 focus-visible:ring-offset-2'
   )
 
   const content = (

@@ -372,10 +372,7 @@ export function isImageGenerationRequestPayload(
     return false
   }
   const record = payload as Record<string, unknown>
-  return (
-    Object.prototype.hasOwnProperty.call(record, 'prompt') &&
-    !Object.prototype.hasOwnProperty.call(record, 'messages')
-  )
+  return Object.hasOwn(record, 'prompt') && !Object.hasOwn(record, 'messages')
 }
 
 export function isImageEditRequestPayload(
@@ -415,7 +412,7 @@ function parseJsonObject(value: string): Record<string, unknown> | null {
 function isJsonImagePayload(
   payload: Record<string, unknown> | null
 ): payload is Record<string, unknown> {
-  return !!payload && Object.prototype.hasOwnProperty.call(payload, 'prompt')
+  return !!payload && Object.hasOwn(payload, 'prompt')
 }
 
 function createPrompt(value: unknown, fallback: string): string {
@@ -698,7 +695,7 @@ export function parseGeneratedImagesFromMarkdown(content: string): {
 
       return '\n'
     })
-    .replace(/\n{3,}/g, '\n\n')
+    .replaceAll(/\n{3,}/g, '\n\n')
     .trim()
 
   return { text, images }

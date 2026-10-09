@@ -16,7 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { spawnSync } from 'node:child_process'
+import { execFile, type ExecFileException } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
@@ -118,26 +118,34 @@ type Diagnostic = { filename: string; code: string; severity: string }
 let directory: string
 let diagnostics: Diagnostic[]
 
-beforeAll(() => {
+beforeAll(async () => {
   directory = mkdtempSync(join(tmpdir(), 'new-api-intl-lint-'))
   for (const [name, code] of cases) {
     writeFileSync(join(directory, `${name}.tsx`), code)
   }
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..')
-  const result = spawnSync(
-    process.execPath,
-    [
-      join(root, 'node_modules/oxlint/bin/oxlint'),
-      '-c',
-      join(root, '.oxlintrc.json'),
-      '--format',
-      'json',
-      directory,
-    ],
-    { cwd: root, encoding: 'utf8' }
+  const result = await new Promise<{
+    error: ExecFileException | null
+    stdout: string
+    stderr: string
+  }>((resolveResult) => {
+    execFile(
+      process.execPath,
+      [
+        join(root, 'node_modules/oxlint/bin/oxlint'),
+        '-c',
+        join(root, '.oxlintrc.json'),
+        '--format',
+        'json',
+        directory,
+      ],
+      { cwd: root, encoding: 'utf8' },
+      (error, stdout, stderr) => resolveResult({ error, stdout, stderr })
+    )
+  })
+  expect([0, 1], result.stderr).toContain(
+    result.error === null ? 0 : result.error.code
   )
-  expect(result.error).toBeUndefined()
-  expect([0, 1], result.stderr).toContain(result.status)
   diagnostics = JSON.parse(result.stdout).diagnostics
 })
 

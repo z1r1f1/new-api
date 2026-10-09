@@ -155,6 +155,7 @@ function ChatRouteComponent() {
 
   return (
     <iframe
+      sandbox='allow-scripts allow-forms allow-popups allow-downloads'
       src={iframeSrc}
       key={iframeSrc}
       className='h-full w-full border-0'

@@ -16,19 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, MessageCircle, RotateCcw, Search } from 'lucide-react'
 import { nanoid } from 'nanoid'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useAuthStore } from '@/stores/auth-store'
-import { getUserAvatarStyle } from '@/lib/avatar'
-import { ROLE } from '@/lib/roles'
+
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { getUserAvatarStyle } from '@/lib/avatar'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
+
 import {
   createDirectConversation,
   listChatConversations,
@@ -78,6 +80,7 @@ import {
   type ChatImagePreview,
   type ChatReplyReference,
   type ChatSticker,
+  type ChatStickerSelection,
 } from './lib/message-content'
 import type {
   ApiResponse,
@@ -118,7 +121,9 @@ export function Messaging() {
   const [openingUserId, setOpeningUserId] = useState<number | null>(null)
   const [messageBody, setMessageBody] = useState('')
   const [pastedImages, setPastedImages] = useState<ChatImageAttachment[]>([])
-  const [selectedStickers, setSelectedStickers] = useState<ChatSticker[]>([])
+  const [selectedStickers, setSelectedStickers] = useState<
+    ChatStickerSelection[]
+  >([])
   const [replyTarget, setReplyTarget] = useState<ChatReplyReference | null>(
     null
   )
@@ -622,7 +627,7 @@ export function Messaging() {
         )
         return current
       }
-      return [...current, sticker]
+      return [...current, { ...sticker, selectionId: nanoid() }]
     })
   }
 
@@ -811,7 +816,7 @@ function ChatHeader(props: ChatHeaderProps) {
     <CardHeader className='border-border/80 shrink-0 border-b'>
       <div className='flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between'>
         <div className='flex min-w-0 items-center gap-3'>
-          {headerUser ? (
+          {headerUser && (
             <button
               type='button'
               onClick={() => props.onViewUser(headerUser)}
@@ -827,7 +832,8 @@ function ChatHeader(props: ChatHeaderProps) {
                 </AvatarFallback>
               </Avatar>
             </button>
-          ) : props.conversation ? (
+          )}
+          {!headerUser && props.conversation && (
             <Avatar size='lg' className='shadow-sm'>
               <AvatarFallback
                 className='font-semibold'
@@ -838,7 +844,8 @@ function ChatHeader(props: ChatHeaderProps) {
                 {getConversationInitial(props.conversation)}
               </AvatarFallback>
             </Avatar>
-          ) : (
+          )}
+          {!headerUser && !props.conversation && (
             <div className='bg-muted flex size-10 items-center justify-center rounded-full'>
               <MessageCircle className='text-muted-foreground h-5 w-5' />
             </div>

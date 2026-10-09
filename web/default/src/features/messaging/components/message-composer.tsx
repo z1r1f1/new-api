@@ -16,18 +16,21 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useMemo, type ClipboardEvent } from 'react'
 import { AtSign, ImagePlus, Loader2, Reply, Send, X } from 'lucide-react'
+import { useMemo, type ClipboardEvent } from 'react'
 import { useTranslation } from 'react-i18next'
-import { cn } from '@/lib/utils'
+
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
+
 import { getChatUserDisplayName } from '../lib/format'
 import {
   isChatMessageSendable,
   type ChatImageAttachment,
   type ChatReplyReference,
   type ChatSticker,
+  type ChatStickerSelection,
 } from '../lib/message-content'
 import type { ChatUser } from '../types'
 import { ChatStickerPicker } from './chat-sticker-picker'
@@ -40,7 +43,7 @@ interface MessageComposerProps {
   maxLength: number
   mentionUsers: ChatUser[]
   attachments: ChatImageAttachment[]
-  stickers: ChatSticker[]
+  stickers: ChatStickerSelection[]
   availableStickers: ChatSticker[]
   replyTo: ChatReplyReference | null
   onChange: (value: string) => void
@@ -93,7 +96,7 @@ export function MessageComposer(props: MessageComposerProps) {
 
   return (
     <div className='border-border/80 bg-background shrink-0 border-t p-3 lg:p-4'>
-      <div className='focus-within:border-[#07c160]/70 focus-within:ring-[#07c160]/15 bg-card/40 relative rounded-2xl border p-2 transition-colors focus-within:ring-2'>
+      <div className='bg-card/40 relative rounded-2xl border p-2 transition-colors focus-within:border-[#07c160]/70 focus-within:ring-2 focus-within:ring-[#07c160]/15'>
         {showMentionCandidates && mentionCandidates.length > 0 && (
           <div className='bg-popover text-popover-foreground absolute right-2 bottom-[calc(100%-0.25rem)] left-2 z-10 rounded-xl border p-2 shadow-lg'>
             <div className='text-muted-foreground mb-1 flex items-center gap-1 px-1 text-xs'>
@@ -151,12 +154,10 @@ export function MessageComposer(props: MessageComposerProps) {
               ))}
               {props.stickers.map((sticker, index) => (
                 <div
-                  key={`${sticker.id}-${index}`}
+                  key={sticker.selectionId}
                   className='group/sticker hover:bg-muted relative flex size-9 shrink-0 items-center justify-center rounded-lg'
                 >
-                  <span className='text-2xl leading-none'>
-                    {sticker.emoji}
-                  </span>
+                  <span className='text-2xl leading-none'>{sticker.emoji}</span>
                   <button
                     type='button'
                     className='bg-background/95 text-foreground absolute top-0.5 right-0.5 flex size-5 items-center justify-center rounded-full opacity-0 shadow transition-opacity group-hover/sticker:opacity-100 focus:opacity-100'
@@ -295,7 +296,7 @@ function getImageFilesFromClipboard(
   event: ClipboardEvent<HTMLTextAreaElement>
 ): File[] {
   const files: File[] = []
-  for (const item of Array.from(event.clipboardData.items)) {
+  for (const item of event.clipboardData.items) {
     if (item.kind !== 'file') continue
     const file = item.getAsFile()
     if (!file?.type.startsWith('image/')) continue

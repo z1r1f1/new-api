@@ -17,9 +17,10 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { createFileRoute, redirect } from '@tanstack/react-router'
-import { isSidebarModuleEnabled } from '@/lib/nav-modules'
+
 import { Main } from '@/components/layout'
 import { Messaging } from '@/features/messaging'
+import { isSidebarModuleEnabled } from '@/lib/nav-modules'
 
 export const Route = createFileRoute('/_authenticated/messages/')({
   beforeLoad: () => {
@@ -27,13 +28,9 @@ export const Route = createFileRoute('/_authenticated/messages/')({
       throw redirect({ to: '/dashboard' })
     }
   },
-  component: MessagesPage,
-})
-
-function MessagesPage() {
-  return (
+  component: () => (
     <Main className='p-0'>
       <Messaging />
     </Main>
-  )
-}
+  ),
+})

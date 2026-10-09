@@ -38,6 +38,10 @@ export interface ChatSticker {
   accent: string
 }
 
+export interface ChatStickerSelection extends ChatSticker {
+  selectionId: string
+}
+
 export interface ChatReactionOption {
   id: string
   emoji: string
@@ -169,8 +173,9 @@ export function extractMessageContentParts(body: string): MessageContentPart[] {
       : getImageContentPart(alt, src)
     if (!part) continue
 
-    if (index > cursor)
+    if (index > cursor) {
       parts.push({ type: 'text', text: contentBody.slice(cursor, index) })
+    }
     parts.push(part)
     cursor = index + fullMatch.length
   }
@@ -187,8 +192,8 @@ export function buildChatImageMarkdown(
   attachment: ChatImageAttachment
 ): string {
   const safeName = attachment.name
-    .replace(/[()[\]]/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replaceAll(/[()[\]]/g, ' ')
+    .replaceAll(/\s+/g, ' ')
     .replace(/\s+(\.[^.]+)$/, '$1')
     .trim()
   const alt = safeName || 'pasted-image'
@@ -225,7 +230,7 @@ export function getMessageReplyPreview(body: string): string {
   const parts = extractMessageContentParts(body)
   for (const part of parts) {
     if (part.type === 'text') {
-      const text = part.text.trim().replace(/\s+/g, ' ')
+      const text = part.text.trim().replaceAll(/\s+/g, ' ')
       if (text) return truncateMessagePreview(text)
       continue
     }
@@ -374,7 +379,7 @@ function getMarkerString(value: unknown, maxLength: number): string {
 }
 
 function truncateMessagePreview(value: string): string {
-  const normalized = value.trim().replace(/\s+/g, ' ')
+  const normalized = value.trim().replaceAll(/\s+/g, ' ')
   if (normalized.length <= 120) return normalized
   return `${normalized.slice(0, 119)}…`
 }
