@@ -456,7 +456,7 @@ func sendChatWSCommand(t *testing.T, conn *websocket.Conn, id uint32, body map[s
 	require.NoError(t, conn.WriteMessage(websocket.TextMessage, payload))
 }
 
-func readChatWSReply(t *testing.T, conn *websocket.Conn) protocol.Reply {
+func readChatWSReply(t *testing.T, conn *websocket.Conn) *protocol.Reply {
 	t.Helper()
 
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
@@ -467,7 +467,7 @@ func readChatWSReply(t *testing.T, conn *websocket.Conn) protocol.Reply {
 
 	var reply protocol.Reply
 	if err := common.Unmarshal(payload, &reply); err == nil {
-		return reply
+		return &reply
 	}
 
 	for _, part := range bytes.Split(payload, []byte("\n")) {
@@ -476,10 +476,10 @@ func readChatWSReply(t *testing.T, conn *websocket.Conn) protocol.Reply {
 			continue
 		}
 		if err := common.Unmarshal(part, &reply); err == nil {
-			return reply
+			return &reply
 		}
 	}
 
 	t.Fatalf("failed to decode websocket reply: %s", string(payload))
-	return protocol.Reply{}
+	return nil
 }

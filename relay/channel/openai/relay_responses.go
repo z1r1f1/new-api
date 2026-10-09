@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -38,6 +39,7 @@ func OaiResponsesHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http
 	}
 
 	responseBody = rewriteSGLangResponsesCreatedAt(info, responseBody, "created_at", responsesResponse.CreatedAt)
+	info.ObserveResponseModel(responsesResponse.Model)
 
 	// 写入新的 response body
 	service.IOCopyBytesGracefully(c, resp, responseBody)
@@ -76,6 +78,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 	defer service.CloseResponseBodyGracefully(resp)
 
 	accumulator := service.NewResponsesUsageAccumulator(info)
+	accepted := false
 	responseCompleted := false
 	var streamErr *types.NewAPIError
 
@@ -104,12 +107,24 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		case "response.completed", "response.done":
 			responseCompleted = true
 			sr.Done()
-		case "response.error", "response.failed":
-			streamErr = newResponsesStreamAPIError(streamResponse, data)
-			sr.Stop(streamErr)
+		case "error", "response.error", "response.failed":
+			if accepted {
+				// Accepted generations retain their usage even when upstream fails.
+				// The protocol outcome already records failure for logs and health.
+				sr.Done()
+			} else {
+				streamErr = newResponsesStreamAPIError(streamResponse, data)
+				sr.Stop(streamErr)
+			}
+		case "response.incomplete", "response.cancelled", "response.canceled":
+			sr.Done()
+		default:
+			accepted = accepted || strings.HasPrefix(streamResponse.Type, "response.")
 		}
 	})
 
+	info.StreamStatus.RequireTerminal()
+	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
 	if responseCompleted {
 		markResponsesStreamCompleted(info)
 	}

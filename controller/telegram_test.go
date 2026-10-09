@@ -57,6 +57,12 @@ type telegramOAuthFixture struct {
 	jwksStatus  int
 }
 
+// Each fixture has isolated grants and provider caches; the signing key is
+// immutable and shared so setup does not repeatedly generate RSA primes.
+var telegramOAuthTestKey = sync.OnceValues(func() (*rsa.PrivateKey, error) {
+	return rsa.GenerateKey(rand.Reader, 2048)
+})
+
 func setupTelegramOAuthTest(t *testing.T) *telegramOAuthFixture {
 	t.Helper()
 	user, identity := setupSecurityEnrollmentTest(t)
@@ -83,7 +89,7 @@ func setupTelegramOAuthTest(t *testing.T) *telegramOAuthFixture {
 		oauth.Register("telegram", previousProvider)
 		oauth.UnregisterCustomProvider("telegram")
 	})
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := telegramOAuthTestKey()
 	require.NoError(t, err)
 	fixture := &telegramOAuthFixture{user: user, identity: identity, key: key, grants: map[string]telegramTestGrant{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

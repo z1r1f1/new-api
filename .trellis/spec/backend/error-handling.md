@@ -266,8 +266,19 @@ When adding a new provider adapter, prefer converting provider response errors t
 
 ### 3. Contracts
 
-- Upstream SSE event types `response.error` and `response.failed` are relay
-  errors, not successful zero-token completions.
+- Upstream SSE event types `error`, `response.error`, and `response.failed`
+  remain failed protocol outcomes. A rejection before upstream acceptance
+  returns a relay error. Once a native Responses generation has started, its
+  terminal failure must retain actual or estimated usage and settle once;
+  returning a relay error there would discard usage and refund billable work.
+- Publish `ContextKeyResponseStreamStatus` after `StreamScannerHandler`
+  returns: the scanner creates a new status object. Publishing the earlier
+  pointer loses failure information and incorrectly increments the successful
+  request rate limiter. Require a terminal event on that same final object.
+- Consume logs include `stream_status.response_status`; failed outcomes use
+  `status=error`. HTTP health is sampled once at the request boundary through
+  `RecordRelayResult`, so retries, client cancellations and business rejections
+  follow the existing classification policy independently of settlement.
 - Successful Responses final payloads must not expose `response.output` /
   `output` as `null`. Normalize missing or null output arrays to `[]` before
   forwarding native `/v1/responses` bodies or `response.completed` SSE events,
@@ -291,6 +302,9 @@ When adding a new provider adapter, prefer converting provider response errors t
   `responses stream error: <event_type>`.
 - Upstream success body or `response.completed` with `output: null` or missing
   `output` -> forward the same successful response with `output: []`.
+- `response.created` followed by a failed terminal -> preserve the upstream
+  terminal, settle its usage, record failure, and retain the next request's
+  successful-request allowance.
 
 ### 5. Good/Base/Bad Cases
 
@@ -318,6 +332,10 @@ When adding a new provider adapter, prefer converting provider response errors t
 - `common`: regression test proving known Responses SSE event names such as
   `response.failed` and `response.error` are not masked as plain domains, while
   real domains, URLs, and IPs still are.
+- `controller/responses_websocket_test.go`: verify SSE/WebSocket accounting,
+  final health counts, and success-rate limits. Compare terminal JSON
+  semantically, require exactly one terminal, and preserve the completed-output
+  array normalization contract.
 
 ### 7. Wrong vs Correct
 
@@ -333,8 +351,13 @@ return types.NewOpenAIError(fmt.Errorf("responses stream error: %s", streamResp.
 Correct:
 
 ```go
-streamErr = newResponsesStreamAPIError(streamResp, data)
-sr.Stop(streamErr)
+if accepted {
+    // The accumulator has already recorded the failed protocol outcome.
+    sr.Done()
+} else {
+    streamErr = newResponsesStreamAPIError(streamResp, data)
+    sr.Stop(streamErr)
+}
 ```
 
 ---

@@ -705,7 +705,7 @@ func TestResponsesWebSocketDialsNativeResponsesChannelTypes(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, response.Body.Close())
 			assert.Equal(t, http.StatusOK, response.StatusCode)
-			assert.Contains(t, string(body), terminal)
+			assertResponsesSSETerminal(t, string(body), terminal)
 			select {
 			case <-fixture.httpDone:
 			case <-time.After(3 * time.Second):
@@ -939,7 +939,7 @@ func TestResponsesStreamOutcomesPreserveAccounting(t *testing.T) {
 					require.NoError(t, err)
 					require.NoError(t, response.Body.Close())
 					assert.Equal(t, http.StatusOK, response.StatusCode)
-					assert.Contains(t, string(body), terminal)
+					assertResponsesSSETerminal(t, string(body), terminal)
 				} else {
 					require.NoError(t, fixture.client.WriteMessage(websocket.TextMessage, []byte(`{"type":"response.create","stream_id":"planner","model":"ws-billing","input":"hi","max_output_tokens":1}`)))
 					for _, expected := range events {
@@ -1319,4 +1319,35 @@ func TestResponsesWebSocketPreRoutingRejectionsFollowHealthClassification(t *tes
 			assert.Zero(t, successes)
 		})
 	}
+}
+
+// assertResponsesSSETerminal compares protocol data independent of JSON member
+// order while enforcing the SDK contract that completed output is an array.
+func assertResponsesSSETerminal(t *testing.T, body, terminal string) {
+	t.Helper()
+	var expected map[string]any
+	require.NoError(t, common.UnmarshalJsonStr(terminal, &expected))
+	if expected["type"] == "response.completed" {
+		response, ok := expected["response"].(map[string]any)
+		require.True(t, ok)
+		if response["output"] == nil {
+			response["output"] = []any{}
+		}
+	}
+	expectedJSON, err := common.Marshal(expected)
+	require.NoError(t, err)
+	matches := 0
+	for line := range strings.SplitSeq(body, "\n") {
+		data, ok := strings.CutPrefix(line, "data: ")
+		if !ok || data == "[DONE]" {
+			continue
+		}
+		var event map[string]any
+		require.NoError(t, common.UnmarshalJsonStr(data, &event))
+		if event["type"] == expected["type"] {
+			matches++
+			assert.JSONEq(t, string(expectedJSON), data)
+		}
+	}
+	assert.Equal(t, 1, matches, "the terminal event must be delivered exactly once")
 }

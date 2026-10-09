@@ -1191,15 +1191,19 @@ func GetPreferredChannelByAffinity(c *gin.Context, modelName string, usingGroup 
 		cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, modelName, usingGroup, affinityValue)
 		cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
 		requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen := "", "", 0, 0
-		var requestDebug map[string]interface{}
+		var requestDebug map[string]any
 		if setting.LogRequestPrefix {
 			requestPrefix, requestPrefixHash, requestPrefixLen, requestBodyLen, requestDebug = buildChannelAffinityRequestPrefixDebug(c, setting.RequestPrefixChars)
 		}
+		policy := RequestPolicy(c)
+		policy.SessionMode, policy.SessionModeSource = EffectiveSessionMode(setting, rule)
+		policy.RuleName = rule.Name
+		policy.AddEvent(PolicyEvent{Group: usingGroup, Decision: PolicyDecision{Action: "match", Reason: "session_rule_matched", Source: policy.SessionModeSource}})
 		setChannelAffinityContext(c, channelAffinityMeta{
 			CacheKey:          cacheKeyFull,
 			TTLSeconds:        ttlSeconds,
 			RuleName:          rule.Name,
-			SkipRetry:         rule.SkipRetryOnFailure,
+			SkipRetry:         policy.SessionMode == "strict",
 			ParamTemplate:     cloneStringAnyMap(rule.ParamOverrideTemplate),
 			KeySourceType:     strings.TrimSpace(usedSource.Type),
 			KeySourceKey:      strings.TrimSpace(usedSource.Key),
