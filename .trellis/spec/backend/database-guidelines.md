@@ -164,3 +164,50 @@ For new DB behavior, add tests that cover:
 - Do not interpolate untrusted user input into raw SQL. Use `?` placeholders and allowlisted column names.
 - Do not forget `LOG_DB` when changing log persistence.
 - Do not change table/column types without considering existing SQLite deployments.
+
+## Scenario: Upstream token-quota upgrades and deployment verification
+
+### 1. Scope / Trigger
+Use this contract when merging token schema changes or deploying an upstream
+update over an existing database. Never use production DSNs in regression tests.
+
+### 2. Signatures
+- `Token.AllowUserQuotaQuery bool` maps to `allow_user_quota_query`.
+- `GET /api/usage/token/` optionally returns `data.user_quota`.
+- Disposable external tests use `TEST_MYSQL_DSN` and `TEST_POSTGRES_DSN`.
+
+### 3. Contracts
+- Existing tokens keep owner-quota queries off after migration; verify the API
+  response, not a particular SQL NULL-versus-false representation.
+- New API-created tokens default on; updates without the field retain its value.
+- Preserve users, token quotas/keys, channels, log content, indexes and uniqueness.
+- Verify fresh databases and representative databases created by the latest
+  release on real SQLite, MySQL and PostgreSQL. Start the merged application
+  twice and compare schemas. Include separately configured MySQL/PostgreSQL logs.
+- Keep production Compose environment, bind mounts and dependent service IDs
+  unchanged; back up the database and retain an old-image rollback tag first.
+
+### 4. Validation & Error Matrix
+- Legacy token -> no `user_quota` in its usage response.
+- Enabled token -> exact account remaining/used quota in `user_quota`.
+- Duplicate token key -> database uniqueness rejection after migration.
+- Second startup -> same schema, indexes, constraints and fixture business data.
+- External regression DSN outside loopback -> reject it; do not relax the guard.
+
+### 5. Good/Base/Bad Cases
+Good: isolated databases, synthetic credentials, release-created fixtures and
+actual HTTP quota queries. Base: old logs and token balances remain readable.
+Bad: testing only SQLite, using live credentials, or treating a nullable legacy
+column as a failed migration when the API correctly returns the disabled state.
+
+### 6. Tests Required
+Keep token create/update, IP-allowlist and migration tests passing. Run existing
+database-matrix tests against loopback-only disposable instances. A Docker
+internal network may not publish its configured ports; use a loopback-only
+forwarder instead of permitting bridge addresses in the test safety check.
+
+### 7. Wrong vs Correct
+Wrong: accept any host in a destructive database fixture to make a test pass.
+Correct: preserve the loopback guard and forward a loopback port to the owned,
+isolated database. Deploy only the application service, never recreate its data
+services as part of an application update.

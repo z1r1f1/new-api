@@ -272,3 +272,45 @@ Use levels according to observed intent:
 - Do not log unmasked URLs, keys, credentials, raw sensitive request-header values, or prompt bodies.
 - Do not create new persistent log type numeric values with `iota`.
 - Do not forget that `LOG_DB` may differ from `DB`.
+
+## Scenario: OAuth response diagnostics during upstream merges
+
+### 1. Scope / Trigger
+Apply when modifying token exchange, user-info failure handling or OAuth error
+localization. A provider error response can still contain usable credentials.
+
+### 2. Signatures
+`linuxdoOAuthResponseMessage(statusCode int, errorCode string) string` produces
+safe operational context. `OAuthError.Message` carries a `common.Message` for
+the console; `RawError` must also be safe to log.
+
+### 3. Contracts
+Retain non-2xx rejection, token metadata on successful exchange and inactive/
+silenced-account rejection. Parse through `common.Unmarshal`. Error diagnostics
+may contain HTTP status and allowlisted standard OAuth error codes, never raw
+bodies, arbitrary descriptions, access/refresh tokens or credential-like text.
+Do not log profile names when stable non-secret IDs suffice.
+
+### 4. Validation & Error Matrix
+- JSON error containing credentials -> reject exchange without logging them.
+- Non-JSON error body containing credentials -> same safe rejection.
+- Inactive or silenced profile -> no authenticated OAuth user.
+- Successful token response -> preserve token type, refresh token, expiry/scope.
+
+### 5. Good/Base/Bad Cases
+Good: `status=401, invalid_client`. Base: generic translated console error with
+request-correlated operational context. Bad: logging `error_description` or a
+truncated token response; truncation is not redaction.
+
+### 6. Tests Required
+`oauth/linuxdo_test.go` exercises real local HTTP endpoints and captures the
+logger to assert that credential-bearing JSON and non-JSON failures reveal no
+access/refresh-token markers. Preserve profile-state and redirect/auth tests.
+References: OWASP ASVS 5.0.0 16.2.5 and 16.5.1, Authentication, Session Management
+and OAuth 2.0 Cheat Sheets. These checks are not a whole-application compliance
+claim.
+
+### 7. Wrong vs Correct
+Wrong: `RawError = string(responseBody[:500])`.
+Correct: return a generic `common.Message`, retain the HTTP status and an
+allowlisted OAuth error category, and never pass the body to the logger.

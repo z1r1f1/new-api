@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
@@ -55,7 +54,7 @@ func (p *LinuxDOProvider) IsEnabled() bool {
 
 func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
 	if code == "" {
-		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
+		return nil, NewOAuthError(common.NewMessage(msgInvalidCode))
 	}
 
 	// Get access token using Basic auth
@@ -83,8 +82,8 @@ func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin
 	client := http.Client{Timeout: 5 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken error: %s", err.Error()))
-		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthConnectFailed, map[string]any{"Provider": "Linux DO"}, err.Error())
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] ExchangeToken error: %s", err.Error()))
+		return nil, NewOAuthErrorWithRaw(common.NewMessage(msgConnectFailed, map[string]any{"provider": "Linux DO"}), err.Error())
 	}
 	defer res.Body.Close()
 
@@ -92,7 +91,7 @@ func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken read body error: %s", err.Error()))
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] ExchangeToken read body error: %s", err.Error()))
 		return nil, err
 	}
 
@@ -100,25 +99,25 @@ func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin
 	if len(body) > 0 {
 		if err := common.Unmarshal(body, &tokenRes); err != nil {
 			if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
-				rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, body)
-				logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken failed: %s", rawMessage))
-				return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthTokenFailed, map[string]any{"Provider": "Linux DO"}, rawMessage)
+				rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, "")
+				logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] ExchangeToken failed: %s", rawMessage))
+				return nil, NewOAuthErrorWithRaw(common.NewMessage(msgTokenFailed, map[string]any{"provider": "Linux DO"}), rawMessage)
 			}
-			logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken decode error: %s", err.Error()))
+			logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] ExchangeToken decode error: %s", err.Error()))
 			return nil, err
 		}
 	}
 
 	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
-		rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, body, tokenRes.ErrorDescription, tokenRes.Message, tokenRes.Error)
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken failed: %s", rawMessage))
-		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthTokenFailed, map[string]any{"Provider": "Linux DO"}, rawMessage)
+		rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, tokenRes.Error)
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] ExchangeToken failed: %s", rawMessage))
+		return nil, NewOAuthErrorWithRaw(common.NewMessage(msgTokenFailed, map[string]any{"provider": "Linux DO"}), rawMessage)
 	}
 
 	if tokenRes.AccessToken == "" {
-		rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, body, tokenRes.ErrorDescription, tokenRes.Message, tokenRes.Error)
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken failed: %s", rawMessage))
-		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthTokenFailed, map[string]any{"Provider": "Linux DO"}, rawMessage)
+		rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, tokenRes.Error)
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] ExchangeToken failed: %s", rawMessage))
+		return nil, NewOAuthErrorWithRaw(common.NewMessage(msgTokenFailed, map[string]any{"provider": "Linux DO"}), rawMessage)
 	}
 
 	logger.LogDebug(ctx, "[OAuth-LinuxDO] ExchangeToken success: scope=%s", tokenRes.Scope)
@@ -192,22 +191,17 @@ func linuxdoFirstHeaderValue(values ...string) string {
 	return ""
 }
 
-func linuxdoOAuthResponseMessage(statusCode int, body []byte, messages ...string) string {
-	for _, message := range messages {
-		message = strings.TrimSpace(message)
-		if message != "" {
-			return fmt.Sprintf("status=%d, %s", statusCode, message)
-		}
-	}
-	bodyText := strings.TrimSpace(string(body))
-	if bodyText == "" {
+// OAuth responses can contain usable credentials even on failures. Record only
+// the HTTP status and standard OAuth error code, never the response body or an
+// arbitrary provider description.
+func linuxdoOAuthResponseMessage(statusCode int, errorCode string) string {
+	switch errorCode {
+	case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+		"unsupported_grant_type", "invalid_scope", "server_error", "temporarily_unavailable", "access_denied":
+		return fmt.Sprintf("status=%d, %s", statusCode, errorCode)
+	default:
 		return fmt.Sprintf("status=%d", statusCode)
 	}
-	const maxBodyLogLength = 500
-	if len(bodyText) > maxBodyLogLength {
-		bodyText = bodyText[:maxBodyLogLength] + "..."
-	}
-	return fmt.Sprintf("status=%d, %s", statusCode, bodyText)
 }
 
 func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAuthUser, error) {
@@ -225,8 +219,8 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	client := http.Client{Timeout: 5 * time.Second}
 	res, err := client.Do(req)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo error: %s", err.Error()))
-		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthConnectFailed, map[string]any{"Provider": "Linux DO"}, err.Error())
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo error: %s", err.Error()))
+		return nil, NewOAuthErrorWithRaw(common.NewMessage(msgConnectFailed, map[string]any{"provider": "Linux DO"}), err.Error())
 	}
 	defer res.Body.Close()
 
@@ -234,27 +228,27 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 
 	body, err := io.ReadAll(res.Body)
 	if err != nil {
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo read body error: %s", err.Error()))
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo read body error: %s", err.Error()))
 		return nil, err
 	}
 
 	if res.StatusCode != http.StatusOK {
-		rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, body)
-		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo failed: %s", rawMessage))
-		return nil, NewOAuthErrorWithRaw(i18n.MsgOAuthGetUserErr, map[string]any{"Provider": "Linux DO"}, rawMessage)
+		rawMessage := linuxdoOAuthResponseMessage(res.StatusCode, "")
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo failed: %s", rawMessage))
+		return nil, NewOAuthErrorWithRaw(common.NewMessage(msgGetUserFailed), rawMessage)
 	}
 
 	var linuxdoUser linuxdoUser
 	if len(body) > 0 {
 		if err := common.Unmarshal(body, &linuxdoUser); err != nil {
-			logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo decode error: %s", err.Error()))
+			logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo decode error: %s", err.Error()))
 			return nil, err
 		}
 	}
 
 	if linuxdoUser.Id == 0 {
-		logger.LogError(ctx, "[OAuth-LinuxDO] GetUserInfo failed: invalid user id")
-		return nil, NewOAuthError(i18n.MsgOAuthUserInfoEmpty, map[string]any{"Provider": "Linux DO"})
+		logger.LogError(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo failed: invalid user id"))
+		return nil, NewOAuthError(common.NewMessage(msgUserInfoEmpty, map[string]any{"provider": "Linux DO"}))
 	}
 
 	active := true
@@ -266,20 +260,20 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 		silenced = *linuxdoUser.Silenced
 	}
 	if !active {
-		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo: inactive account id=%d", linuxdoUser.Id))
-		return nil, NewOAuthError(i18n.MsgOAuthLinuxDOInactive, nil)
+		logger.LogWarn(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo: inactive account id=%d", linuxdoUser.Id))
+		return nil, NewOAuthError(common.NewMessage("Linux DO account is not active"))
 	}
 	if silenced {
-		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo: silenced account id=%d", linuxdoUser.Id))
-		return nil, NewOAuthError(i18n.MsgOAuthLinuxDOSilenced, nil)
+		logger.LogWarn(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo: silenced account id=%d", linuxdoUser.Id))
+		return nil, NewOAuthError(common.NewMessage("Linux DO account is silenced"))
 	}
 
-	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo: id=%d, username=%s, name=%s, trust_level=%d, active=%v, silenced=%v",
-		linuxdoUser.Id, linuxdoUser.Username, linuxdoUser.Name, linuxdoUser.TrustLevel, active, silenced)
+	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo: id=%d, trust_level=%d, active=%v, silenced=%v",
+		linuxdoUser.Id, linuxdoUser.TrustLevel, active, silenced)
 
 	// Check trust level
 	if linuxdoUser.TrustLevel < common.LinuxDOMinimumTrustLevel {
-		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo: trust level too low (required=%d, current=%d)",
+		logger.LogWarn(ctx, common.LogText("[OAuth-LinuxDO] GetUserInfo: trust level too low (required=%d, current=%d)",
 			common.LinuxDOMinimumTrustLevel, linuxdoUser.TrustLevel))
 		return nil, &TrustLevelError{
 			Required: common.LinuxDOMinimumTrustLevel,
@@ -287,7 +281,7 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 		}
 	}
 
-	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo success: id=%d, username=%s", linuxdoUser.Id, linuxdoUser.Username)
+	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo success: id=%d", linuxdoUser.Id)
 
 	return &OAuthUser{
 		ProviderUserID: strconv.Itoa(linuxdoUser.Id),

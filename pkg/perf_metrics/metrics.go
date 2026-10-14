@@ -22,6 +22,11 @@ var hotBuckets sync.Map
 // hiding fields or making response-only privacy hardening changes.
 const seriesSchema = "dbcd0a3c01b55203"
 
+// MaxRecentModels bounds the historical lookups made by one summary request.
+const MaxRecentModels = 50
+const recentSuccessSampleLimit = 24
+const recentSuccessHistoryHours = 7 * 24
+
 func Init() {
 	go flushLoop()
 }
@@ -212,8 +217,13 @@ func Query(params QueryParams) (QueryResult, error) {
 	return result, nil
 }
 
-func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
-	startTs, endTs := queryWindow(time.Now(), hours)
+func QuerySummaryAll(hours int, groups []string, recentModels ...string) (SummaryAllResult, error) {
+	if len(recentModels) > MaxRecentModels {
+		return SummaryAllResult{}, common.NewMessage("Invalid parameters")
+	}
+	now := time.Now()
+	startTs, endTs := queryWindow(now, hours)
+	recentStartTs, _ := queryWindow(now, recentSuccessHistoryHours)
 	allowedGroups := allowedGroupSet(groups)
 
 	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
@@ -222,6 +232,27 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	}
 
 	buckets := map[bucketKey]counters{}
+	recentBuckets := make(map[string]map[int64]counters, len(recentModels))
+	for _, name := range recentModels {
+		if name == "" {
+			continue
+		}
+		if _, exists := recentBuckets[name]; exists {
+			continue
+		}
+		recentBuckets[name] = map[int64]counters{}
+		recentRows, err := model.GetRecentPerfMetricSuccessBuckets(name, recentStartTs, endTs, groups, recentSuccessSampleLimit)
+		if err != nil {
+			return SummaryAllResult{}, err
+		}
+		for _, bucket := range recentRows {
+			mergeModelBucket(recentBuckets, name, bucket.BucketTs, counters{
+				requestCount: bucket.RequestCount,
+				successCount: bucket.SuccessCount,
+			})
+		}
+	}
+
 	for _, row := range rows {
 		mergeCounters(buckets, bucketKey{
 			model:    row.ModelName,
@@ -237,7 +268,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 
 	hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
-		if k.bucketTs < startTs || k.bucketTs > endTs {
+		if k.bucketTs > endTs {
 			return true
 		}
 		if allowedGroups != nil {
@@ -247,6 +278,12 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		}
 		snap := value.(*atomicBucket).snapshot()
 		if snap.requestCount == 0 {
+			return true
+		}
+		if _, requested := recentBuckets[k.model]; requested && k.bucketTs >= recentStartTs {
+			mergeModelBucket(recentBuckets, k.model, k.bucketTs, snap)
+		}
+		if k.bucketTs < startTs {
 			return true
 		}
 		mergeCounters(buckets, bucketKey{
@@ -264,8 +301,17 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		all.outputTokens += value.outputTokens
 		all.generationMs += value.generationMs
 	}
+	recentSeries := make(map[string][]SuccessRatePoint, len(recentBuckets))
+	for name, modelBuckets := range recentBuckets {
+		points := recentSuccessSeries(modelBuckets)
+		if len(points) == 0 {
+			continue
+		}
+		recentSeries[name] = points[max(0, len(points)-recentSuccessSampleLimit):]
+	}
 	return SummaryAllResult{
-		Summary: summarize(all), WindowStart: startTs, WindowEnd: endTs, Models: buildSummaryModels(buckets),
+		Summary: summarize(all), WindowStart: startTs, WindowEnd: endTs,
+		Models: buildSummaryModels(buckets), RecentSuccessSeries: recentSeries,
 	}, nil
 }
 
@@ -333,6 +379,24 @@ func buildSummaryModels(buckets map[bucketKey]counters) []ModelSummary {
 		return models[i].RequestCount > models[j].RequestCount
 	})
 	return models
+}
+
+func mergeModelBucket(modelBuckets map[string]map[int64]counters, modelName string, bucketTs int64, value counters) {
+	if value.requestCount == 0 {
+		return
+	}
+	if _, ok := modelBuckets[modelName]; !ok {
+		modelBuckets[modelName] = map[int64]counters{}
+	}
+	current := modelBuckets[modelName][bucketTs]
+	current.requestCount += value.requestCount
+	current.successCount += value.successCount
+	current.totalLatencyMs += value.totalLatencyMs
+	current.ttftSumMs += value.ttftSumMs
+	current.ttftCount += value.ttftCount
+	current.outputTokens += value.outputTokens
+	current.generationMs += value.generationMs
+	modelBuckets[modelName][bucketTs] = current
 }
 
 func recentSuccessSeries(buckets map[int64]counters) []SuccessRatePoint {

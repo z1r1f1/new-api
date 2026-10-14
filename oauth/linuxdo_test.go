@@ -1,17 +1,18 @@
 package oauth
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/i18n"
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func newLinuxDOTestContext(target string) *gin.Context {
@@ -83,29 +84,37 @@ func TestLinuxDOExchangeTokenUsesForwardedFrontendRedirectURIAndBasicAuth(t *tes
 }
 
 func TestLinuxDOExchangeTokenRejectsNonOKTokenResponse(t *testing.T) {
-	withLinuxDOGlobals(t)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "JSON with credentials", body: `{"error":"invalid_client","error_description":"bad client access-token-sensitive","access_token":"access-token-sensitive","refresh_token":"refresh-token-sensitive"}`},
+		{name: "non-JSON with credentials", body: `<html>access-token-sensitive refresh-token-sensitive</html>`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withLinuxDOGlobals(t)
+			var logs bytes.Buffer
+			oldWriter := gin.DefaultWriter
+			gin.DefaultWriter = &logs
+			t.Cleanup(func() { gin.DefaultWriter = oldWriter })
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+			t.Setenv("LINUX_DO_TOKEN_ENDPOINT", server.URL)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = fmt.Fprint(w, `{"error":"invalid_client","error_description":"bad client"}`)
-	}))
-	defer server.Close()
-	t.Setenv("LINUX_DO_TOKEN_ENDPOINT", server.URL)
-
-	_, err := (&LinuxDOProvider{}).ExchangeToken(context.Background(), "auth-code", newLinuxDOTestContext("http://example.com/api/oauth/linuxdo"))
-	if err == nil {
-		t.Fatal("expected token exchange error")
-	}
-	oauthErr, ok := err.(*OAuthError)
-	if !ok {
-		t.Fatalf("expected OAuthError, got %T", err)
-	}
-	if oauthErr.MsgKey != i18n.MsgOAuthTokenFailed {
-		t.Fatalf("unexpected message key: %s", oauthErr.MsgKey)
-	}
-	if !strings.Contains(oauthErr.RawError, "bad client") {
-		t.Fatalf("expected raw error to include upstream description, got %q", oauthErr.RawError)
+			token, err := (&LinuxDOProvider{}).ExchangeToken(context.Background(), "auth-code", newLinuxDOTestContext("http://example.com/api/oauth/linuxdo"))
+			require.Error(t, err)
+			assert.Nil(t, token)
+			var oauthErr *OAuthError
+			require.ErrorAs(t, err, &oauthErr)
+			assert.Contains(t, oauthErr.RawError, "status=401")
+			for _, secret := range []string{"access-token-sensitive", "refresh-token-sensitive"} {
+				assert.NotContains(t, oauthErr.Error(), secret)
+				assert.NotContains(t, logs.String(), secret)
+			}
+		})
 	}
 }
 
@@ -149,34 +158,25 @@ func TestLinuxDOGetUserInfoRejectsNonOKResponse(t *testing.T) {
 	defer server.Close()
 	t.Setenv("LINUX_DO_USER_ENDPOINT", server.URL)
 
-	_, err := (&LinuxDOProvider{}).GetUserInfo(context.Background(), &OAuthToken{AccessToken: "access-token"})
-	if err == nil {
-		t.Fatal("expected userinfo error")
-	}
-	oauthErr, ok := err.(*OAuthError)
-	if !ok {
-		t.Fatalf("expected OAuthError, got %T", err)
-	}
-	if oauthErr.MsgKey != i18n.MsgOAuthGetUserErr {
-		t.Fatalf("unexpected message key: %s", oauthErr.MsgKey)
-	}
+	user, err := (&LinuxDOProvider{}).GetUserInfo(context.Background(), &OAuthToken{AccessToken: "access-token"})
+	require.Error(t, err)
+	assert.Nil(t, user)
+	var oauthErr *OAuthError
+	require.ErrorAs(t, err, &oauthErr)
 }
 
 func TestLinuxDOGetUserInfoRejectsInactiveOrSilencedAccount(t *testing.T) {
 	tests := []struct {
-		name   string
-		body   string
-		msgKey string
+		name string
+		body string
 	}{
 		{
-			name:   "inactive",
-			body:   `{"id":12345,"username":"linuxdo-user","name":"Linux DO User","active":false,"trust_level":3,"silenced":false}`,
-			msgKey: i18n.MsgOAuthLinuxDOInactive,
+			name: "inactive",
+			body: `{"id":12345,"username":"linuxdo-user","name":"Linux DO User","active":false,"trust_level":3,"silenced":false}`,
 		},
 		{
-			name:   "silenced",
-			body:   `{"id":12345,"username":"linuxdo-user","name":"Linux DO User","active":true,"trust_level":3,"silenced":true}`,
-			msgKey: i18n.MsgOAuthLinuxDOSilenced,
+			name: "silenced",
+			body: `{"id":12345,"username":"linuxdo-user","name":"Linux DO User","active":true,"trust_level":3,"silenced":true}`,
 		},
 	}
 
@@ -190,17 +190,11 @@ func TestLinuxDOGetUserInfoRejectsInactiveOrSilencedAccount(t *testing.T) {
 			defer server.Close()
 			t.Setenv("LINUX_DO_USER_ENDPOINT", server.URL)
 
-			_, err := (&LinuxDOProvider{}).GetUserInfo(context.Background(), &OAuthToken{AccessToken: "access-token"})
-			if err == nil {
-				t.Fatal("expected access denied error")
-			}
-			oauthErr, ok := err.(*OAuthError)
-			if !ok {
-				t.Fatalf("expected OAuthError, got %T", err)
-			}
-			if oauthErr.MsgKey != tt.msgKey {
-				t.Fatalf("unexpected message key: %s", oauthErr.MsgKey)
-			}
+			user, err := (&LinuxDOProvider{}).GetUserInfo(context.Background(), &OAuthToken{AccessToken: "access-token"})
+			require.Error(t, err)
+			assert.Nil(t, user)
+			var oauthErr *OAuthError
+			require.ErrorAs(t, err, &oauthErr)
 		})
 	}
 }
