@@ -113,7 +113,7 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 				// The protocol outcome already records failure for logs and health.
 				sr.Done()
 			} else {
-				streamErr = newResponsesStreamAPIError(streamResponse, data)
+				streamErr = newResponsesStreamAPIError(streamResponse, data, common.UpstreamAddresses(c)...)
 				sr.Stop(streamErr)
 			}
 		case "response.incomplete", "response.cancelled", "response.canceled":

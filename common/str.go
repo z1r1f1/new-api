@@ -135,49 +135,6 @@ func MaskEmail(email string) string {
 
 // MaskSensitiveInfo moved to the conversion kit (kitutil) because the types
 // package error formatting depends on it; host callers keep this name.
-func MaskSensitiveInfo(str string) string {
-	responsesEvents := []string{"response.failed", "response.error"}
-	placeholders := make(map[string]string, len(responsesEvents))
-	for i, event := range responsesEvents {
-		placeholder := fmt.Sprintf("\x00new-api-response-event-%d\x00", i)
-		str = replaceStandaloneToken(str, event, placeholder)
-		placeholders[placeholder] = event
-	}
-
-	str = kitutil.MaskSensitiveInfo(str)
-	for placeholder, event := range placeholders {
-		str = strings.ReplaceAll(str, placeholder, event)
-	}
-	return str
-}
-
-func replaceStandaloneToken(str string, token string, replacement string) string {
-	var builder strings.Builder
-	for {
-		index := strings.Index(str, token)
-		if index < 0 {
-			builder.WriteString(str)
-			return builder.String()
-		}
-		before := ""
-		if index > 0 {
-			before = str[index-1 : index]
-		}
-		afterIndex := index + len(token)
-		after := ""
-		if afterIndex < len(str) {
-			after = str[afterIndex : afterIndex+1]
-		}
-		if isSensitiveTokenBoundary(before) && isSensitiveTokenBoundary(after) {
-			builder.WriteString(str[:index])
-			builder.WriteString(replacement)
-		} else {
-			builder.WriteString(str[:afterIndex])
-		}
-		str = str[afterIndex:]
-	}
-}
-
-func isSensitiveTokenBoundary(str string) bool {
-	return str == "" || !strings.ContainsAny(str, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:/.-")
+func MaskSensitiveInfo(str string, upstreamURLs ...string) string {
+	return kitutil.MaskSensitiveInfo(str, upstreamURLs...)
 }

@@ -262,7 +262,7 @@ When adding a new provider adapter, prefer converting provider response errors t
 - Chat/Claude bridge stream handler:
   `OaiResponsesToChatStreamHandler(c, info, resp) (*dto.Usage, *types.NewAPIError)`.
 - Shared failure formatter:
-  `newResponsesStreamAPIError(dto.ResponsesStreamResponse, string) *types.NewAPIError`.
+  `newResponsesStreamAPIError(dto.ResponsesStreamResponse, string, ...string) *types.NewAPIError`.
 
 ### 3. Contracts
 
@@ -290,6 +290,10 @@ When adding a new provider adapter, prefer converting provider response errors t
 - Returned errors keep the stable relay code `types.ErrorCodeBadResponse` while
   the message includes the upstream event, message, code, type, and param when
   available.
+- Thread `common.UpstreamAddresses(c)...` into the formatter before recording
+  stream diagnostics. Configured upstream/proxy hosts are masked; unrelated
+  documentation URLs and domains remain readable. API-key values, URL query
+  values/userinfo, IPv4 and bracketed IPv6 remain masked without host context.
 - Do not persist full SSE payloads or request bodies in error logs.
 
 ### 4. Validation & Error Matrix
@@ -329,9 +333,9 @@ When adding a new provider adapter, prefer converting provider response errors t
 - `relay/channel/openai`: regression tests for non-stream Responses and
   `response.completed` streams proving null/missing `output` is normalized to
   `[]`.
-- `common`: regression test proving known Responses SSE event names such as
-  `response.failed` and `response.error` are not masked as plain domains, while
-  real domains, URLs, and IPs still are.
+- `common`: regression cases proving Responses event names and unrelated domains
+  stay readable, supplied upstream hosts are masked, and URL credentials/IPs
+  remain masked even without upstream addresses.
 - `controller/responses_websocket_test.go`: verify SSE/WebSocket accounting,
   final health counts, and success-rate limits. Compare terminal JSON
   semantically, require exactly one terminal, and preserve the completed-output
@@ -355,7 +359,7 @@ if accepted {
     // The accumulator has already recorded the failed protocol outcome.
     sr.Done()
 } else {
-    streamErr = newResponsesStreamAPIError(streamResp, data)
+    streamErr = newResponsesStreamAPIError(streamResp, data, common.UpstreamAddresses(c)...)
     sr.Stop(streamErr)
 }
 ```

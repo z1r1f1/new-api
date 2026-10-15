@@ -12,15 +12,15 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/types"
 )
 
-func newResponsesStreamAPIError(streamResp dto.ResponsesStreamResponse, data string) *types.NewAPIError {
+func newResponsesStreamAPIError(streamResp dto.ResponsesStreamResponse, data string, upstreamURLs ...string) *types.NewAPIError {
 	return types.NewOpenAIError(
-		errors.New(formatResponsesStreamError(streamResp, data)),
+		errors.New(formatResponsesStreamError(streamResp, data, upstreamURLs...)),
 		types.ErrorCodeBadResponse,
 		http.StatusInternalServerError,
 	)
 }
 
-func formatResponsesStreamError(streamResp dto.ResponsesStreamResponse, data string) string {
+func formatResponsesStreamError(streamResp dto.ResponsesStreamResponse, data string, upstreamURLs ...string) string {
 	eventType := strings.TrimSpace(streamResp.Type)
 	if eventType == "" {
 		eventType = "unknown"
@@ -31,7 +31,7 @@ func formatResponsesStreamError(streamResp dto.ResponsesStreamResponse, data str
 	if !ok {
 		return base
 	}
-	detail := formatResponsesStreamOpenAIErrorDetail(oaiErr)
+	detail := formatResponsesStreamOpenAIErrorDetail(oaiErr, upstreamURLs...)
 	if detail == "" {
 		return base
 	}
@@ -95,13 +95,13 @@ func responsesStreamOpenAIErrorHasDetail(oaiErr *types.OpenAIError) bool {
 		len(oaiErr.Metadata) > 0
 }
 
-func formatResponsesStreamOpenAIErrorDetail(oaiErr *types.OpenAIError) string {
+func formatResponsesStreamOpenAIErrorDetail(oaiErr *types.OpenAIError, upstreamURLs ...string) string {
 	if oaiErr == nil {
 		return ""
 	}
 	message := strings.TrimSpace(oaiErr.Message)
 	if message != "" {
-		message = common.MaskSensitiveInfo(message)
+		message = common.MaskSensitiveInfo(message, upstreamURLs...)
 	}
 
 	attrs := make([]string, 0, 3)
@@ -112,7 +112,7 @@ func formatResponsesStreamOpenAIErrorDetail(oaiErr *types.OpenAIError) string {
 		attrs = append(attrs, "type="+typ)
 	}
 	if param := strings.TrimSpace(oaiErr.Param); param != "" {
-		attrs = append(attrs, "param="+common.MaskSensitiveInfo(param))
+		attrs = append(attrs, "param="+common.MaskSensitiveInfo(param, upstreamURLs...))
 	}
 
 	if message == "" {

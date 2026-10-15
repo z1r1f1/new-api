@@ -7,10 +7,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
 	"github.com/gin-gonic/gin"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestOaiResponsesHandlerNormalizesNilOutputForSDKClients(t *testing.T) {
@@ -140,9 +143,11 @@ func TestOaiResponsesStreamHandlerIncludesResponseFailedDetails(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://private.example.com")
+	common.SetContextKey(c, constant.ContextKeyUpstreamRequestOrigin, "https://route.example.net")
 
 	body := strings.Join([]string{
-		`data: {"type":"response.failed","response":{"status":"failed","error":{"message":"Upstream rejected the tool call","code":"tool_call_invalid"}}}`,
+		`data: {"type":"response.failed","response":{"status":"failed","error":{"message":"Upstream rejected the tool call at https://private.example.com/v1/responses; lookup route.example.net; see https://docs.example.org/errors","code":"tool_call_invalid","param":"https://route.example.net/private?key=secret"}}}`,
 		``,
 	}, "\n")
 	resp := &http.Response{
@@ -153,13 +158,21 @@ func TestOaiResponsesStreamHandlerIncludesResponseFailedDetails(t *testing.T) {
 	info := &relaycommon.RelayInfo{IsStream: true}
 
 	_, err := OaiResponsesStreamHandler(c, info, resp)
-	if err == nil {
-		t.Fatal("expected response.failed to return an API error")
-	}
+	require.Error(t, err)
 	errText := err.Error()
-	for _, want := range []string{"response.failed", "Upstream rejected the tool call", "tool_call_invalid"} {
-		if !strings.Contains(errText, want) {
-			t.Fatalf("expected error to contain %q, got %q", want, errText)
-		}
+	for _, want := range []string{"response.failed", "Upstream rejected the tool call", "tool_call_invalid", "https://***.com/***/***", "lookup ***.***.net", "param=https://***.net/***?key=***", "https://docs.example.org/errors"} {
+		assert.Contains(t, errText, want)
+	}
+	for _, forbidden := range []string{"private.example.com", "route.example.net", "secret"} {
+		assert.NotContains(t, errText, forbidden)
+	}
+	require.NotNil(t, info.StreamStatus)
+	if info.StreamStatus.EndError != nil {
+		assert.Equal(t, errText, info.StreamStatus.EndError.Error())
+	}
+	require.NotEmpty(t, info.StreamStatus.Errors)
+	for _, diagnostic := range info.StreamStatus.Errors {
+		assert.NotContains(t, diagnostic.Message, "private.example.com")
+		assert.NotContains(t, diagnostic.Message, "route.example.net")
 	}
 }
