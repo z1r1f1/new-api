@@ -71,3 +71,37 @@ Merged 13 upstream commits with local behavior preserved; deployed v1.0.0-rc.44-
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Merge upstream 09109ec31 and redeploy production
+
+**Date**: 2026-10-17
+**Task**: Merge upstream 09109ec31 and redeploy production
+**Branch**: `main`
+
+### Summary
+
+Merged four reviewed upstream commits; production v1.0.0-rc.44-local.20261017 healthy. Root and standalone module builds/tests, frontend96 affected tests/typecheck/build, real SQLite3.50.4/MySQL9.7.2/PostgreSQL18.6 fresh+rc44-upgrade matrices and isolated protocol/UI smoke verified. Preserved PostgreSQL16.13, Redis, environment/mounts and operational thresholds; validated2,447,439,938-byte backup plus image/source rollback. Evidence .runtime/prod/deploy-backups/20261017T052050Z/. Initial frontend contention timeout and unchanged Redis post-response accounting window retained in evidence; no unrelated fixes. No push.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `fa8f7f89f` | (see git log) |
+| `475aab9fb` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
