@@ -2790,3 +2790,69 @@ When editing nearby legacy code:
 - clear proof of work.
 
 `.github/workflows/pr-check.yml` rejects low-quality AI-generated PRs. Keep generated summaries concise, reviewed, and evidence-based.
+
+## Scenario: Upstream relay compatibility deployment gates
+
+### 1. Scope / Trigger
+Apply when integrating upstream changes to group limits, Responses reasoning,
+AWS interface selection, or system-overload sampling. Preserve local relay
+diagnostics and persisted production settings; test the exact candidate image.
+
+### 2. Signatures
+- `ModelRequestRateLimit()` selects `subject = userID + ":" + group` only when
+  `setting.GetGroupRateLimit(group)` finds an independent limit.
+- `ResponsesOutput.MarshalJSON()` emits `"summary":[]` for empty reasoning items.
+- `ChannelOtherSettings.AwsApiType` persists as `settings.aws_api_type`;
+  absent/`invoke_model` selects legacy AWS, and `mantle` selects Messages.
+- `CheckSystemOverload(status, config, now)` consumes five-second samples;
+  three consecutive over-threshold samples are required, with a 30-second age cap.
+
+### 3. Contracts
+- Independently configured groups count separately per user; other groups share
+  the user's global count on both memory and Redis backends.
+- Redis successful requests are recorded after `c.Next()`; HTTP response arrival
+  is not proof that post-response accounting has finished. This is not a strict
+  concurrent-admission guarantee.
+- Mantle supports Claude Messages/Chat, stream and nonstream. Two key segments
+  mean `APIKey|Region`; three mean `AccessKey|SecretAccessKey|Region` and SigV4
+  service `bedrock-mantle`, independently of the legacy `aws_key_type` selector.
+- Mantle requires HTTPS without URL credentials, query or fragment. Preserve
+  cache usage, strip hop-by-hop/proxy credentials before signing, and retain
+  the legacy InvokeModel path when the interface setting is absent.
+- Unlimited `cpu.max`/`memory.max` cause host-metric fallback. Do not add resource
+  limits or reset persisted operational thresholds as an incidental merge step.
+
+### 4. Validation & Error Matrix
+- A/B independently limited, C/D unconfigured: exhausting A does not exhaust B;
+  exhausting C does exhaust D. Retain actual post-response race observations.
+- Empty reasoning announcement: JSON contains `summary: []`, not an omitted key.
+- Mantle with Nova, invalid credentials/region, or non-HTTPS URL: reject without
+  exposing credentials; never send a real-provider request from a smoke fixture.
+- Missing/stale monitor sample or disabled monitoring: no overload rejection.
+- Sustained overload: HTTP 503; increasing the threshold permits immediate
+  recovery using the current configuration.
+
+### 5. Good/Base/Bad Cases
+Good: exact candidate image, synthetic HTTP/TLS upstreams and disposable DBs.
+Base: legacy AWS mode and unrelated channel settings survive save/read/restart.
+Bad: production threshold injection, paid upstream calls, or assuming unlimited
+cgroups provide container isolation merely because the PR adds cgroup support.
+
+### 6. Tests Required
+- Run root build and affected backend tests; build `relaykit` with `GOWORK=off`
+  at its declared Go baseline and run its protocol regressions.
+- Validate channel-setting persistence on real SQLite/MySQL/PostgreSQL, fresh
+  and released-version upgrade fixtures, with repeated candidate startup.
+- Exercise actual SSE reasoning events, local-TLS Mantle authentication/body/
+  cache billing, default InvokeModel, and isolated overload transitions.
+- Run affected frontend tests without concurrent Go/Docker compilation. Keep
+  resource-related timeout evidence; do not raise test timeouts to mask it.
+- Verify the channel drawer in a browser, including mode persistence and legacy
+  defaults; a build or mocked form assertion alone is insufficient.
+
+### 7. Wrong vs Correct
+Wrong: treat a received HTTP body as completed Redis accounting, then hide a
+failed immediate-burst assertion by changing its expected response codes.
+Correct: preserve that observation, prove whether the accounting order changed,
+and separately verify group isolation after exact Redis counter completion.
+
