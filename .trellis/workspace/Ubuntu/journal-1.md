@@ -105,3 +105,36 @@ Merged four reviewed upstream commits; production v1.0.0-rc.44-local.20261017 he
 ### Next Steps
 
 - None - task complete
+
+
+## Session 4: Merge upstream 9a42033a6 and deploy rc.45
+
+**Date**: 2026-10-21
+**Task**: Merge upstream 9a42033a6 and deploy rc.45
+**Branch**: `main`
+
+### Summary
+
+Merged 15 upstream commits with local relay, metrics and sorting behavior preserved. Root and independent module builds/tests, affected frontend regressions, six real SQLite/MySQL/PostgreSQL fresh/rc.45-upgrade scenarios and actual isolated relay/UI smoke passed. Application-only production cutover healthy; 107 options, environment/mounts and PostgreSQL/Redis identities unchanged. Verified backup, rollback and evidence: .runtime/prod/deploy-backups/20261020T132843Z/. No push; unrelated task directories untouched.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ce48d92a4b088754c7372498a9e230191610100e` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
