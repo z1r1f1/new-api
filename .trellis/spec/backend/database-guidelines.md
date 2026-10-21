@@ -154,6 +154,40 @@ For new DB behavior, add tests that cover:
 - any DB-specific SQL branch;
 - transaction rollback behavior for quota/accounting changes.
 
+### Scenario: Audit ordering indexes and driver metadata
+
+#### 1. Scope / Trigger
+Changes to `AuditLog` migrations or index-preservation verification.
+
+#### 2. Signatures
+`MigrateAuditLogs()` creates `idx_audit_time_event(created_at, event_id)` on
+`LOG_DB`; `TestAuditLogSortIndexDatabaseMatrix` exercises fresh and upgrade paths.
+
+#### 3. Contracts
+Preserve audit rows, unique event IDs and existing indexes across repeated startup.
+Verify physical composite-key order, not an unordered driver metadata result.
+PostgreSQL driver v1.5.9 joins `indkey` with `ANY`, so `GetIndexes().Columns()`
+can return table-column order even when the physical index is correct.
+
+#### 4. Validation & Error Matrix
+Missing/reversed physical index -> fail. Correct physical order with reversed
+PostgreSQL metadata -> query `pg_index.indkey` using `WITH ORDINALITY`, scoped to
+the fixture's current schema. A duplicate event ID must still be rejected.
+
+#### 5. Good/Base/Bad Cases
+Good: `created_at,event_id` physically indexed and newest-event pagination stable.
+Base: repeat migration preserves data and uniqueness. Bad: re-pin the expected
+column order to the driver's incidental output or reorder the production index.
+
+#### 6. Tests Required
+Run the audit matrix on real SQLite/MySQL/PostgreSQL, checking two migrations,
+ordered pagination and duplicate rejection. Never point fixtures at production.
+
+#### 7. Wrong vs Correct
+Wrong: infer physical key order solely from PostgreSQL `GetIndexes().Columns()`.
+Correct: use ordered catalog positions; keep the expected business index order.
+
+
 ---
 
 ## Common Mistakes to Avoid

@@ -2657,41 +2657,47 @@ timing.Set("image_ref_count", len(fileRefs))
 ### Performance metrics summary and model square status
 
 #### 1. Scope / Trigger
+Changes to `QuerySummaryAll`, `/api/perf-metrics/summary`, or model status charts.
 
-- Trigger: changes to `pkg/perf_metrics`, `model/perf_metric.go`,
-  `controller/perf_metrics.go`, `/api/perf-metrics/summary`, or the default
-  frontend model square/status rendering.
+#### 2. Signatures
+`QuerySummaryAll(hours, groups, recentModels...)` serves
+`GET /api/perf-metrics/summary?hours=24&recent_model=<model>`.
+`ModelSummary.series` carries bucket points; `recent_success_series` carries
+up to 24 nonempty hours from the recent-history window.
 
-#### 2. Contracts
+#### 3. Contracts
+- Merge persisted and hot buckets by `{model_name, bucket_ts}` before deriving
+  totals or charts. Keep the local sorted per-model `series` output.
+- Requested recent models use the same earliest sampled hour for their card
+  aggregates and status samples, even when that hour precedes the normal window.
+  Other models still use the requested `hours`; declared `window_start` is unchanged.
+- Apply each model's cutoff to the shared buckets before both aggregate and
+  series derivation. Do not choose upstream totals at the cost of local series.
+- The model square and details chart use bucketed success rates, never a health
+  strip synthesized from only aggregate success. Empty data stays empty.
 
-- The model square status indicator and the model details performance chart
-  must use the same bucketed success-rate semantics. Do not recreate a
-  different "health bar" from only the aggregate `success_rate`.
-- `/api/perf-metrics/summary` should include a per-model `series` array of
-  bucket points when bucketed data exists. Aggregate fields such as
-  `avg_latency_ms`, `success_rate`, and `avg_tps` remain the card summary, but
-  the miniature status chart uses `series`.
-- Bucket series must be sorted by bucket timestamp ascending before reaching
-  frontend chart components.
-- Hot in-memory buckets and persisted DB buckets must merge by
-  `{model_name, bucket_ts}` before model totals and chart series are derived.
+#### 4. Validation & Error Matrix
+- More than `MaxRecentModels` -> invalid parameters; never fan out unbounded queries.
+- Hidden groups -> absent from totals and recent history.
+- Requested historical buckets -> included in that model's totals and sorted series.
+- No recent samples -> keep the normal query cutoff and the empty placeholder.
 
-#### 3. Good/Base/Bad Cases
+#### 5. Good/Base/Bad Cases
+Good: one current success and two successes among three older requests yield
+100% in the normal window, 75% with the model's older status hour requested.
+Base: model chart points remain sorted and include the same buckets as totals.
+Bad: restoring only upstream aggregation drops `series`, or retaining only the
+local window makes card percentages disagree with the sampled status hours.
 
-- Good: the model square shows the same recent success-rate trend as the
-  details performance uptime/success chart, just in a compact form.
-- Base: when no bucket series exists, the compact chart renders the existing
-  empty placeholder instead of fabricating status segments from aggregate data.
-- Bad: a five-segment status strip based only on the last 24h aggregate success
-  rate; it can disagree with the details page and hides bucket-level failures.
+#### 6. Tests Required
+Keep `TestBuildSummaryModelsIncludesBucketSeries` and the recent-history cases
+in `TestPerformanceAggregationAndFlush`. Verify an isolated real HTTP summary
+with current and older database buckets; check 100% versus 75%, sorted timestamps,
+and unchanged declared window. Run frontend checks when changing response types.
 
-#### 4. Tests Required
-
-- `pkg/perf_metrics`: unit test proving summary models include sorted bucket
-  `series`, aggregate success rate is still calculated from totals, and models
-  remain ordered by request count.
-- `web/default`: typecheck/lint/build after changing summary API types or model
-  square rendering.
+#### 7. Wrong vs Correct
+Wrong: calculate totals before per-model history filtering or discard local series.
+Correct: filter merged buckets once, then derive both totals and `buildSummaryModels`.
 
 ---
 

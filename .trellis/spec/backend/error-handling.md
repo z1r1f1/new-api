@@ -140,12 +140,12 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
 
 ---
 
-## Scenario: DeepSeek Claude Messages Bridge
+## Scenario: DeepSeek Chat Bridges and Independent Tools
 
 ### 1. Scope / Trigger
 
-- Trigger: any change to `relay/channel/deepseek` handling for
-  Claude-compatible `/v1/messages` requests.
+- Trigger: changes to DeepSeek handling for `/v1/messages`, `/v1/responses`,
+  or the independent `/v1/tools/search` and `/v1/tools/fetch` endpoints.
 - Purpose: DeepSeek-compatible channels are OpenAI chat-completions upstreams
   for Claude Messages traffic. They must not send Claude-format payloads to
   provider-specific `/anthropic/v1/messages` paths unless that provider has an
@@ -174,6 +174,18 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
   completions and converted back to Claude response/SSE shapes for the client.
 - `relaycommon.AppendRequestConversionFromRequest` should see the converted
   OpenAI request so the conversion chain records Claude -> OpenAI.
+- Responses clients also keep the local Responses-to-Chat bridge, including
+  streamed and blocking response conversion; never restore a native `/responses`
+  upstream as a conflict-resolution shortcut.
+- Explicit `@` modifiers win over `-none/-low/-max` tails. For example,
+  `deepseek-flash-low@effort:max` sends Chat `model=deepseek-flash` and
+  `reasoning_effort=max`; the requested routing alias must be bound to the channel.
+- Search/Fetch modes select their own upstream URL before client-format routing.
+  Billing uses the endpoint routing name, not a client-supplied body model;
+  empty results/page content release the reservation.
+- Existing Responses hosted-tool filtering is unchanged: only supported function
+  tools cross the Chat bridge. Do not describe native Responses tool-usage
+  metadata tests as proof that hosted tools execute through this bridge.
 
 ### 4. Validation & Error Matrix
 
@@ -192,8 +204,8 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
 - Good: a Claude client calling `/v1/messages` for `deepseek-v4-flash-free`
   reaches `https://.../v1/chat/completions` and receives a Claude-shaped
   response.
-- Base: native OpenAI `/v1/chat/completions` and `/v1/responses` DeepSeek
-  paths remain unchanged.
+- Base: Chat/Claude/Responses clients retain their existing Chat-compatible
+  upstream behavior; FIM completions and independent tools keep separate routes.
 - Bad: sending DeepSeek Claude traffic to
   `https://opencode.ai/zen/anthropic/v1/messages`; upstream can return
   `Not Found | opencode` HTML 404 and repeat the same failing channel on retry.
@@ -207,6 +219,9 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
   Claude format to `/v1/chat/completions`.
 - `relay/channel/deepseek`: regression test proving an OpenAI chat completion
   response is converted back to Claude response shape.
+- Capture actual outgoing Chat JSON for both client formats and assert modifier
+  precedence. Exercise independent Search/Fetch through an isolated gateway,
+  checking the routing-model charge and empty-result refund.
 
 ### 7. Wrong vs Correct
 

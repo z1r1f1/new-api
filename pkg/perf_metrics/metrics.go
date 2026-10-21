@@ -225,11 +225,7 @@ func QuerySummaryAll(hours int, groups []string, recentModels ...string) (Summar
 	startTs, endTs := queryWindow(now, hours)
 	recentStartTs, _ := queryWindow(now, recentSuccessHistoryHours)
 	allowedGroups := allowedGroupSet(groups)
-
-	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
-	if err != nil {
-		return SummaryAllResult{}, err
-	}
+	queryStartTs := startTs
 
 	buckets := map[bucketKey]counters{}
 	recentBuckets := make(map[string]map[int64]counters, len(recentModels))
@@ -246,6 +242,7 @@ func QuerySummaryAll(hours int, groups []string, recentModels ...string) (Summar
 			return SummaryAllResult{}, err
 		}
 		for _, bucket := range recentRows {
+			queryStartTs = min(queryStartTs, bucket.BucketTs)
 			mergeModelBucket(recentBuckets, name, bucket.BucketTs, counters{
 				requestCount: bucket.RequestCount,
 				successCount: bucket.SuccessCount,
@@ -253,6 +250,10 @@ func QuerySummaryAll(hours int, groups []string, recentModels ...string) (Summar
 		}
 	}
 
+	rows, err := model.GetPerfMetricsSummaryBucketsAll(queryStartTs, endTs, groups)
+	if err != nil {
+		return SummaryAllResult{}, err
+	}
 	for _, row := range rows {
 		mergeCounters(buckets, bucketKey{
 			model:    row.ModelName,
@@ -283,7 +284,7 @@ func QuerySummaryAll(hours int, groups []string, recentModels ...string) (Summar
 		if _, requested := recentBuckets[k.model]; requested && k.bucketTs >= recentStartTs {
 			mergeModelBucket(recentBuckets, k.model, k.bucketTs, snap)
 		}
-		if k.bucketTs < startTs {
+		if k.bucketTs < queryStartTs {
 			return true
 		}
 		mergeCounters(buckets, bucketKey{
@@ -293,6 +294,26 @@ func QuerySummaryAll(hours int, groups []string, recentModels ...string) (Summar
 		return true
 	})
 
+	recentSeries := make(map[string][]SuccessRatePoint, len(recentBuckets))
+	for name, buckets := range recentBuckets {
+		points := recentSuccessSeries(buckets)
+		if len(points) == 0 {
+			continue
+		}
+		recentSeries[name] = points[max(0, len(points)-recentSuccessSampleLimit):]
+	}
+
+	// Requested models are summarized over the same hours as their status samples.
+	for key := range buckets {
+		fromTs := startTs
+		if points, ok := recentSeries[key.model]; ok {
+			fromTs = points[0].Ts
+		}
+		if key.bucketTs < fromTs {
+			delete(buckets, key)
+		}
+	}
+
 	all := counters{}
 	for _, value := range buckets {
 		all.requestCount += value.requestCount
@@ -300,14 +321,6 @@ func QuerySummaryAll(hours int, groups []string, recentModels ...string) (Summar
 		all.totalLatencyMs += value.totalLatencyMs
 		all.outputTokens += value.outputTokens
 		all.generationMs += value.generationMs
-	}
-	recentSeries := make(map[string][]SuccessRatePoint, len(recentBuckets))
-	for name, modelBuckets := range recentBuckets {
-		points := recentSuccessSeries(modelBuckets)
-		if len(points) == 0 {
-			continue
-		}
-		recentSeries[name] = points[max(0, len(points)-recentSuccessSampleLimit):]
 	}
 	return SummaryAllResult{
 		Summary: summarize(all), WindowStart: startTs, WindowEnd: endTs,
