@@ -1,12 +1,17 @@
 package model
 
 import (
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/QuantumNous/new-api/common"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 func seedSubscriptionResetPlan(t *testing.T, plan *SubscriptionPlan) {
@@ -198,4 +203,53 @@ func TestAdminResetPlanSubscriptionsNoMatchSucceeds(t *testing.T) {
 	assert.Zero(t, result.ResetCount)
 	assert.Zero(t, result.UserCount)
 	assert.Empty(t, result.AffectedUserIds)
+}
+
+func TestRefundSubscriptionPreConsumeIsAtomicAndIdempotent(t *testing.T) {
+	previousDB, previousLogDB := DB, LOG_DB
+	previousMainType, previousLogType := common.MainDatabaseType(), common.LogDatabaseType()
+	dsn := filepath.Join(t.TempDir(), "subscription-refund.db") + "?_pragma=busy_timeout(1000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	sqlDB.SetMaxOpenConns(2)
+	DB, LOG_DB = db, db
+	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
+	t.Cleanup(func() {
+		DB, LOG_DB = previousDB, previousLogDB
+		common.SetDatabaseTypes(previousMainType, previousLogType)
+		assert.NoError(t, sqlDB.Close())
+	})
+	require.NoError(t, db.AutoMigrate(&UserSubscription{}, &SubscriptionPreConsumeRecord{}))
+	subscription := UserSubscription{UserId: 1, AmountTotal: 1000, AmountUsed: 300, Status: "active"}
+	require.NoError(t, db.Create(&subscription).Error)
+	record := SubscriptionPreConsumeRecord{
+		RequestId: "subscription-refund-request", UserId: 1,
+		UserSubscriptionId: subscription.Id, PreConsumed: 100, Status: "consumed",
+	}
+	require.NoError(t, db.Create(&record).Error)
+	writeErr := errors.New("refund record write rejected")
+	const callback = "test:reject_subscription_refund_record"
+	require.NoError(t, db.Callback().Update().Before("gorm:update").Register(callback, func(tx *gorm.DB) {
+		if _, ok := tx.Statement.Dest.(*SubscriptionPreConsumeRecord); ok {
+			tx.AddError(writeErr)
+		}
+	}))
+	t.Cleanup(func() { assert.NoError(t, db.Callback().Update().Remove(callback)) })
+
+	require.ErrorIs(t, RefundSubscriptionPreConsume(record.RequestId), writeErr)
+	require.NoError(t, db.First(&subscription, subscription.Id).Error)
+	assert.EqualValues(t, 300, subscription.AmountUsed, "failed refund must not release quota")
+	require.NoError(t, db.First(&record, record.Id).Error)
+	assert.Equal(t, "consumed", record.Status)
+
+	require.NoError(t, db.Callback().Update().Remove(callback))
+	for range 2 {
+		require.NoError(t, RefundSubscriptionPreConsume(record.RequestId))
+		require.NoError(t, db.First(&subscription, subscription.Id).Error)
+		assert.EqualValues(t, 200, subscription.AmountUsed, "retry must refund exactly once")
+		require.NoError(t, db.First(&record, record.Id).Error)
+		assert.Equal(t, "refunded", record.Status)
+	}
 }

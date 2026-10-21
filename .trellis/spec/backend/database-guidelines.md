@@ -245,3 +245,57 @@ Wrong: accept any host in a destructive database fixture to make a test pass.
 Correct: preserve the loopback guard and forward a loopback port to the owned,
 isolated database. Deploy only the application service, never recreate its data
 services as part of an application update.
+
+## Scenario: Retry funding and atomic subscription refunds
+
+### 1. Scope / Trigger
+Changes to task retry pricing, `BillingSession` reservation, or subscription
+pre-consumption refund and request-ID replay handling.
+
+### 2. Signatures
+- `BillingSession.ReserveBeforeSubmit(targetQuota int) error` requires available
+  funding before another upstream submission.
+- `RefundSubscriptionPreConsume(requestId string) error` refunds the original
+  reservation exactly once.
+- `PostConsumeUserSubscriptionDelta(id int, delta int64) error` opens its own
+  transaction. `postConsumeUserSubscriptionDeltaTx(tx, id, delta)` instead joins
+  a caller-owned transaction with a validated ID and non-zero delta.
+
+### 3. Contracts
+- A retry recomputes its pricing snapshot and holds any additional estimate
+  before sending upstream. Equal/lower targets do not reserve or refund early.
+- Wallet funding records cumulative pre-consumption, so failed requests return
+  every successful reservation; token failure compensates only the new delta.
+- Subscription usage and the pre-consumption record's `refunded` marker must
+  commit or roll back together. Borrow the existing transaction for both rows.
+- Keep SQLite WAL and `_txlock=immediate`; do not disable production locking to
+  make refund tests pass. MySQL/PostgreSQL retain `lockForUpdate(tx)`.
+
+### 4. Validation & Error Matrix
+- Insufficient additional funding -> typed HTTP 403; unchanged held quota and
+  no additional upstream submission.
+- Additional token reservation fails -> funding delta compensated, original
+  reservation remains fully refundable.
+- Refund-record write fails -> subscription usage and record both unchanged.
+- Refunded request ID replay -> no second quota credit.
+- Actual post-submission price adjustments retain their separate settlement
+  semantics; pre-submission reservation is not a guarantee against all debt.
+
+### 5. Good/Base/Bad Cases
+Good: wallet 1000 -> 900 -> 750 -> 600 -> 1000; subscription usage
+70 -> 170 -> 320 -> 470 -> 70 after failed-request refund.
+Base: an ordinary initial reservation and one refund remain unchanged.
+Bad: a global-DB inner transaction blocks behind SQLite's outer write lock or
+commits quota separately before the refund marker fails on another dialect.
+
+### 6. Tests Required
+Keep `TestRefundSubscriptionPreConsumeIsAtomicAndIdempotent`: a failed refund
+record write must roll back usage, then retries refund exactly once. Exercise
+real SQLite/MySQL/PostgreSQL reservation/refund lifecycles, including token
+compensation. HTTP retry tests must observe zero requests at the unaffordable
+second upstream; a billing API return value alone does not prove suppression.
+
+### 7. Wrong vs Correct
+Wrong: call `PostConsumeUserSubscriptionDelta` from an already-open refund
+transaction. Correct: call `postConsumeUserSubscriptionDeltaTx(tx, ...)` and
+save the refund marker using the same `tx`.
