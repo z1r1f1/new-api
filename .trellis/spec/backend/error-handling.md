@@ -278,6 +278,7 @@ When adding a new provider adapter, prefer converting provider response errors t
   `OaiResponsesToChatStreamHandler(c, info, resp) (*dto.Usage, *types.NewAPIError)`.
 - Shared failure formatter:
   `newResponsesStreamAPIError(dto.ResponsesStreamResponse, string, ...string) *types.NewAPIError`.
+- Checked SSE delivery: `helper.ResponseChunkData(c, event, data) error`.
 
 ### 3. Contracts
 
@@ -294,10 +295,22 @@ When adding a new provider adapter, prefer converting provider response errors t
   `status=error`. HTTP health is sampled once at the request boundary through
   `RecordRelayResult`, so retries, client cancellations and business rejections
   follow the existing classification policy independently of settlement.
+- Observe upstream usage/outcome before calling `helper.ResponseChunkData` so
+  write failures retain billable upstream usage. Stop on any event/data/delimiter
+  write or flush error; never call `sr.Done()` after a failed delivery.
+- For `response.completed` / `response.done`, call `sr.Done()` only after
+  delivery succeeds, the event contains a response object, and the accumulated
+  protocol outcome is `completed`. Failed/incomplete response statuses do not
+  qualify. Do not overwrite the final scanner end reason in the adapter.
+- The scanner may correct a concurrent client cancellation only after joining
+  callbacks, when a delivered completion called `Done`, the protocol outcome
+  is completed, cancellation is the sole end error, and no soft errors exist.
+  Earlier parse/scanner/write failures must remain visible.
 - Successful Responses final payloads must not expose `response.output` /
   `output` as `null`. Normalize missing or null output arrays to `[]` before
-  forwarding native `/v1/responses` bodies or `response.completed` SSE events,
-  because SDK clients commonly iterate that field during stream finalization.
+  forwarding native `/v1/responses` bodies or `response.completed` /
+  `response.done` SSE events, because SDK clients commonly iterate that field
+  during stream finalization.
 - Error details must be extracted from nested `response.error` first, and from
   top-level `error` when present.
 - Detail extraction must not require `error.type`; `error.message` or
@@ -319,8 +332,14 @@ When adding a new provider adapter, prefer converting provider response errors t
 - `response.error` with top-level `error` -> include top-level error details.
 - No parseable error object -> fall back to
   `responses stream error: <event_type>`.
-- Upstream success body or `response.completed` with `output: null` or missing
-  `output` -> forward the same successful response with `output: []`.
+- Upstream success body or `response.completed` / `response.done` with
+  `output: null` or missing `output` -> forward with `output: []`.
+- Completed/done event with completed outcome and successful delivery -> stop
+  without waiting for upstream EOF; keep actual usage and tool counts.
+- Event/data/delimiter write failure, flush failure, or cancellation before
+  flush -> preserve failed transport diagnostics and billable upstream usage.
+- Completed/done event with failed/incomplete response status -> do not mark
+  transport complete merely because of its event name.
 - `response.created` followed by a failed terminal -> preserve the upstream
   terminal, settle its usage, record failure, and retain the next request's
   successful-request allowance.
@@ -340,14 +359,21 @@ When adding a new provider adapter, prefer converting provider response errors t
 - Bad: forwarding `output: null` in a successful Responses final object; Python
   SDK consumers can fail locally with `TypeError: 'NoneType' object is not
   iterable`.
+- Bad: setting `EndReason=done` / clearing `EndError` after the scanner returns
+  merely because a completion event was observed; it hides delivery failures.
 
 ### 6. Tests Required
 
 - `relay/channel/openai`: regression tests for native Responses and bridged
   Responses streams proving `response.failed` includes message/code details.
-- `relay/channel/openai`: regression tests for non-stream Responses and
-  `response.completed` streams proving null/missing `output` is normalized to
-  `[]`.
+- `relay/channel/openai`: regression tests for non-stream Responses and both
+  completed/done SSE aliases proving null/missing `output` is normalized to `[]`.
+- `TestOaiResponsesStreamHandlerCompletionLifecycle`: terminal delivery without
+  upstream EOF; cancellation during/after flush versus before flush; every SSE
+  write boundary and flush failure; earlier parse/scanner errors; failed and
+  incomplete status under both completion aliases; retained usage/tool counts.
+- Accepted `response.failed` retains usage and failed outcome without returning
+  a relay error that would refund already generated work.
 - `common`: regression cases proving Responses event names and unrelated domains
   stay readable, supplied upstream hosts are masked, and URL credentials/IPs
   remain masked even without upstream addresses.

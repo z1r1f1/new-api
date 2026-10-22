@@ -79,7 +79,6 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	accumulator := service.NewResponsesUsageAccumulator(info)
 	accepted := false
-	responseCompleted := false
 	var streamErr *types.NewAPIError
 
 	helper.StreamScannerHandler(c, resp, info, func(data string, sr *helper.StreamResult) {
@@ -98,15 +97,19 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 		if streamResponse.Response != nil {
 			data = string(rewriteSGLangResponsesCreatedAt(info, []byte(data), "response.created_at", streamResponse.Response.CreatedAt))
 		}
-		if streamResponse.Type == "response.completed" {
+		if streamResponse.Type == "response.completed" || streamResponse.Type == "response.done" {
 			data = normalizeResponsesStreamResponseOutput(data, &streamResponse)
 		}
-		sendResponsesStreamData(c, streamResponse, data)
 		accumulator.Observe(&streamResponse, common.StringToByteSlice(data))
+		if err := helper.ResponseChunkData(c, streamResponse, data); err != nil {
+			sr.Stop(err)
+			return
+		}
 		switch streamResponse.Type {
 		case "response.completed", "response.done":
-			responseCompleted = true
-			sr.Done()
+			if streamResponse.Response != nil && info.StreamStatus.ResponseOutcome() == string(relaycommon.ResponseOutcomeCompleted) {
+				sr.Done()
+			}
 		case "error", "response.error", "response.failed":
 			if accepted {
 				// Accepted generations retain their usage even when upstream fails.
@@ -125,22 +128,11 @@ func OaiResponsesStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp
 
 	info.StreamStatus.RequireTerminal()
 	common.SetContextKey(c, constant.ContextKeyResponseStreamStatus, info.StreamStatus)
-	if responseCompleted {
-		markResponsesStreamCompleted(info)
-	}
 	if streamErr != nil {
 		return nil, streamErr
 	}
 
 	return accumulator.Finish(), nil
-}
-
-func markResponsesStreamCompleted(info *relaycommon.RelayInfo) {
-	if info == nil || info.StreamStatus == nil {
-		return
-	}
-	info.StreamStatus.EndReason = relaycommon.StreamEndReasonDone
-	info.StreamStatus.EndError = nil
 }
 
 func normalizeResponsesResponseBodyOutput(data []byte, resp *dto.OpenAIResponsesResponse) []byte {
