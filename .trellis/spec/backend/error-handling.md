@@ -364,6 +364,9 @@ When adding a new provider adapter, prefer converting provider response errors t
 
 ### 6. Tests Required
 
+- Direct streaming-handler tests must set `constant.StreamingTimeout` to a
+  positive value and restore it with `t.Cleanup`; package tests do not run the
+  process initialization that sets this value, so zero panics in `time.NewTicker`.
 - `relay/channel/openai`: regression tests for native Responses and bridged
   Responses streams proving `response.failed` includes message/code details.
 - `relay/channel/openai`: regression tests for non-stream Responses and both

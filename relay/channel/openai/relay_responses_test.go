@@ -48,6 +48,9 @@ func TestOaiResponsesHandlerNormalizesNilOutputForSDKClients(t *testing.T) {
 
 func TestOaiResponsesStreamHandlerNormalizesCompletedOutputForSDKClients(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = originalStreamingTimeout })
 	for _, eventType := range []string{"response.completed", "response.done"} {
 		for _, output := range []string{"", `,"output":null`} {
 			t.Run(eventType+output, func(t *testing.T) {
@@ -76,6 +79,9 @@ func TestOaiResponsesStreamHandlerNormalizesCompletedOutputForSDKClients(t *test
 
 func TestOaiResponsesStreamHandlerRetainsAcceptedFailureUsage(t *testing.T) {
 	gin.SetMode(gin.TestMode)
+	originalStreamingTimeout := constant.StreamingTimeout
+	constant.StreamingTimeout = 30
+	t.Cleanup(func() { constant.StreamingTimeout = originalStreamingTimeout })
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
