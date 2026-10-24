@@ -2862,3 +2862,55 @@ failed immediate-burst assertion by changing its expected response codes.
 Correct: preserve that observation, prove whether the accounting order changed,
 and separately verify group isolation after exact Redis counter completion.
 
+## Scenario: Recovering an interrupted Docker deployment
+
+### 1. Scope / Trigger
+Use when a candidate build is canceled, image/source revisions diverge, or the
+Docker daemon fails during deployment diagnostics.
+
+### 2. Signatures
+- Check the engine with `docker version` and its journal with
+  `journalctl -u docker.service`; do not probe a known crashing API before repair.
+- Validate daemon settings with `dockerd --validate --config-file <file>`;
+  `systemctl reload docker` can enable `live-restore` without restarting containers.
+- Application cutover uses `docker compose up -d --no-deps --force-recreate
+  --no-build --pull never --wait --wait-timeout 180 new-api`.
+
+### 3. Contracts
+- Docker 29.1.3 can panic when listing BuildKit history (`filterHistoryEvents`,
+  moby/moby#52257). Use a release containing moby/buildkit#6614; never reproduce
+  the crash on the vulnerable production daemon.
+- Live restore is not a guarantee for cross-release upgrades. Obtain explicit
+  interruption approval, retain signed old/new packages and an engine rollback,
+  and verify container IDs/start times after migration. Do not purge runtime data.
+- A package migration may require restarting `docker.socket` before starting
+  Docker when `-H fd://` reports no activation sockets; preserve live containers.
+- Bind every image-level gate to the final image ID and source revision. Reuse
+  source-only evidence only with explicit provenance; canceled builds prove nothing.
+- Capture a fresh baseline after recovery. Compare mounts by destination, not
+  inspection-array order. Keep database/Redis identity unchanged during app cutover.
+- Back up the database and old application image before changes. Rollback scripts
+  restore engine packages or the application image, never the database automatically.
+
+### 4. Validation & Error Matrix
+- Candidate revision differs from final source -> stop before tagging production.
+- Dependency identity/start time or environment differs -> refresh/review baseline;
+  do not weaken preservation checks to force a cutover.
+- Equal mounts in different array order -> accept; changed source/mode -> reject.
+- Failed application readiness -> restore only the old application image.
+
+### 5. Good/Base/Bad Cases
+Good: fixed-engine history query succeeds, exact-image isolated gates pass, then
+only the application is recreated. Base: an interrupted build leaves production on
+the old image. Bad: diagnosing a known crash by querying history on the old daemon.
+
+### 6. Tests Required
+After engine repair, exercise the formerly crashing command once and verify the
+daemon remains running. Record engine/BuildKit versions and container identities.
+Run schema, HTTP and browser smoke against the exact final image; verify direct
+and reverse-proxy status/assets, option hashes, mounts and image-only rollback.
+
+### 7. Wrong vs Correct
+Wrong: trust a pre-fix candidate tag or compare `old['Mounts'] == new['Mounts']`.
+Correct: require matching image ID/revision and compare mounts keyed by destination.
+
