@@ -8,7 +8,7 @@ DB_NAME="new-api"
 BACKUP_DIR="$REPO_DIR/.runtime/prod/backups"
 LOG_FILE="$BACKUP_DIR/backup-postgres.log"
 LOCK_FILE="$BACKUP_DIR/backup-postgres.lock"
-RETENTION_DAYS="${RETENTION_DAYS:-7}"
+RETENTION_DAYS="${RETENTION_DAYS:-3}"
 
 mkdir -p "$BACKUP_DIR"
 cd "$REPO_DIR"
