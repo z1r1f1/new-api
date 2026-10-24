@@ -2412,6 +2412,46 @@ func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
 	assertJSONEqual(t, `{"cache_control":{"type":"ephemeral"},"store":true}`, string(out))
 }
 
+// Upstreams fill a schema's properties in their order, so removing a field
+// must leave the client's nested key order as it was.
+func TestRemoveDisabledFieldsKeepsNestedKeyOrder(t *testing.T) {
+	input := `{"service_tier":"flex","response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","properties":{"reasoning":{"type":"string"},"answer":{"type":"string"}}}}},"stream_options":{"include_usage":true,"include_obfuscation":false}}`
+
+	out, err := RemoveDisabledFields([]byte(input), dto.ChannelOtherSettings{}, false)
+
+	require.NoError(t, err)
+	assert.Equal(t, `{"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":{"type":"object","properties":{"reasoning":{"type":"string"},"answer":{"type":"string"}}}}},"stream_options":{"include_usage":true}}`, string(out))
+}
+
+func TestRemoveDisabledFieldsNormalizationKeepsSchemaOrder(t *testing.T) {
+	original := model_setting.GetGlobalSettings().PassThroughRequestEnabled
+	t.Cleanup(func() {
+		model_setting.GetGlobalSettings().PassThroughRequestEnabled = original
+	})
+	schema := `{"type":"object","properties":{"reasoning":{"type":"string"},"answer":{"type":"string"}}}`
+	longKey := strings.Repeat("session-", 10)
+	input := fmt.Sprintf(`{"service_tier":"fast","prompt_cache_key":%q,"response_format":{"type":"json_schema","json_schema":{"name":"answer","schema":%s}},"precise_number":9007199254740993}`, longKey, schema)
+	for _, tc := range []struct {
+		name               string
+		channelPassThrough bool
+		globalPassThrough  bool
+	}{
+		{name: "filtered"},
+		{name: "channel passthrough", channelPassThrough: true},
+		{name: "global passthrough", globalPassThrough: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model_setting.GetGlobalSettings().PassThroughRequestEnabled = tc.globalPassThrough
+			out, err := RemoveDisabledFields([]byte(input), dto.ChannelOtherSettings{AllowServiceTier: true}, tc.channelPassThrough)
+			require.NoError(t, err)
+			assert.Contains(t, string(out), `"schema":`+schema)
+			assert.Contains(t, string(out), `"service_tier":"priority"`)
+			assert.Contains(t, string(out), `"prompt_cache_key":"`+expectedPromptCacheKeyHash(longKey)+`"`)
+			assert.Contains(t, string(out), `"precise_number":9007199254740993`)
+		})
+	}
+}
+
 func TestRemoveDisabledFieldsNoControlledFieldsKeepsBody(t *testing.T) {
 	input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
 	settings := dto.ChannelOtherSettings{}

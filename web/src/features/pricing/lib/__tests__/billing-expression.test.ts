@@ -44,6 +44,8 @@ import {
 import {
   buildEstimatorTokens,
   evalExprLocally,
+  generateExprFromVisualConfig,
+  tryParseVisualConfig,
   type ExtraTokenValues,
 } from '../tier-expr'
 
@@ -51,6 +53,7 @@ const extras: ExtraTokenValues = {
   cacheReadTokens: 100,
   cacheCreateTokens: 0,
   cacheCreate1hTokens: 0,
+  cacheCreate12hTokens: 0,
   imageTokens: 0,
   imageOutputTokens: 0,
   imageCacheTokens: 0,
@@ -58,17 +61,267 @@ const extras: ExtraTokenValues = {
   audioOutputTokens: 0,
 }
 
+test('parses a 12-hour cache write price and regenerates the expression unchanged', () => {
+  const source =
+    'tier("base", p * 10 + c * 40 + cr * 1 + cc * 12.5 + cc12h * 25)'
+  const config = tryParseVisualConfig(source)
+  assert(config)
+  expect(config.tiers[0]).toMatchObject({
+    cache_create_unit_cost: 12.5,
+    cache_create_12h_unit_cost: 25,
+  })
+  expect(generateExprFromVisualConfig(config)).toBe(source)
+})
+
+describe('cache estimator normalization', () => {
+  // OpenAI reports 12000 total input tokens; the estimator takes the 1000
+  // text tokens separately from 4000 reads, 3000 short writes and 4000 12h writes.
+  const openAI = {
+    ...extras,
+    cacheReadTokens: 4000,
+    cacheCreateTokens: 3000,
+    cacheCreate12hTokens: 4000,
+  }
+  const claude = {
+    ...extras,
+    cacheReadTokens: 0,
+    cacheCreateTokens: 2000,
+    cacheCreate1hTokens: 10000,
+  }
+
+  test.each([
+    {
+      name: 'separately priced short and 12h writes',
+      body: 'p * 10 + cr * 1 + cc * 12.5 + cc12h * 25',
+      p: 1000,
+      cc: 3000,
+      cc12h: 4000,
+      cost: 151500,
+    },
+    {
+      name: 'omitted 12h price falls back to twice cc',
+      body: 'p * 10 + cr * 1 + cc * 12.5',
+      p: 1000,
+      cc: 11000,
+      cc12h: 0,
+      cost: 151500,
+    },
+    {
+      name: 'omitted cc price puts short writes in p',
+      body: 'p * 10 + cr * 1 + cc12h * 25',
+      p: 4000,
+      cc: 0,
+      cc12h: 4000,
+      cost: 144000,
+    },
+    {
+      name: 'omitted write prices put weighted writes in p',
+      body: 'p * 10 + cr * 1',
+      p: 12000,
+      cc: 0,
+      cc12h: 0,
+      cost: 124000,
+    },
+    {
+      name: 'explicit zero cc price keeps fallback writes free',
+      body: 'p * 10 + cr * 1 + cc * 0',
+      p: 1000,
+      cc: 11000,
+      cc12h: 0,
+      cost: 14000,
+    },
+    {
+      name: 'explicit zero 12h price does not fall back to cc',
+      body: 'p * 10 + cr * 1 + cc * 12.5 + cc12h * 0',
+      p: 1000,
+      cc: 3000,
+      cc12h: 4000,
+      cost: 51500,
+    },
+    {
+      name: 'explicit zero 12h price does not fall back to p',
+      body: 'p * 10 + cr * 1 + cc12h * 0',
+      p: 4000,
+      cc: 0,
+      cc12h: 4000,
+      cost: 44000,
+    },
+    {
+      name: 'explicit zero read price does not fall back to p',
+      body: 'p * 10 + cr * 0 + cc * 12.5 + cc12h * 25',
+      p: 1000,
+      cc: 3000,
+      cc12h: 4000,
+      cost: 147500,
+    },
+    {
+      name: 'omitted cache prices include reads and weighted writes in p',
+      body: 'p * 10',
+      p: 16000,
+      cc: 0,
+      cc12h: 0,
+      cost: 160000,
+    },
+  ])('matches backend OpenAI billing when $name', (fixture) => {
+    const source = `tier("base", ${fixture.body})`
+    expect(buildEstimatorTokens(1000, 0, openAI, source)).toMatchObject({
+      p: fixture.p,
+      c: 0,
+      len: 12000,
+      cc: fixture.cc,
+      cc1h: 0,
+      cc12h: fixture.cc12h,
+    })
+    expect(evalExprLocally(source, 1000, 0, openAI)).toEqual({
+      cost: fixture.cost,
+      matchedTier: 'base',
+      error: null,
+    })
+  })
+
+  test.each([
+    {
+      name: 'separately priced 5m and 1h writes',
+      body: 'p * 3 + cc * 3.75 + cc1h * 6',
+      p: 100,
+      cc: 2000,
+      cc1h: 10000,
+      cost: 67800,
+    },
+    {
+      name: 'omitted 1h price falls back to 1.6 times cc',
+      body: 'p * 3 + cc * 3.75',
+      p: 100,
+      cc: 18000,
+      cc1h: 0,
+      cost: 67800,
+    },
+    {
+      name: 'omitted cc price puts 5m writes in p',
+      body: 'p * 3 + cc1h * 6',
+      p: 2100,
+      cc: 0,
+      cc1h: 10000,
+      cost: 66300,
+    },
+    {
+      name: 'omitted write prices put weighted writes in p',
+      body: 'p * 3',
+      p: 18100,
+      cc: 0,
+      cc1h: 0,
+      cost: 54300,
+    },
+    {
+      name: 'explicit zero cc price keeps fallback writes free',
+      body: 'p * 3 + cc * 0',
+      p: 100,
+      cc: 18000,
+      cc1h: 0,
+      cost: 300,
+    },
+    {
+      name: 'explicit zero 1h price does not fall back to cc',
+      body: 'p * 3 + cc * 3.75 + cc1h * 0',
+      p: 100,
+      cc: 2000,
+      cc1h: 10000,
+      cost: 7800,
+    },
+    {
+      name: 'explicit zero 1h price does not fall back to p',
+      body: 'p * 3 + cc1h * 0',
+      p: 2100,
+      cc: 0,
+      cc1h: 10000,
+      cost: 6300,
+    },
+  ])('matches backend Claude billing when $name', (fixture) => {
+    const source = `tier("base", ${fixture.body})`
+    expect(buildEstimatorTokens(100, 0, claude, source)).toMatchObject({
+      p: fixture.p,
+      c: 0,
+      len: 12100,
+      cc: fixture.cc,
+      cc1h: fixture.cc1h,
+      cc12h: 0,
+    })
+    expect(evalExprLocally(source, 100, 0, claude)).toEqual({
+      cost: fixture.cost,
+      matchedTier: 'base',
+      error: null,
+    })
+  })
+
+  test('normalizes both independent omitted TTL fields into p without weighting len', () => {
+    const tokens = {
+      ...extras,
+      cacheCreateTokens: 200,
+      cacheCreate1hTokens: 1000,
+      cacheCreate12hTokens: 1000,
+    }
+    const source = 'tier("base", p * 10 + c * 50)'
+    expect(buildEstimatorTokens(1000, 100, tokens, source)).toMatchObject({
+      p: 4900,
+      c: 100,
+      len: 3300,
+      cc: 0,
+      cc1h: 0,
+      cc12h: 0,
+    })
+    expect(evalExprLocally(source, 1000, 100, tokens)).toEqual({
+      cost: 54000,
+      matchedTier: 'base',
+      error: null,
+    })
+  })
+
+  test.each([
+    {
+      fallback: 'cc',
+      short: 'p * 10 + cr * 1 + cc * 12.5',
+      long: 'p * 20 + cr * 2 + cc * 25',
+      shortCost: 151500,
+      longCost: 303020,
+    },
+    {
+      fallback: 'p',
+      short: 'p * 10 + cr * 1',
+      long: 'p * 20 + cr * 2',
+      shortCost: 124000,
+      longCost: 248020,
+    },
+  ])('keeps len tiers unweighted with $fallback fallback', (fixture) => {
+    const source = `len <= 12000 ? tier("short", ${fixture.short}) : tier("long", ${fixture.long})`
+    expect(evalExprLocally(source, 1000, 0, openAI)).toEqual({
+      cost: fixture.shortCost,
+      matchedTier: 'short',
+      error: null,
+    })
+    expect(evalExprLocally(source, 1001, 0, openAI)).toEqual({
+      cost: fixture.longCost,
+      matchedTier: 'long',
+      error: null,
+    })
+  })
+})
+
 test('evaluates and round-trips separate image cache prices including an explicit zero', () => {
   const source =
     'tier("standard", p * 5 + cr * 1.25 + img * 8 + img_cr * 2 + c * 30)'
   const document = parseVisualBillingDocument(source)
   expect(
-    buildEstimatorTokens(300, 100, {
-      ...extras,
-      cacheReadTokens: 100,
-      imageTokens: 400,
-      imageCacheTokens: 200,
-    }).len
+    buildEstimatorTokens(
+      300,
+      100,
+      {
+        ...extras,
+        cacheReadTokens: 100,
+        imageTokens: 400,
+        imageCacheTokens: 200,
+      },
+      source
+    ).len
   ).toBe(1000)
   assert(document)
   const regenerated = serializeVisualBillingDocument(document)

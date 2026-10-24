@@ -140,106 +140,81 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
 
 ---
 
-## Scenario: DeepSeek Chat Bridges and Independent Tools
+## Scenario: DeepSeek Native Protocols and Independent Tools
 
 ### 1. Scope / Trigger
 
-- Trigger: changes to DeepSeek handling for `/v1/messages`, `/v1/responses`,
-  or the independent `/v1/tools/search` and `/v1/tools/fetch` endpoints.
-- Purpose: DeepSeek-compatible channels are OpenAI chat-completions upstreams
-  for Claude Messages traffic. They must not send Claude-format payloads to
-  provider-specific `/anthropic/v1/messages` paths unless that provider has an
-  explicit native Anthropic contract.
+- Trigger: DeepSeek type-43 handling for Claude Messages, OpenAI Responses,
+  Chat Completions, FIM, or independent Search/Fetch endpoints.
+- Decision: the operator explicitly selected the upstream native Claude and
+  Responses contracts. Do not restore the removed local Chat bridge as a
+  fallback. A Chat-only upstream must use an appropriate compatible channel.
 
 ### 2. Signatures
 
-- Request route: `POST /v1/messages` with `types.RelayFormatClaude`.
-- Adapter request conversion:
-  `(*deepseek.Adaptor).ConvertClaudeRequest(c, info, *dto.ClaudeRequest)`.
-- Adapter URL selection:
-  `(*deepseek.Adaptor).GetRequestURL(info)`.
-- Adapter response conversion:
-  `(*deepseek.Adaptor).DoResponse(c, resp, info)`.
+- `(*deepseek.Adaptor).ConvertClaudeRequest(c, info, *dto.ClaudeRequest)`.
+- `(*deepseek.Adaptor).ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest)`.
+- `(*deepseek.Adaptor).GetRequestURL(info)` and `DoResponse(c, resp, info)`.
 
 ### 3. Contracts
 
-- DeepSeek Claude-format requests are converted with
-  `service.ClaudeToOpenAIRequest` into `*dto.GeneralOpenAIRequest`.
-- Streaming Claude requests keep OpenAI chat stream usage enabled when
-  `info.SupportStreamOptions && info.IsStream` by setting
-  `stream_options.include_usage=true`.
-- DeepSeek Claude-format upstream URL is
-  `{ChannelBaseUrl}/v1/chat/completions`.
-- DeepSeek Claude-format upstream responses are parsed as OpenAI chat
-  completions and converted back to Claude response/SSE shapes for the client.
-- `relaycommon.AppendRequestConversionFromRequest` should see the converted
-  OpenAI request so the conversion chain records Claude -> OpenAI.
-- Responses clients also keep the local Responses-to-Chat bridge, including
-  streamed and blocking response conversion; never restore a native `/responses`
-  upstream as a conflict-resolution shortcut.
-- Explicit `@` modifiers win over `-none/-low/-max` tails. For example,
-  `deepseek-flash-low@effort:max` sends Chat `model=deepseek-flash` and
-  `reasoning_effort=max`; the requested routing alias must be bound to the channel.
-- Search/Fetch modes select their own upstream URL before client-format routing.
-  Billing uses the endpoint routing name, not a client-supplied body model;
-  empty results/page content release the reservation.
-- Existing Responses hosted-tool filtering is unchanged: only supported function
-  tools cross the Chat bridge. Do not describe native Responses tool-usage
-  metadata tests as proof that hosted tools execute through this bridge.
+- Claude Messages retains Claude request/response shapes and uses
+  `{ChannelBaseUrl}/anthropic/v1/messages` with the Claude adaptor parser.
+- Responses retains Responses request/response shapes and uses
+  `{ChannelBaseUrl}/responses` with the OpenAI adaptor parser, including SSE.
+- Response IDs, `previous_response_id`, hosted tools and continuation are
+  upstream-owned. No local Responses history, synthetic IDs, or Chat conversion
+  is retained. IDs issued by the removed bridge are not migrated.
+- Explicit `@` modifiers still win over model-name tails. DeepSeek renders
+  Chat `reasoning_effort`, Claude `thinking`/`output_config.effort`, and
+  Responses `reasoning.effort`; Claude conversion restores the reasoning state
+  after bypassing Anthropic-specific modifier rules.
+- Claude output-config edits and tool-schema DTOs keep nested raw JSON, so a
+  thinking modifier cannot reorder schema properties.
+- Chat, FIM and independent Search/Fetch retain their upstream paths. Tool
+  billing uses the endpoint routing name, not a client-supplied body model;
+  empty results/page content release the reservation. Native Responses vendor
+  tool usage remains authoritative for Search/Fetch accounting.
 
 ### 4. Validation & Error Matrix
 
-- `/v1/messages` + DeepSeek channel + valid OpenAI-compatible upstream response
-  -> client receives Claude-compatible response.
-- `/v1/messages` + DeepSeek channel + stream request -> upstream receives
-  OpenAI chat-completions payload with `stream_options.include_usage=true`.
-- `/v1/messages` + DeepSeek channel + conversion failure -> relay
-  `convert_request_failed` with skip retry, rendered by `controller.Relay`.
-- `/v1/messages` + DeepSeek channel must not be sent to
-  `{ChannelBaseUrl}/anthropic/v1/messages`; web/base URLs may return HTML 404
-  pages that are not useful API errors.
+- Valid native Claude JSON/SSE -> Claude-compatible client response.
+- Valid native Responses JSON/SSE -> preserve upstream response IDs, tool items,
+  namespace/call IDs, usage and terminal status.
+- Upstream lacks the native endpoint -> normal relay upstream error/retry
+  handling; never silently reroute the request to Chat Completions.
+- Conversion failure -> existing `convert_request_failed` error contract.
 
 ### 5. Good/Base/Bad Cases
 
-- Good: a Claude client calling `/v1/messages` for `deepseek-v4-flash-free`
-  reaches `https://.../v1/chat/completions` and receives a Claude-shaped
-  response.
-- Base: Chat/Claude/Responses clients retain their existing Chat-compatible
-  upstream behavior; FIM completions and independent tools keep separate routes.
-- Bad: sending DeepSeek Claude traffic to
-  `https://opencode.ai/zen/anthropic/v1/messages`; upstream can return
-  `Not Found | opencode` HTML 404 and repeat the same failing channel on retry.
+- Good: a native Responses request with `previous_response_id` reaches
+  `/responses` unchanged and continues the upstream session.
+- Base: ordinary Chat requests still reach `/v1/chat/completions`.
+- Bad: restoring local in-memory history or converting native tools to Chat
+  because a configured upstream does not support its selected protocol.
 
 ### 6. Tests Required
 
-- `relay/channel/deepseek`: regression test proving
-  `ConvertClaudeRequest` returns `*dto.GeneralOpenAIRequest` with converted
-  system/user messages and stream usage options.
-- `relay/channel/deepseek`: regression test proving `GetRequestURL` maps
-  Claude format to `/v1/chat/completions`.
-- `relay/channel/deepseek`: regression test proving an OpenAI chat completion
-  response is converted back to Claude response shape.
-- Capture actual outgoing Chat JSON for both client formats and assert modifier
-  precedence. Exercise independent Search/Fetch through an isolated gateway,
-  checking the routing-model charge and empty-result refund.
+- DeepSeek native nonstream/SSE round trips with captured upstream paths,
+  schema property order, modifier precedence, response IDs and usage accounting.
+- Isolated gateway HTTP smoke for both native protocols and independent tools;
+  use controlled providers, never paid production requests.
+- Shared raw-field filtering must retain fast-to-priority and prompt-cache-key
+  normalization without decoding nested schemas or precise integers into maps.
 
 ### 7. Wrong vs Correct
 
 Wrong:
 
 ```go
-case types.RelayFormatClaude:
-    return fmt.Sprintf("%s/anthropic/v1/messages", info.ChannelBaseUrl), nil
+return convertDeepSeekResponsesRequest(c, info, request) // removed Chat bridge
 ```
 
 Correct:
 
 ```go
-openAIRequest, err := service.ClaudeToOpenAIRequest(*req, info)
-if err != nil {
-    return nil, err
-}
-return a.ConvertOpenAIRequest(c, info, openAIRequest)
+applyDeepSeekV4ResponsesThinkingSuffix(info, &request)
+return request, nil
 ```
 
 ## Upstream Error Wrapping

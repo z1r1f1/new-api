@@ -16,7 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { BILLING_CACHE_VAR_MAP } from './billing-expr'
+import {
+  BILLING_CACHE_VAR_MAP,
+  CLAUDE_CACHE_CREATION_1H_MULTIPLIER,
+  OPENAI_CACHE_CREATION_12H_MULTIPLIER,
+} from './billing-expr'
 import { compileBillingExpression } from './billing-expression/parser'
 import { evaluateBillingExpression } from './billing-expression/runtime'
 import type {
@@ -45,6 +49,7 @@ export type VisualTier = {
   cache_read_unit_cost?: number
   cache_create_unit_cost?: number
   cache_create_1h_unit_cost?: number
+  cache_create_12h_unit_cost?: number
   image_unit_cost?: number
   image_output_unit_cost?: number
   audio_input_unit_cost?: number
@@ -77,6 +82,7 @@ function normalizeVisualTier(tier: Partial<VisualTier> = {}): VisualTier {
     cache_read_unit_cost: Number(tier.cache_read_unit_cost) || 0,
     cache_create_unit_cost: Number(tier.cache_create_unit_cost) || 0,
     cache_create_1h_unit_cost: Number(tier.cache_create_1h_unit_cost) || 0,
+    cache_create_12h_unit_cost: Number(tier.cache_create_12h_unit_cost) || 0,
     image_unit_cost: Number(tier.image_unit_cost) || 0,
     image_output_unit_cost: Number(tier.image_output_unit_cost) || 0,
     audio_input_unit_cost: Number(tier.audio_input_unit_cost) || 0,
@@ -258,6 +264,7 @@ const ESTIMATOR_VARS = [
   { var: 'cr', stateKey: 'cacheReadTokens' },
   { var: 'cc', stateKey: 'cacheCreateTokens' },
   { var: 'cc1h', stateKey: 'cacheCreate1hTokens' },
+  { var: 'cc12h', stateKey: 'cacheCreate12hTokens' },
   { var: 'img', stateKey: 'imageTokens' },
   { var: 'img_cr', stateKey: 'imageCacheTokens' },
   { var: 'img_o', stateKey: 'imageOutputTokens' },
@@ -288,7 +295,12 @@ export function evalExprLocally(
   const result = evaluateBillingExpression(exprStr, {
     ...context,
     tokens: {
-      ...buildEstimatorTokens(promptTokens, completionTokens, extraTokenValues),
+      ...buildEstimatorTokens(
+        promptTokens,
+        completionTokens,
+        extraTokenValues,
+        exprStr
+      ),
       ...context?.tokens,
     },
   })
@@ -308,10 +320,38 @@ export function evalExprLocally(
 export function buildEstimatorTokens(
   promptTokens: number,
   completionTokens: number,
-  extraTokenValues: ExtraTokenValues
+  extraTokenValues: ExtraTokenValues,
+  exprStr: string
 ): Partial<Record<TokenVariable, number>> {
+  // Estimator inputs are disjoint: promptTokens is text-only. Unpriced cache
+  // reads and writes join p; long writes first fall back to weighted cc.
+  // Variable presence (including an explicit zero price) suppresses fallback.
+  const compiled = compileBillingExpression(exprStr)
+  const usedVars: ReadonlySet<string> =
+    compiled.status === 'ready' ? compiled.variables : new Set()
+  let inputTokens = promptTokens
+  let cacheCreateTokens = extraTokenValues.cacheCreateTokens
+  let cacheCreate1hTokens = extraTokenValues.cacheCreate1hTokens
+  let cacheCreate12hTokens = extraTokenValues.cacheCreate12hTokens
+  if (!usedVars.has('cr')) {
+    inputTokens += extraTokenValues.cacheReadTokens
+  }
+  if (!usedVars.has('cc1h')) {
+    cacheCreateTokens +=
+      cacheCreate1hTokens * CLAUDE_CACHE_CREATION_1H_MULTIPLIER
+    cacheCreate1hTokens = 0
+  }
+  if (!usedVars.has('cc12h')) {
+    cacheCreateTokens +=
+      cacheCreate12hTokens * OPENAI_CACHE_CREATION_12H_MULTIPLIER
+    cacheCreate12hTokens = 0
+  }
+  if (!usedVars.has('cc')) {
+    inputTokens += cacheCreateTokens
+    cacheCreateTokens = 0
+  }
   return {
-    p: promptTokens,
+    p: inputTokens,
     c: completionTokens,
     len:
       promptTokens +
@@ -320,13 +360,17 @@ export function buildEstimatorTokens(
       extraTokenValues.imageTokens +
       extraTokenValues.audioInputTokens +
       extraTokenValues.cacheCreateTokens +
-      extraTokenValues.cacheCreate1hTokens,
+      extraTokenValues.cacheCreate1hTokens +
+      extraTokenValues.cacheCreate12hTokens,
     ...Object.fromEntries(
       ESTIMATOR_VARS.map((field) => [
         field.var,
         extraTokenValues[field.stateKey],
       ])
     ),
+    cc: cacheCreateTokens,
+    cc1h: cacheCreate1hTokens,
+    cc12h: cacheCreate12hTokens,
   }
 }
 

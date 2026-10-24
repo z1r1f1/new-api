@@ -22,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 type ThinkingContentInfo struct {
@@ -1158,7 +1159,9 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		return NormalizePromptCacheKey(jsonData)
 	}
 
-	var data map[string]any
+	// Only top-level members are decoded: nested values keep the client's
+	// bytes and key order, which upstreams follow when they fill a schema.
+	var data map[string]json.RawMessage
 	if err := common.Unmarshal(jsonData, &data); err != nil {
 		common.SysError(common.LogText("RemoveDisabledFields Unmarshal error :%s", err.Error()))
 		return jsonData, nil
@@ -1169,8 +1172,8 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		if _, exists := data["service_tier"]; exists {
 			delete(data, "service_tier")
 		}
-	} else if serviceTier, ok := data["service_tier"].(string); ok && strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
-		data["service_tier"] = "priority"
+	} else if hasLiteralFastServiceTier(jsonData, true) {
+		data["service_tier"] = json.RawMessage(`"priority"`)
 	}
 
 	// 默认移除 inference_geo，除非明确允许（避免在未授权情况下透传数据驻留区域）
@@ -1203,22 +1206,20 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 
 	// 默认移除 stream_options.include_obfuscation，除非明确允许（避免关闭响应流混淆保护）
 	if !channelOtherSettings.AllowIncludeObfuscation {
-		if streamOptionsAny, exists := data["stream_options"]; exists {
-			if streamOptions, ok := streamOptionsAny.(map[string]any); ok {
-				if _, includeExists := streamOptions["include_obfuscation"]; includeExists {
-					delete(streamOptions, "include_obfuscation")
+		var streamOptions map[string]json.RawMessage
+		if err := common.Unmarshal(data["stream_options"], &streamOptions); err == nil && streamOptions != nil {
+			delete(streamOptions, "include_obfuscation")
+			if len(streamOptions) == 0 {
+				delete(data, "stream_options")
+			} else {
+				encoded, err := common.Marshal(streamOptions)
+				if err != nil {
+					common.SysError(common.LogText("RemoveDisabledFields Marshal error :%s", err.Error()))
+					return jsonData, nil
 				}
-				if len(streamOptions) == 0 {
-					delete(data, "stream_options")
-				} else {
-					data["stream_options"] = streamOptions
-				}
+				data["stream_options"] = encoded
 			}
 		}
-	}
-
-	if promptCacheKey, ok := data["prompt_cache_key"].(string); ok {
-		data["prompt_cache_key"] = normalizePromptCacheKeyValue(promptCacheKey)
 	}
 
 	jsonDataAfter, err := common.Marshal(data)
@@ -1226,7 +1227,7 @@ func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOther
 		common.SysError(common.LogText("RemoveDisabledFields Marshal error :%s", err.Error()))
 		return jsonData, nil
 	}
-	return jsonDataAfter, nil
+	return NormalizePromptCacheKey(jsonDataAfter)
 }
 
 func normalizePromptCacheKeyAndFastServiceTier(jsonData []byte) ([]byte, error) {
@@ -1237,20 +1238,7 @@ func normalizePromptCacheKeyAndFastServiceTier(jsonData []byte) ([]byte, error) 
 	if !hasLiteralFastServiceTier(jsonData, true) {
 		return jsonData, nil
 	}
-	var data map[string]interface{}
-	if err := common.Unmarshal(jsonData, &data); err != nil {
-		common.SysError("normalizePromptCacheKeyAndFastServiceTier Unmarshal error :" + err.Error())
-		return jsonData, nil
-	}
-	if serviceTier, ok := data["service_tier"].(string); ok && strings.EqualFold(strings.TrimSpace(serviceTier), "fast") {
-		data["service_tier"] = "priority"
-	}
-	jsonDataAfter, err := common.Marshal(data)
-	if err != nil {
-		common.SysError("normalizePromptCacheKeyAndFastServiceTier Marshal error :" + err.Error())
-		return jsonData, nil
-	}
-	return jsonDataAfter, nil
+	return sjson.SetRawBytes(jsonData, "service_tier", []byte(`"priority"`))
 }
 
 func hasLiteralFastServiceTier(jsonData []byte, allowServiceTier bool) bool {
