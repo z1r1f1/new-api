@@ -155,6 +155,9 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
 - `(*deepseek.Adaptor).ConvertClaudeRequest(c, info, *dto.ClaudeRequest)`.
 - `(*deepseek.Adaptor).ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest)`.
 - `(*deepseek.Adaptor).GetRequestURL(info)` and `DoResponse(c, resp, info)`.
+- Shared filtering uses `RemoveDisabledFields([]byte, dto.ChannelOtherSettings, bool)`;
+  its `normalizePromptCacheKeyAndFastServiceTier(*ojson.Doc)` helper batches
+  local normalization with the upstream field edits before materializing bytes.
 
 ### 3. Contracts
 
@@ -171,6 +174,11 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
   after bypassing Anthropic-specific modifier rules.
 - Claude output-config edits and tool-schema DTOs keep nested raw JSON, so a
   thinking modifier cannot reorder schema properties.
+- Filtered, channel-passthrough and global-passthrough bodies normalize a literal
+  `service_tier: "fast"` to `"priority"` and hash oversized `prompt_cache_key`
+  values. When service tiers are disabled, remove them instead. Use `ojson.Doc`
+  edits, not whole-body map decoding; unrelated key order, number spelling and
+  large inline data must retain their bytes.
 - Chat, FIM and independent Search/Fetch retain their upstream paths. Tool
   billing uses the endpoint routing name, not a client-supplied body model;
   empty results/page content release the reservation. Native Responses vendor
@@ -201,6 +209,11 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
   use controlled providers, never paid production requests.
 - Shared raw-field filtering must retain fast-to-priority and prompt-cache-key
   normalization without decoding nested schemas or precise integers into maps.
+- Keep both the local normalization/schema/precise-integer regression and the
+  upstream duplicate-disabled-member byte-preservation regression in
+  `relay/common/override_test.go`. During a parser migration, update the local
+  native tests' package qualifiers as well as imports; replacing `gjson` with
+  `ojson` in an import does not migrate retained local assertions.
 
 ### 7. Wrong vs Correct
 

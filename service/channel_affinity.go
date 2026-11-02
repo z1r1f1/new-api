@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
@@ -20,7 +21,6 @@ import (
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/samber/hot"
-	"github.com/tidwall/gjson"
 )
 
 const (
@@ -30,6 +30,7 @@ const (
 	ginKeyChannelAffinityLogInfo      = "channel_affinity_log_info"
 	ginKeyChannelAffinitySkipRetry    = "channel_affinity_skip_retry_on_failure"
 	ginKeyUpstreamResponseServiceTier = "upstream_response_service_tier"
+	ginKeyChannelAffinityRetryOffset  = "channel_affinity_retry_offset"
 
 	channelAffinityCacheNamespace           = "new-api:channel_affinity:v1"
 	channelAffinityUsageCacheStatsNamespace = "new-api:channel_affinity_usage_cache_stats:v1"
@@ -332,12 +333,12 @@ func extractChannelAffinityValue(c *gin.Context, src operation_setting.ChannelAf
 		if err != nil || len(body) == 0 {
 			return ""
 		}
-		res := gjson.GetBytes(body, src.Path)
+		res := ojson.GetBytes(body, src.Path)
 		if !res.Exists() {
 			return ""
 		}
 		switch res.Type {
-		case gjson.String, gjson.Number, gjson.True, gjson.False:
+		case ojson.String, ojson.Number, ojson.True, ojson.False:
 			return normalizeChannelAffinityKeySourceValue(src, strings.TrimSpace(res.String()))
 		default:
 			return normalizeChannelAffinityKeySourceValue(src, strings.TrimSpace(res.Raw))
@@ -1294,7 +1295,9 @@ func MarkChannelAffinityUsed(c *gin.Context, selectedGroup string, channelID int
 		return
 	}
 	c.Set(ginKeyChannelAffinitySkipRetry, meta.SkipRetry)
-	info := map[string]interface{}{
+	// Affinity consumes an attempt, but does not visit a normal priority tier.
+	c.Set(ginKeyChannelAffinityRetryOffset, 1)
+	info := map[string]any{
 		"reason":         meta.RuleName,
 		"rule_name":      meta.RuleName,
 		"using_group":    meta.UsingGroup,

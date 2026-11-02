@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 	appconstant "github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
@@ -20,7 +21,6 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/tidwall/gjson"
 )
 
 func newDeepSeekClaudeRelayInfo(stream bool) *relaycommon.RelayInfo {
@@ -125,10 +125,10 @@ func TestDeepSeekClaudeNativeRoundTrip(t *testing.T) {
 			require.NoError(t, captured.err)
 			assert.Equal(t, "/anthropic/v1/messages", captured.path)
 			assert.Equal(t, "Bearer synthetic-native-key", captured.authorization)
-			assert.Equal(t, "be concise", gjson.GetBytes(captured.body, "system").String())
-			assert.Equal(t, "hello", gjson.GetBytes(captured.body, "messages.0.content").String())
-			assert.Equal(t, `{"z":{"type":"string"},"a":{"type":"string"}}`, gjson.GetBytes(captured.body, "tools.0.input_schema.properties").Raw)
-			assert.False(t, gjson.GetBytes(captured.body, "stream_options").Exists())
+			assert.Equal(t, "be concise", ojson.GetBytes(captured.body, "system").String())
+			assert.Equal(t, "hello", ojson.GetBytes(captured.body, "messages.0.content").String())
+			assert.Equal(t, `{"z":{"type":"string"},"a":{"type":"string"}}`, ojson.GetBytes(captured.body, "tools.0.input_schema.properties").Raw)
+			assert.False(t, ojson.GetBytes(captured.body, "stream_options").Exists())
 			usageAny, apiErr := adaptor.DoResponse(c, response.(*http.Response), info)
 			require.Nil(t, apiErr)
 			usage := usageAny.(*dto.Usage)
@@ -290,7 +290,7 @@ func TestThinkingControlsUseNativeProtocols(t *testing.T) {
 						types.RelayFormatOpenAI: "/v1/chat/completions", types.RelayFormatClaude: "/anthropic/v1/messages", types.RelayFormatOpenAIResponses: "/responses",
 					}
 					assert.Equal(t, paths[format], captured.path)
-					wire := gjson.ParseBytes(captured.body)
+					wire := ojson.ParseBytes(captured.body)
 					assert.Equal(t, tt.upstream, wire.Get("model").String())
 					assert.Equal(t, tt.upstream, info.UpstreamModelName)
 					if format == types.RelayFormatOpenAIResponses {
@@ -310,7 +310,7 @@ func TestThinkingControlsUseNativeProtocols(t *testing.T) {
 					}
 					if tt.thinking == "" {
 						for _, field := range []string{"thinking", "reasoning_effort", "reasoning", "output_config"} {
-							assert.Equal(t, gjson.Get(body, field).Raw, wire.Get(field).Raw, field)
+							assert.Equal(t, ojson.Get(body, field).Raw, wire.Get(field).Raw, field)
 						}
 						if format == types.RelayFormatOpenAIResponses && tt.client.responses != "" {
 							assert.Equal(t, "low", info.ReasoningEffort)
@@ -329,7 +329,7 @@ func TestThinkingControlsUseNativeProtocols(t *testing.T) {
 					case types.RelayFormatClaude:
 						assert.JSONEq(t, `{"type":"`+tt.thinking+`"}`, wire.Get("thinking").Raw)
 						assert.Equal(t, tt.effort, wire.Get("output_config.effort").String())
-						assert.Equal(t, gjson.Get(body, "output_config.format").Raw, wire.Get("output_config.format").Raw)
+						assert.Equal(t, ojson.Get(body, "output_config.format").Raw, wire.Get("output_config.format").Raw)
 						assert.False(t, wire.Get("reasoning_effort").Exists())
 						assert.False(t, wire.Get("reasoning").Exists())
 					default:
