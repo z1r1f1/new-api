@@ -2,7 +2,9 @@ package common
 
 import (
 	"io"
+	"strings"
 
+	"github.com/MoeForge/moego/ojson"
 	"github.com/QuantumNous/new-api/common"
 )
 
@@ -28,4 +30,26 @@ func NewOutboundJSONBody(data []byte) (body common.ReplayableBody, closer io.Clo
 		return nil, nil, err
 	}
 	return common.NewReplayableBodyReader(storage), storage, nil
+}
+
+// NewPassthroughJSONBody normalizes the two gateway-owned scalars without
+// filtering raw request fields. An unchanged body borrows the incoming storage
+// and returns a nil closer; a changed body owns separately replayable storage.
+func NewPassthroughJSONBody(storage common.BodyStorage) (common.ReplayableBody, io.Closer, error) {
+	data, err := storage.Bytes()
+	if err != nil {
+		return nil, nil, err
+	}
+	cacheKey := ojson.GetBytesNoCopy(data, "prompt_cache_key")
+	tier := ojson.GetBytesNoCopy(data, "service_tier")
+	normalizeCacheKey := cacheKey.Type == ojson.String && len(cacheKey.String()) > maxPromptCacheKeyLength
+	normalizeTier := tier.Type == ojson.String && strings.EqualFold(strings.TrimSpace(tier.String()), "fast")
+	if !normalizeCacheKey && !normalizeTier {
+		return common.NewReplayableBodyReader(storage), nil, nil
+	}
+	data, err = normalizePromptCacheKeyAndFastServiceTier(ojson.NewDoc(data))
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewOutboundJSONBody(data)
 }

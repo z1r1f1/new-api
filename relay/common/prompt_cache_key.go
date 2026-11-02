@@ -1,13 +1,10 @@
 package common
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"fmt"
-	"io"
 	"unicode/utf8"
 
-	rootcommon "github.com/QuantumNous/new-api/common"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -35,18 +32,6 @@ func NormalizePromptCacheKey(jsonData []byte) ([]byte, error) {
 	}
 
 	return sjson.SetBytes(jsonData, "prompt_cache_key", normalized)
-}
-
-func ReaderWithNormalizedPromptCacheKey(storage rootcommon.BodyStorage) (io.Reader, error) {
-	body, err := storage.Bytes()
-	if err != nil {
-		return nil, err
-	}
-	normalized, err := NormalizePromptCacheKey(body)
-	if err != nil {
-		return nil, err
-	}
-	return bytes.NewReader(normalized), nil
 }
 
 func normalizePromptCacheHeaderValue(headerName string, value string) string {

@@ -158,6 +158,11 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
 - Shared filtering uses `RemoveDisabledFields([]byte, dto.ChannelOtherSettings, bool)`;
   its `normalizePromptCacheKeyAndFastServiceTier(*ojson.Doc)` helper batches
   local normalization with the upstream field edits before materializing bytes.
+- Raw Chat and HTTP/WebSocket Responses use
+  `NewPassthroughJSONBody(common.BodyStorage)` before transport. It returns a
+  replayable body plus an optional owned closer: unchanged bodies borrow the
+  incoming storage; normalized bodies own separate storage. Closing an outbound
+  body must not close or mutate the incoming storage needed by channel retries.
 
 ### 3. Contracts
 
@@ -176,9 +181,11 @@ if err := validateGPTImage2Endpoint(relayInfo.RelayMode, relayInfo.OriginModelNa
   thinking modifier cannot reorder schema properties.
 - Filtered, channel-passthrough and global-passthrough bodies normalize a literal
   `service_tier: "fast"` to `"priority"` and hash oversized `prompt_cache_key`
-  values. When service tiers are disabled, remove them instead. Use `ojson.Doc`
-  edits, not whole-body map decoding; unrelated key order, number spelling and
-  large inline data must retain their bytes.
+  values. When filtering disables service tiers, remove them instead. Use
+  `ojson.Doc` edits, not whole-body map decoding; unrelated key order, number
+  spelling and large inline data must retain their bytes. Directly forwarding
+  `NewReplayableBodyReader(storage)` in passthrough handlers bypasses these
+  scalar invariants even when `RemoveDisabledFields` tests pass.
 - Chat, FIM and independent Search/Fetch retain their upstream paths. Tool
   billing uses the endpoint routing name, not a client-supplied body model;
   empty results/page content release the reservation. Native Responses vendor

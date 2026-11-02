@@ -1891,24 +1891,63 @@ func TestApplyParamOverrideWithRelayInfoHashesLongSessionIDHeader(t *testing.T) 
 	}
 }
 
-func TestReaderWithNormalizedPromptCacheKeyHashesPassThroughBody(t *testing.T) {
-	longPromptCacheKey := strings.Repeat("pass-through-", 7)
-	input := []byte(fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":%q}`, longPromptCacheKey))
-	storage, err := common2.CreateBodyStorage(input)
-	if err != nil {
-		t.Fatalf("CreateBodyStorage returned error: %v", err)
+func TestNewPassthroughJSONBodyPreservesRawFieldsAndReplayOwnership(t *testing.T) {
+	longKey := strings.Repeat("a", 70)
+	const hashedKey = "6bd5e5034855a11241f0dee8fc72850ffd9955b28347a86428b5fa19119f6ad0"
+	const template = ` { "schema":{"properties":{"z":{"const":9007199254740993},"a":{"const":0}}}, "prompt_cache_key":%q, "service_tier":%q, "store":false } `
+	cases := []struct {
+		name, key, tier, wantKey, wantTier string
+		changed                            bool
+	}{
+		{name: "both scalars", key: longKey, tier: "fast", wantKey: hashedKey, wantTier: "priority", changed: true},
+		{name: "cache key only", key: longKey, tier: "auto", wantKey: hashedKey, wantTier: "auto", changed: true},
+		{name: "tier only", key: "short", tier: " FAST ", wantKey: "short", wantTier: "priority", changed: true},
+		{name: "unchanged bytes", key: "short", tier: "priority", wantKey: "short", wantTier: "priority"},
 	}
-	defer storage.Close()
-
-	reader, err := ReaderWithNormalizedPromptCacheKey(storage)
-	if err != nil {
-		t.Fatalf("ReaderWithNormalizedPromptCacheKey returned error: %v", err)
+	previous := common2.GetDiskCacheConfig()
+	defer common2.SetDiskCacheConfig(previous)
+	for _, disk := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disk=%t", disk), func(t *testing.T) {
+			common2.SetDiskCacheConfig(common2.DiskCacheConfig{Enabled: disk, ThresholdMB: 0, MaxSizeMB: 64, Path: t.TempDir()})
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					input := []byte(fmt.Sprintf(template, tc.key, tc.tier))
+					want := []byte(fmt.Sprintf(template, tc.wantKey, tc.wantTier))
+					storage, err := common2.CreateBodyStorage(input)
+					require.NoError(t, err)
+					t.Cleanup(func() { assert.NoError(t, storage.Close()) })
+					require.Equal(t, disk, storage.IsDisk())
+					body, closer, err := NewPassthroughJSONBody(storage)
+					require.NoError(t, err)
+					if closer != nil {
+						t.Cleanup(func() { assert.NoError(t, closer.Close()) })
+					}
+					assert.EqualValues(t, len(want), body.Size())
+					assertIndependentReplayReaders(t, want, body)
+					if closer != nil {
+						require.NoError(t, closer.Close())
+					}
+					if tc.changed {
+						_, err = body.NewReader()
+						assert.ErrorIs(t, err, common2.ErrStorageClosed, "closing an owned normalized body must release its storage")
+					}
+					original, err := storage.NewReader()
+					require.NoError(t, err, "closing an outbound body must not close incoming storage needed by channel retries")
+					originalBytes, err := io.ReadAll(original)
+					require.NoError(t, err)
+					require.NoError(t, original.Close())
+					assert.Equal(t, input, originalBytes, "normalization must not mutate the incoming request")
+				})
+			}
+		})
 	}
-	out, err := io.ReadAll(reader)
-	if err != nil {
-		t.Fatalf("ReadAll returned error: %v", err)
-	}
-	assertJSONEqual(t, fmt.Sprintf(`{"model":"gpt-5","prompt_cache_key":"%s"}`, expectedPromptCacheKeyHash(longPromptCacheKey)), string(out))
+	t.Run("closed source", func(t *testing.T) {
+		storage, err := common2.CreateBodyStorage([]byte(`{}`))
+		require.NoError(t, err)
+		require.NoError(t, storage.Close())
+		_, _, err = NewPassthroughJSONBody(storage)
+		assert.ErrorIs(t, err, common2.ErrStorageClosed)
+	})
 }
 
 func TestApplyParamOverrideSyncFieldsJSONToHeader(t *testing.T) {
