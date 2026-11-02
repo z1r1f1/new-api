@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
-- **Last Active**: 2026-10-24
+- **Total Sessions**: 8
+- **Last Active**: 2026-11-02
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~250 | Active |
+| `journal-1.md` | ~289 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-11-02 | Merge upstream c046559bb and redeploy rc.47 | `ae5d2476043073b8a1e4a1f15351590e09c6cfb1`, `9b6fcd223b79a1aa8f954a2c7ebb1e78f1b3c4d9` | `integrate/upstream-20261102-c046559bb` |
 | 7 | 2026-10-24 | Merge upstream 33c61a242 and deploy native DeepSeek protocols | `ea4b3d6759055365f13285b0ee82ad36ce70296a` | `integrate/upstream-20261024-native-deepseek` |
 | 6 | 2026-10-22 | Merge upstream d8e65613c and deploy rc.46 | `b2756cb0e`, `3cf656554` | `integration/upstream-d8e65613c-20261022` |
 | 5 | 2026-10-21 | Repair Docker crash and complete upstream deployment | `51f8717757c6200298e3abef45171857b090a460`, `a411c2d592d751f382df060778d327a1e3ea844f` | `integration/upstream-206e0fa5c-20261021` |

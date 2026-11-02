@@ -248,3 +248,45 @@ Deployed v1.0.0-rc.46-local.20261024, image 065208c74a9d, healthy app 89c1aa3945
 ### Next Steps
 
 - None - task complete
+
+
+## Session 8: Merge upstream c046559bb and redeploy rc.47
+
+**Date**: 2026-11-02
+**Task**: Merge upstream c046559bb and redeploy rc.47
+**Branch**: `integrate/upstream-20261102-c046559bb`
+
+### Summary
+
+Merged the reviewed50 upstream commits, corrected replayable raw normalization, and deployed the exact validated arm64 image with application-only cutover; all preservation and synthetic DB/HTTP/browser gates passed. No push.
+
+### Main Changes
+
+- Merged the frozen c046559bb upstream target with native DeepSeek, raw schema, cache/tier normalization and local request-policy diagnostics preserved. Fixed the real passthrough regression caught by candidate HTTP smoke; the normalized replay helper preserves incoming body ownership and memory/disk replay.
+- Deployed v1.0.0-rc.47-local.20261102 from 9b6fcd223b79a1aa8f954a2c7ebb1e78f1b3c4d9, image sha256:28475f5627b3462e5a2d1363e977b14ca217a817c66eca4a689687498b21760e. Only the application was recreated; PostgreSQL/Redis IDs/start times, complete environment/mounts/command/restart/network, all107 options and all stored plugin rows remained unchanged.
+- Root build/full tests; standalone relaykit/tokenkit; frontend typecheck/lint/scoped format/build and227 affected frontend tests passed. Exact final image passed six real fresh+rc47 upgrade/twice-start DB scenarios (SQLite3.50.4/MySQL8.4.11/PostgreSQL16.13),51 real billing cases and43 controlled HTTP checks with44 upstream requests/eight reconciled ledgers. Candidate desktop/mobile/plugin/pricing/sidebar and synthetic login/logout, plus read-only production sign-in, were observed.
+- Evidence and image-only rollback: /home/ubuntu/git-project/new-api/.runtime/prod/deploy-backups/20261102T072639Z. The fresh cutover PostgreSQL dump is2,289,778,413 bytes, SHA256 a7caeafe60b6f891b1d77289c4e8bd3c8eba9c07a885fa4a8c04458771559291. No database restoration, paid inference, notification, engine/dependency restart or remote push was performed.
+- Limits: integration GitNexus refresh timed out; actual staged changes were mapped through the baseline graph, not claimed as full new-symbol coverage. Global copyright diagnostics were pre-existing;35 protected headers remained byte-identical and scoped formatting passed. Unrelated primary task WIP is preserved; deployment source remains9b6fcd223 independently of metadata-only bookkeeping commits.
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ae5d2476043073b8a1e4a1f15351590e09c6cfb1` | (see git log) |
+| `9b6fcd223b79a1aa8f954a2c7ebb1e78f1b3c4d9` | (see git log) |
+
+### Testing
+
+- [OK] Go 1.26.10 root build/full suite; standalone `GOWORK=off` relaykit build/tests and tokenkit build.
+- [OK] Bun 1.4.4 frontend typecheck/lint/scoped formatting/production build and 227 affected contract tests; protected attribution unchanged.
+- [OK] Final-image real three-DB startup/upgrade/idempotence matrix, 51 billing cases and 43 HTTP checks; candidate desktop/mobile/login/logout and production public sign-in screenshots retained.
+- [OK] Application-only cutover, exact image/version/health, direct/proxy assets, 107 options, stored-plugin fingerprints and unchanged PostgreSQL/Redis identities. Full commands and results: `.runtime/prod/deploy-backups/20261102T072639Z/verification.json` and `deployment.json`.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
