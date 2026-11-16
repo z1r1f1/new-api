@@ -750,3 +750,37 @@ Never include API keys, tokens, cookies, auth headers, or full upstream request 
 - Do not introduce a new dashboard response shape when an adjacent controller already has one.
 - Do not call `c.Abort()` without returning.
 - Do not collapse distinct error codes into generic strings if retry, billing, or log behavior depends on the code.
+
+## Scenario: Price-save failure propagation across confirmation UI
+
+### 1. Scope / Trigger
+Model-pricing save handlers shared by settings forms and comparison dialogs.
+
+### 2. Signatures / Boundaries
+The settings `onSave` Promise is the completion contract for its caller.
+
+### 3. Contracts
+HTTP-200 business failures and HTTP errors must reject to the caller. Retain
+the comparison and draft on failure; emit one error toast per failed request.
+Only a successful awaited save may close/reset the confirmation. Preserve
+explicit zero, provider overrides and tiny nonzero price display values.
+
+### 4. Validation & Error Matrix
+Failed attempt → draft and comparison remain; retry → identical intended payload
+and one new toast. Positive values below the ordinary display precision must
+not format to zero; ordinary floating-point noise may still be cleaned.
+
+### 5. Good/Base/Bad Cases
+Good: failed zero-price save keeps the provider expression and remains editable.
+Bad: catch/notify without rethrowing, making the caller treat failure as success.
+
+### 6. Tests Required
+Exercise both response failure classes through the real settings/comparison
+components and isolated HTTP adapters. Unmount observers before clearing their
+QueryClient or restoring adapters; do not hide leaked requests by clearing toast
+calls or filtering errors. Preserve exact tiny-price formatter regressions.
+
+### 7. Wrong vs Correct
+Wrong: reset a form in `finally`. Correct: await save, then clear only on success;
+error handling retains state and propagates the same failed completion.
+

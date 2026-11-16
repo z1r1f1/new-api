@@ -11,17 +11,24 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/gin-gonic/gin"
 )
 
-// PrepareResponsesRequest applies the same model, conversion and channel rules
-// for HTTP and WebSocket requests. The caller closes closer after the attempt;
-// passthrough bodies remain owned by the incoming request's BodyStorage.
-// The returned adaptor retains route/conversion state for DoRequest/DoResponse.
+// PrepareResponsesRequest applies the shared model, conversion and channel rules.
+// The caller always closes the nonnil closer after a successful attempt.
+// Unchanged passthrough bodies borrow incoming storage; normalized bodies own
+// separate outgoing storage. The adaptor retains its route/conversion state.
 func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.OpenAIResponsesRequest) (relaychannel.Adaptor, common.ReplayableBody, io.Closer, *types.NewAPIError) {
+	return prepareResponsesRequest(c, info, req, nil)
+}
+
+// prepareResponsesRequest also accepts the transport's final JSON envelope,
+// so egress checks the exact HTTP body or WebSocket frame sent upstream.
+func prepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *dto.OpenAIResponsesRequest, finalize func([]byte) ([]byte, error)) (relaychannel.Adaptor, common.ReplayableBody, io.Closer, *types.NewAPIError) {
 	info.InitChannelMeta(c)
 	if info.RelayMode == relayconstant.RelayModeResponsesCompact &&
 		!common.SupportsResponsesCompact(info.ChannelType, info.ApiType) {
@@ -54,12 +61,32 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 		if err != nil {
 			return nil, nil, nil, types.NewError(err, types.ErrorCodeReadRequestBodyFailed, types.ErrOptionWithSkipRetry())
 		}
-		body, closer, err := relaycommon.NewPassthroughJSONBody(storage)
+		var body common.ReplayableBody
+		var closer io.Closer
+		if finalize == nil {
+			body, closer, err = relaycommon.NewPassthroughJSONBody(storage)
+		} else {
+			var data []byte
+			data, err = storage.Bytes()
+			if err == nil {
+				data, err = finalize(data)
+			}
+			if err == nil {
+				data, err = relaycommon.NormalizeGatewayJSONBody(data)
+			}
+			if err == nil {
+				body, closer, err = relaycommon.NewOutboundJSONBody(data)
+			}
+		}
 		if err != nil {
 			return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 		}
 		if closer == nil {
 			closer = io.NopCloser(body)
+		}
+		if apiErr := requestplugin.PassThrough(c, info, body); apiErr != nil {
+			_ = closer.Close()
+			return nil, nil, nil, apiErr
 		}
 		return adaptor, body, closer, nil
 	}
@@ -77,11 +104,31 @@ func PrepareResponsesRequest(c *gin.Context, info *relaycommon.RelayInfo, req *d
 	if err != nil {
 		return nil, nil, nil, types.NewError(err, types.ErrorCodeConvertRequestFailed, types.ErrOptionWithSkipRetry())
 	}
+	jsonData, apiErr := requestplugin.Outbound(c, info, jsonData)
+	if apiErr != nil {
+		return nil, nil, nil, apiErr
+	}
 	if len(info.ParamOverride) > 0 {
 		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
 		if err != nil {
 			return nil, nil, nil, newAPIErrorFromParamOverride(err)
 		}
+	}
+	if finalizer, ok := adaptor.(relaychannel.ResponsesRequestFinalizer); ok {
+		jsonData, err = finalizer.FinalizeResponsesRequest(info, jsonData)
+		if err != nil {
+			return nil, nil, nil, newConvertRequestFailedError(c, info, err)
+		}
+	}
+	if finalize != nil {
+		jsonData, err = finalize(jsonData)
+		if err != nil {
+			return nil, nil, nil, newConvertRequestFailedError(c, info, err)
+		}
+	}
+	// egress reads the body as it is sent, after the channel finalized it.
+	if jsonData, apiErr = requestplugin.Egress(c, info, jsonData); apiErr != nil {
+		return nil, nil, nil, apiErr
 	}
 
 	logger.LogDebug(c, "requestBody: %s", jsonData)

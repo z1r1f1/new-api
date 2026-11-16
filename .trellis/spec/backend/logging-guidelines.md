@@ -314,3 +314,34 @@ claim.
 Wrong: `RawError = string(responseBody[:500])`.
 Correct: return a generic `common.Message`, retain the HTTP status and an
 allowlisted OAuth error category, and never pass the body to the logger.
+
+## Scenario: Public request-plugin change privacy
+
+### 1. Scope / Trigger
+Request-plugin effects persisted in consume/error logs or rendered to users.
+
+### 2. Signatures / Boundaries
+`RequestPluginChange` crosses runtime → log JSON → frontend record rendering.
+
+### 3. Contracts
+Keep operation, path/from and override status. Record only JSON type, plus
+string/array/object length (including zero); never retain a scalar `value`.
+Short strings, numbers and booleans are not exempt from privacy rules.
+
+### 4. Validation & Error Matrix
+String/array/object → type and length; number/boolean/null → type only.
+Removing an audit value must not remove the corresponding upstream effect.
+
+### 5. Good/Base/Bad Cases
+Good: `{"op":"add","path":"store","type":"boolean"}`.
+Bad: preserving `value:false` or a short string in the public record.
+
+### 6. Tests Required
+Keep request-plugin runtime privacy cases, router wire-versus-log assertions
+and usage-log rendering coverage. Assert actual body/header/quota behavior
+separately from the value-free public record.
+
+### 7. Wrong vs Correct
+Wrong: truncate/stringify a body value. Correct: compute type/length metadata
+without copying the body value into the record, types, schema or renderer.
+

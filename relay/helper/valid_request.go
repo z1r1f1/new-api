@@ -63,7 +63,7 @@ func GetAndValidateRequest(c *gin.Context, format types.RelayFormat) (request dt
 
 func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, error) {
 	audioRequest := &dto.AudioRequest{}
-	err := common.UnmarshalBodyReusable(c, audioRequest)
+	err := common.UnmarshalBodyReusableNoCopy(c, audioRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func GetAndValidAudioRequest(c *gin.Context, relayMode int) (*dto.AudioRequest, 
 
 func GetAndValidateRerankRequest(c *gin.Context) (*dto.RerankRequest, error) {
 	var rerankRequest *dto.RerankRequest
-	err := common.UnmarshalBodyReusable(c, &rerankRequest)
+	err := common.UnmarshalBodyReusableNoCopy(c, &rerankRequest)
 	if err != nil {
 		logger.LogError(c, common.LogText("getAndValidateTextRequest failed: %s", err.Error()))
 		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
@@ -102,7 +102,7 @@ func GetAndValidateRerankRequest(c *gin.Context) (*dto.RerankRequest, error) {
 
 func GetAndValidateEmbeddingRequest(c *gin.Context, relayMode int) (*dto.EmbeddingRequest, error) {
 	var embeddingRequest *dto.EmbeddingRequest
-	err := common.UnmarshalBodyReusable(c, &embeddingRequest)
+	err := common.UnmarshalBodyReusableNoCopy(c, &embeddingRequest)
 	if err != nil {
 		logger.LogError(c, common.LogText("getAndValidateTextRequest failed: %s", err.Error()))
 		return nil, types.NewError(err, types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
@@ -137,7 +137,7 @@ func ExceedsMaxTokensLimit(values ...*uint) bool {
 
 func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest, error) {
 	request := &dto.OpenAIResponsesRequest{}
-	err := common.UnmarshalBodyReusable(c, request)
+	err := common.UnmarshalBodyReusableNoCopy(c, request)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +155,7 @@ func GetAndValidateResponsesRequest(c *gin.Context) (*dto.OpenAIResponsesRequest
 
 func GetAndValidateAlphaSearchRequest(c *gin.Context) (*dto.AlphaSearchRequest, error) {
 	request := &dto.AlphaSearchRequest{}
-	if err := common.UnmarshalBodyReusable(c, request); err != nil {
+	if err := common.UnmarshalBodyReusableNoCopy(c, request); err != nil {
 		return nil, err
 	}
 	if request.Model == "" {
@@ -177,7 +177,7 @@ func GetAndValidateAlphaSearchRequest(c *gin.Context) (*dto.AlphaSearchRequest, 
 // upstream validates query/url itself, and no field changes the per-call price.
 func GetAndValidateDeepSeekToolsRequest(c *gin.Context) (*dto.DeepSeekToolsRequest, error) {
 	request := &dto.DeepSeekToolsRequest{}
-	if err := common.UnmarshalBodyReusable(c, request); err != nil {
+	if err := common.UnmarshalBodyReusableNoCopy(c, request); err != nil {
 		return nil, err
 	}
 	storage, err := common.GetBodyStorage(c)
@@ -197,7 +197,7 @@ func GetAndValidateDeepSeekToolsRequest(c *gin.Context) (*dto.DeepSeekToolsReque
 
 func GetAndValidateResponsesCompactionRequest(c *gin.Context) (*dto.OpenAIResponsesCompactionRequest, error) {
 	request := &dto.OpenAIResponsesCompactionRequest{}
-	if err := common.UnmarshalBodyReusable(c, request); err != nil {
+	if err := common.UnmarshalBodyReusableNoCopy(c, request); err != nil {
 		return nil, err
 	}
 	if request.Model == "" {
@@ -261,7 +261,7 @@ func GetAndValidOpenAIImageRequest(c *gin.Context, relayMode int) (*dto.ImageReq
 		}
 		fallthrough
 	default:
-		err := common.UnmarshalBodyReusable(c, imageRequest)
+		err := common.UnmarshalBodyReusableNoCopy(c, imageRequest)
 		if err != nil {
 			return nil, err
 		}
@@ -374,7 +374,7 @@ func imageRequestRawJSONValueFromString(value string) json.RawMessage {
 
 func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest, err error) {
 	textRequest = &dto.ClaudeRequest{}
-	err = common.UnmarshalBodyReusable(c, textRequest)
+	err = common.UnmarshalBodyReusableNoCopy(c, textRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +397,7 @@ func GetAndValidateClaudeRequest(c *gin.Context) (textRequest *dto.ClaudeRequest
 
 func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenAIRequest, error) {
 	textRequest := &dto.GeneralOpenAIRequest{}
-	err := common.UnmarshalBodyReusable(c, textRequest)
+	err := common.UnmarshalBodyReusableNoCopy(c, textRequest)
 	if err != nil {
 		return nil, err
 	}
@@ -458,7 +458,7 @@ func GetAndValidateTextRequest(c *gin.Context, relayMode int) (*dto.GeneralOpenA
 
 func GetAndValidateGeminiRequest(c *gin.Context) (*dto.GeminiChatRequest, error) {
 	request := &dto.GeminiChatRequest{}
-	err := common.UnmarshalBodyReusable(c, request)
+	err := common.UnmarshalBodyReusableNoCopy(c, request)
 	if err != nil {
 		return nil, err
 	}
@@ -478,7 +478,7 @@ func GetAndValidateGeminiRequest(c *gin.Context) (*dto.GeminiChatRequest, error)
 
 func GetAndValidateGeminiEmbeddingRequest(c *gin.Context) (*dto.GeminiEmbeddingRequest, error) {
 	request := &dto.GeminiEmbeddingRequest{}
-	err := common.UnmarshalBodyReusable(c, request)
+	err := common.UnmarshalBodyReusableNoCopy(c, request)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +487,7 @@ func GetAndValidateGeminiEmbeddingRequest(c *gin.Context) (*dto.GeminiEmbeddingR
 
 func GetAndValidateGeminiBatchEmbeddingRequest(c *gin.Context) (*dto.GeminiBatchEmbeddingRequest, error) {
 	request := &dto.GeminiBatchEmbeddingRequest{}
-	err := common.UnmarshalBodyReusable(c, request)
+	err := common.UnmarshalBodyReusableNoCopy(c, request)
 	if err != nil {
 		return nil, err
 	}

@@ -2,158 +2,188 @@ package openai
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 
-	"github.com/QuantumNous/new-api/common"
+	"github.com/MoeForge/moego/ojson"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 )
 
 // normalizeResponsesToolSchemas translates legacy nested function definitions
 // to the flat Responses format and closes object schemas as required by the
-// upstream Responses API. It intentionally operates on raw JSON because the
-// protocol also permits provider-specific tool definitions.
+// upstream Responses API. Batch raw edits preserve schema property order,
+// precise numbers and opaque provider-specific tool members. Unchanged input
+// is returned without copying.
 func normalizeResponsesToolSchemas(raw json.RawMessage) json.RawMessage {
-	if len(raw) == 0 {
+	if len(raw) == 0 || !ojson.ValidBytes(raw) {
 		return raw
 	}
-	var tools []map[string]any
-	if err := common.Unmarshal(raw, &tools); err != nil {
+	tools := ojson.GetBytesNoCopy(raw, "@this")
+	if !tools.IsArray() {
 		return raw
 	}
+	doc := ojson.NewDoc(raw)
 	changed := false
-	for index, tool := range tools {
-		if toolType, _ := tool["type"].(string); toolType != "function" {
+	for index, tool := range tools.All() {
+		if !tool.IsObject() {
+			if tool.Type == ojson.Null {
+				continue
+			}
+			return raw
+		}
+		if tool.Get("type").Str != "function" {
 			continue
 		}
-		tools[index] = normalizeResponsesFunctionTool(tool)
-		changed = true
+		updated, err := normalizeResponsesFunctionTool(doc, strconv.Itoa(int(index.Int())), tool)
+		if err != nil {
+			return raw
+		}
+		changed = changed || updated
 	}
 	if !changed {
 		return raw
 	}
-	normalized, err := common.Marshal(tools)
+	return doc.Bytes()
+}
+
+func normalizeResponsesFunctionTool(doc *ojson.Doc, path string, tool ojson.Result) (bool, error) {
+	changed := false
+	name := tool.Get("name").Str
+	parameters := tool.Get("parameters")
+	if function := tool.Get("function"); function.IsObject() {
+		if strings.TrimSpace(name) == "" {
+			if nestedName := strings.TrimSpace(function.Get("name").Str); nestedName != "" {
+				if err := relaycommon.SetJSONMember(doc, path, "name", nestedName); err != nil {
+					return false, err
+				}
+				name = nestedName
+			}
+		}
+		if strings.TrimSpace(tool.Get("description").Str) == "" {
+			if description := function.Get("description"); strings.TrimSpace(description.Str) != "" {
+				if err := doc.SetRaw(path+".description", description.Raw); err != nil {
+					return false, err
+				}
+			}
+		}
+		if !parameters.Exists() {
+			if nestedParameters := function.Get("parameters"); nestedParameters.Exists() {
+				if err := doc.SetRaw(path+".parameters", nestedParameters.Raw); err != nil {
+					return false, err
+				}
+				parameters = nestedParameters
+			}
+		}
+		if err := relaycommon.DeleteJSONMember(doc, path+".function"); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	updated, err := closeResponsesObjectSchema(doc, path+".parameters", parameters)
 	if err != nil {
-		return raw
+		return false, err
 	}
-	return normalized
+	changed = changed || updated
+	if strings.EqualFold(strings.TrimSpace(name), "Read") {
+		updated, err = removeReadPagesParameter(doc, path+".parameters")
+		if err != nil {
+			return false, err
+		}
+		changed = changed || updated
+	}
+	return changed, nil
 }
 
-func normalizeResponsesFunctionTool(tool map[string]any) map[string]any {
-	if tool == nil {
-		return tool
+func closeResponsesObjectSchema(doc *ojson.Doc, path string, parameters ojson.Result) (bool, error) {
+	if !parameters.IsObject() || strings.TrimSpace(parameters.Raw[1:len(parameters.Raw)-1]) == "" {
+		return true, doc.SetRaw(path, `{"type":"object","properties":{},"additionalProperties":false}`)
 	}
-	if function, ok := tool["function"].(map[string]any); ok {
-		if name, _ := tool["name"].(string); strings.TrimSpace(name) == "" {
-			if name, _ := function["name"].(string); strings.TrimSpace(name) != "" {
-				tool["name"] = strings.TrimSpace(name)
-			}
-		}
-		if description, _ := tool["description"].(string); strings.TrimSpace(description) == "" {
-			if description, _ := function["description"].(string); strings.TrimSpace(description) != "" {
-				tool["description"] = description
-			}
-		}
-		if _, exists := tool["parameters"]; !exists {
-			if parameters, exists := function["parameters"]; exists {
-				tool["parameters"] = parameters
-			}
-		}
-		delete(tool, "function")
-	}
-	tool["parameters"] = closeResponsesObjectSchema(tool["parameters"])
-	if name, _ := tool["name"].(string); strings.EqualFold(strings.TrimSpace(name), "Read") {
-		removeReadPagesParameter(tool["parameters"])
-	}
-	return tool
+	return closeResponsesSchemaValue(doc, path, parameters)
 }
 
-func closeResponsesObjectSchema(parameters any) any {
-	if parameters == nil {
-		return map[string]any{"type": "object", "properties": map[string]any{}, "additionalProperties": false}
+func closeResponsesSchemaValue(doc *ojson.Doc, path string, value ojson.Result) (bool, error) {
+	changed := false
+	if value.IsArray() {
+		for index, item := range value.All() {
+			updated, err := closeResponsesSchemaValue(doc, path+"."+strconv.Itoa(int(index.Int())), item)
+			if err != nil {
+				return false, err
+			}
+			changed = changed || updated
+		}
+		return changed, nil
 	}
-	bytes, err := common.Marshal(parameters)
-	if err != nil {
-		return closeResponsesObjectSchema(nil)
+	if !value.IsObject() {
+		return false, nil
 	}
-	var schema map[string]any
-	if err := common.Unmarshal(bytes, &schema); err != nil || len(schema) == 0 {
-		return closeResponsesObjectSchema(nil)
+	for key, child := range value.All() {
+		childPath := path + "." + ojson.Escape(key.Str)
+		if child.Type == ojson.Null || key.Str == "required" && !child.IsArray() {
+			if err := relaycommon.DeleteJSONMember(doc, childPath); err != nil {
+				return false, err
+			}
+			changed = true
+			continue
+		}
+		switch key.Str {
+		case "properties":
+			if child.IsObject() {
+				for name, property := range child.All() {
+					updated, err := closeResponsesSchemaValue(doc, childPath+"."+ojson.Escape(name.Str), property)
+					if err != nil {
+						return false, err
+					}
+					changed = changed || updated
+				}
+			}
+		case "items", "anyOf", "oneOf", "allOf":
+			if key.Str == "items" || child.IsArray() {
+				updated, err := closeResponsesSchemaValue(doc, childPath, child)
+				if err != nil {
+					return false, err
+				}
+				changed = changed || updated
+			}
+		}
 	}
-	return closeResponsesSchemaValue(schema)
+	if properties := value.Get("properties"); properties.Exists() && properties.Type != ojson.Null {
+		if value.Get("additionalProperties").Type == ojson.Null {
+			if err := relaycommon.SetJSONMember(doc, path, "additionalProperties", false); err != nil {
+				return false, err
+			}
+			changed = true
+		}
+	}
+	return changed, nil
 }
 
-func closeResponsesSchemaValue(value any) any {
-	switch typed := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(typed)+1)
-		for key, child := range typed {
-			if child == nil {
+func removeReadPagesParameter(doc *ojson.Doc, path string) (bool, error) {
+	changed := false
+	if properties := doc.Get(path + ".properties"); properties.IsObject() && properties.Get("pages").Exists() {
+		if err := relaycommon.DeleteJSONMember(doc, path+".properties.pages"); err != nil {
+			return false, err
+		}
+		changed = true
+	}
+	if required := doc.Get(path + ".required"); required.IsArray() {
+		removed, remaining := 0, 0
+		for index, item := range required.All() {
+			if item.Type != ojson.String || item.Str != "pages" {
+				remaining++
 				continue
 			}
-			switch key {
-			case "properties":
-				if properties, ok := child.(map[string]any); ok {
-					closed := make(map[string]any, len(properties))
-					for name, property := range properties {
-						closed[name] = closeResponsesSchemaValue(property)
-					}
-					out[key] = closed
-					continue
-				}
-			case "required":
-				if _, ok := child.([]any); !ok {
-					continue
-				}
-			case "items":
-				out[key] = closeResponsesSchemaValue(child)
-				continue
-			case "anyOf", "oneOf", "allOf":
-				if variants, ok := child.([]any); ok {
-					closed := make([]any, 0, len(variants))
-					for _, variant := range variants {
-						closed = append(closed, closeResponsesSchemaValue(variant))
-					}
-					out[key] = closed
-					continue
-				}
+			if err := doc.Delete(path + ".required." + strconv.Itoa(int(index.Int())-removed)); err != nil {
+				return false, err
 			}
-			out[key] = child
+			removed++
+			changed = true
 		}
-		if _, hasProperties := out["properties"]; hasProperties {
-			if _, hasAdditionalProperties := out["additionalProperties"]; !hasAdditionalProperties {
-				out["additionalProperties"] = false
+		if remaining == 0 {
+			if err := relaycommon.DeleteJSONMember(doc, path+".required"); err != nil {
+				return false, err
 			}
-		}
-		return out
-	case []any:
-		out := make([]any, 0, len(typed))
-		for _, item := range typed {
-			out = append(out, closeResponsesSchemaValue(item))
-		}
-		return out
-	default:
-		return value
-	}
-}
-
-func removeReadPagesParameter(parameters any) {
-	schema, ok := parameters.(map[string]any)
-	if !ok {
-		return
-	}
-	if properties, ok := schema["properties"].(map[string]any); ok {
-		delete(properties, "pages")
-	}
-	if required, ok := schema["required"].([]any); ok {
-		filtered := make([]any, 0, len(required))
-		for _, item := range required {
-			if item != "pages" {
-				filtered = append(filtered, item)
-			}
-		}
-		if len(filtered) == 0 {
-			delete(schema, "required")
-		} else {
-			schema["required"] = filtered
+			changed = true
 		}
 	}
+	return changed, nil
 }

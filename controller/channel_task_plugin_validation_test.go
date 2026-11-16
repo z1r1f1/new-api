@@ -1,12 +1,17 @@
 package controller
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/request_plugin_setting"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -112,4 +117,112 @@ export function parseTaskResult() { return {}; }
 	setting := `{"task_extend_plugin_keys":["gateway-ext-a"]}`
 	channel := &model.Channel{Type: constant.ChannelTypeOpenAI, Setting: &setting}
 	require.ErrorContains(t, validateChannel(channel, false), "only supported on New API channels")
+}
+
+func TestValidateChannelRequestPlugins(t *testing.T) {
+	plugin, err := jsplugin.DefaultRegistry.Register(`export const meta = {apiVersion: 1, key: "rp-channel", name: "Request only", version: "1.0.0", author: {name: "Test"}};
+export function ingress() { return {action: "continue"}; }`, jsplugin.Options{})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = jsplugin.DefaultRegistry.Unregister(plugin.Meta.Key) })
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{request_plugin_setting.InstancesOption: `[{"id":"rp_known","name":"Known","plugin":"rp-channel","config":{"apiKey":"sk-moderation"}}]`}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{request_plugin_setting.InstancesOption: "[]"}))
+	})
+	baseURL := "https://example.com"
+
+	// A plugin that only processes requests is no channel type.
+	bound := `{"task_plugin_key":"rp-channel"}`
+	channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin, BaseURL: &baseURL, Setting: &bound}
+	require.ErrorContains(t, validateChannel(channel, false), "only processes requests and cannot be a channel type")
+
+	for setting, message := range map[string]string{
+		`{"request_plugins":["rp_known"]}`:            "",
+		`{"request_plugins":["rp_unknown"]}`:          "Request plugin instance rp_unknown does not exist",
+		`{"request_plugins":["rp_known","rp_known"]}`: "Request plugin instance rp_known is bound more than once",
+	} {
+		channel = &model.Channel{Type: constant.ChannelTypeOpenAI, BaseURL: &baseURL, Setting: &setting}
+		if message == "" {
+			assert.NoError(t, validateChannel(channel, false), setting)
+			continue
+		}
+		assert.ErrorContains(t, validateChannel(channel, false), message, setting)
+	}
+
+	// The list channel editors bind from carries no instance config; only
+	// the root user, who sets the instances up, reads it.
+	for role, config := range map[int]any{common.RoleAdminUser: nil, common.RoleRootUser: map[string]any{"apiKey": "sk-moderation"}} {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest("GET", "/api/request_plugin/instances", nil)
+		c.Set("role", role)
+		GetRequestPluginInstances(c)
+		var response struct {
+			Data struct {
+				Instances []map[string]any `json:"instances"`
+			} `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+		require.Len(t, response.Data.Instances, 1)
+		assert.Equal(t, "rp_known", response.Data.Instances[0]["id"])
+		assert.Equal(t, config, response.Data.Instances[0]["config"], "role %d", role)
+	}
+	assert.JSONEq(t, `{"apiKey":"sk-moderation"}`, string(request_plugin_setting.GetInstances()[0].Config))
+}
+
+func TestScopedRequestPluginBindingsAreRejectedOnCreateAndUpdate(t *testing.T) {
+	setupTaskPluginBindChannelTest(t)
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{request_plugin_setting.InstancesOption: `[
+		{"id":"rp-scoped","name":"Scoped","plugin":"rp-scope-validation","enabled":true,"plugin_scope":{"models":["gpt"],"channel_types":[]}},
+		{"id":"rp-scoped-disabled","name":"Disabled scoped","plugin":"rp-scope-validation","enabled":false,"plugin_scope":{"models":[],"channel_types":[]}},
+		{"id":"rp-manual","name":"Manual","plugin":"rp-scope-validation","enabled":true}
+	]`}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{request_plugin_setting.InstancesOption: "[]"}))
+	})
+	const message = "Scoped request plugin instances cannot be bound to a channel"
+	for _, id := range []string{"rp-scoped", "rp-scoped-disabled"} {
+		setting := `{"request_plugins":["` + id + `"]}`
+		channel := model.Channel{Type: constant.ChannelTypeOpenAI, Name: "scope binding", Key: "sk-synthetic", Models: "gpt", Group: "default", Status: common.ChannelStatusEnabled, Setting: &setting}
+		for _, add := range []bool{true, false} {
+			require.EqualError(t, validateChannel(&channel, add), message)
+		}
+		payload, err := common.Marshal(AddChannelRequest{Mode: "single", Channel: &channel})
+		require.NoError(t, err)
+		response := postAddChannel(t, 1, common.RoleRootUser, string(payload))
+		var result struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+		assert.False(t, result.Success)
+		assert.Equal(t, message, result.Message)
+	}
+	var count int64
+	require.NoError(t, model.DB.Model(&model.Channel{}).Count(&count).Error)
+	assert.Zero(t, count, "neither enabled nor disabled scoped instances can be persisted as a new binding")
+
+	// A legacy ineffective binding must remain removable by a normal edit.
+	setting := `{"request_plugins":["rp-scoped"]}`
+	channel := model.Channel{Type: constant.ChannelTypeOpenAI, Name: "legacy binding", Key: "sk-synthetic", Models: "gpt", Group: "default", Status: common.ChannelStatusEnabled, Setting: &setting}
+	require.NoError(t, channel.Insert())
+	for _, tc := range []struct {
+		setting string
+		success bool
+	}{
+		{setting: setting},
+		{setting: `{"request_plugins":[]}`, success: true},
+		{setting: `{"request_plugins":["rp-manual"]}`, success: true},
+	} {
+		payload, err := common.Marshal(map[string]any{"id": channel.Id, "setting": tc.setting})
+		require.NoError(t, err)
+		response, raw := callChannelAPI(t, UpdateChannel, "PUT", "/api/channel", string(payload))
+		require.Equal(t, tc.success, response.Success, raw)
+		if !tc.success {
+			assert.Equal(t, message, response.Message)
+		}
+		stored, err := model.GetChannelById(channel.Id, true)
+		require.NoError(t, err)
+		require.NotNil(t, stored.Setting)
+		assert.JSONEq(t, tc.setting, *stored.Setting)
+	}
 }

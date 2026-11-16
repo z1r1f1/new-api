@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, it } from 'vitest'
 
+import { formatPricingNumber } from '@/features/system-settings/models/pricing-format'
+
 import { buildPricingChanges, type ModelPricingConfig } from '../api'
 import {
   applyPriceSyncSelections,
@@ -142,6 +144,21 @@ describe('shared model pricing', () => {
       ).toThrow()
     }
   })
+
+  it('reads expression drafts from the form fields over loaded option keys', () => {
+    const options = pricingOptions({
+      'billing_setting.billing_mode': '{}',
+      'billing_setting.billing_expr': '{}',
+      BillingMode: '{"example":"tiered_expr"}',
+      BillingExpr: '{"example":"tier(\\"base\\", p * 2)"}',
+    })
+    expect(JSON.parse(options['billing_setting.billing_expr'])).toEqual({
+      example: 'tier("base", p * 2)',
+    })
+    expect(JSON.parse(options['billing_setting.billing_mode'])).toEqual({
+      example: 'tiered_expr',
+    })
+  })
 })
 
 it('tracks nested provider prices by model, preserves :: in model names, and ignores key order', () => {
@@ -234,4 +251,16 @@ it('commits source provider edits while preserving target providers during batch
     'alpha::source': '3',
     'beta::target': '2',
   })
+})
+
+it.each([0, 1e-12, 1.23e-15, Number.MIN_VALUE])(
+  'keeps the exact nonzero magnitude of price %s through display formatting',
+  (price) => {
+    expect(Number(formatPricingNumber(price))).toBe(price)
+  }
+)
+
+it('still removes floating point display drift without changing a real zero price', () => {
+  expect(formatPricingNumber(0.1 + 0.2)).toBe('0.3')
+  expect(formatPricingNumber(0)).toBe('0')
 })

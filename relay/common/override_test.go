@@ -268,6 +268,18 @@ func TestApplyParamOverrideRegexReplace(t *testing.T) {
 			path:  "messages.*.content", from: `^foo (\d)$`, to: "baz $1",
 			want: `{"messages":[{"content":"baz 1"},{"content":"baz 2"},{"content":"bar"}]}`,
 		},
+		{
+			name:  "unicode named captures and literal dollar",
+			input: `{"text":"用户: 张三; 用户: 李四"}`,
+			path:  "text", from: `用户: (?P<name>\p{Han}+)`, to: `${name} $$`,
+			want: `{"text":"张三 $; 李四 $"}`,
+		},
+		{
+			name:  "multiline anchors preserve empty lines",
+			input: `{"text":"first\n\nlast"}`,
+			path:  "text", from: `(?m)^`, to: "> ",
+			want: `{"text":"> first\n> \n> last"}`,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			operation["path"] = tt.path
@@ -1891,6 +1903,16 @@ func TestApplyParamOverrideWithRelayInfoHashesLongSessionIDHeader(t *testing.T) 
 	}
 }
 
+type passthroughStorageProbe struct {
+	common2.BodyStorage
+	bytesCalls int
+}
+
+func (s *passthroughStorageProbe) Bytes() ([]byte, error) {
+	s.bytesCalls++
+	return s.BodyStorage.Bytes()
+}
+
 func TestNewPassthroughJSONBodyPreservesRawFieldsAndReplayOwnership(t *testing.T) {
 	longKey := strings.Repeat("a", 70)
 	const hashedKey = "6bd5e5034855a11241f0dee8fc72850ffd9955b28347a86428b5fa19119f6ad0"
@@ -1913,12 +1935,26 @@ func TestNewPassthroughJSONBodyPreservesRawFieldsAndReplayOwnership(t *testing.T
 				t.Run(tc.name, func(t *testing.T) {
 					input := []byte(fmt.Sprintf(template, tc.key, tc.tier))
 					want := []byte(fmt.Sprintf(template, tc.wantKey, tc.wantTier))
-					storage, err := common2.CreateBodyStorage(input)
+					source, err := common2.CreateBodyStorage(input)
+					require.NoError(t, err)
+					storage := &passthroughStorageProbe{BodyStorage: source}
+					_, err = storage.Seek(7, io.SeekStart)
 					require.NoError(t, err)
 					t.Cleanup(func() { assert.NoError(t, storage.Close()) })
 					require.Equal(t, disk, storage.IsDisk())
 					body, closer, err := NewPassthroughJSONBody(storage)
 					require.NoError(t, err)
+					position, err := storage.Seek(0, io.SeekCurrent)
+					require.NoError(t, err)
+					assert.EqualValues(t, 7, position, "normalization must not move the incoming cursor")
+					if disk && !tc.changed {
+						assert.Zero(t, storage.bytesCalls, "unchanged disk bodies must use bounded field reads")
+					}
+					if tc.changed {
+						require.NotNil(t, closer)
+					} else {
+						require.Nil(t, closer, "unchanged storage remains incoming-owned")
+					}
 					if closer != nil {
 						t.Cleanup(func() { assert.NoError(t, closer.Close()) })
 					}
@@ -2991,4 +3027,29 @@ func TestReasoningEffortOverrideIsAuditedWithoutDebugMode(t *testing.T) {
 	_, err := ApplyParamOverrideWithRelayInfo([]byte(`{"reasoning":{"effort":"high"}}`), info)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"set reasoning.effort = max"}, info.ParamOverrideAudit)
+}
+
+func TestApplyPluginParamOverrideReturnsOnlyItsHeaderChanges(t *testing.T) {
+	override := map[string]any{
+		"operations": []any{
+			map[string]any{"mode": "set_header", "path": "X-Added", "value": "new"},
+			map[string]any{"mode": "set_header", "path": "X-Changed", "value": "after"},
+			map[string]any{"mode": "delete_header", "path": "X-Removed"},
+			map[string]any{"path": "temperature", "mode": "set", "value": 0.5},
+		},
+	}
+	base := map[string]any{"X-Kept": "kept", "X-Changed": "before", "X-Removed": "gone"}
+
+	body, set, removed, err := ApplyPluginParamOverride([]byte(`{"model":"gpt"}`), override, map[string]any{"model": "gpt"}, base)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"model":"gpt","temperature":0.5}`, string(body))
+	assert.Equal(t, map[string]string{"x-added": "new", "x-changed": "after"}, set)
+	assert.Equal(t, []string{"x-removed"}, removed)
+	assert.Equal(t, map[string]any{"X-Kept": "kept", "X-Changed": "before", "X-Removed": "gone"}, base)
+
+	override = map[string]any{"operations": []any{map[string]any{"mode": "return_error", "value": map[string]any{"message": "no", "code": "Blocked"}}}}
+	_, _, _, err = ApplyPluginParamOverride([]byte(`{}`), override, map[string]any{}, nil)
+	returned, ok := AsParamOverrideReturnError(err)
+	require.True(t, ok)
+	assert.Equal(t, "Blocked", returned.Code)
 }

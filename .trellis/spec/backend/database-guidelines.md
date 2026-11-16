@@ -299,3 +299,67 @@ second upstream; a billing API return value alone does not prove suppression.
 Wrong: call `PostConsumeUserSubscriptionDelta` from an already-open refund
 transaction. Correct: call `postConsumeUserSubscriptionDeltaTx(tx, ...)` and
 save the refund marker using the same `tx`.
+
+## Scenario: Actor-bound atomic plugin-login completion
+
+### 1. Scope / Trigger
+Completing OAuth/device login that writes provider credentials to channels.
+
+### 2. Signatures / Boundaries
+Carry full `model.AuthSessionIdentity` and the server-owned initiating version;
+reuse `ConsumeAuthFlowWithAction` and `ValidateAuthSessionWithTx`.
+
+### 3. Contracts
+Validate claim payload/current actor, consume the flow and persist credentials
+in one transaction. Lock flow → user → session/PAT → channels, then recheck
+expiry after lock waits. No network calls inside this transaction. HTTP paths
+always supply complete authorization; nil is only a trusted internal-store API.
+
+### 4. Validation & Error Matrix
+Revoked/expired session/PAT, changed version, disabled actor, stale claim or
+expired flow → no credentials. Write failure → roll back flow consumption too.
+
+### 5. Good/Base/Bad Cases
+Good: one concurrent claimant commits once. Bad: authorize before a provider
+network call and save unconditionally after authority has been revoked.
+
+### 6. Tests Required
+Run expiry/revocation/version/claim/replay/concurrency/write-failure cases on
+real SQLite/MySQL/PostgreSQL. Fixtures must own their namespaces; reuse
+`newAuditTestDatabase` for controller main/log isolation, never drop shared tables.
+OWASP Authentication, Session Management and OAuth2 Cheat Sheets; ASVS 5.0.0
+references are control guidance, not a whole-application compliance claim.
+
+### 7. Wrong vs Correct
+Wrong: duplicate a weaker actor guard. Correct: execute the established guard
+and credential action under the existing authoritative flow transaction.
+
+## Scenario: Reversible sensitive-word configuration migration
+
+### 1. Scope / Trigger
+Replacing the five legacy sensitive-word options with a request-plugin instance.
+
+### 2. Signatures / Boundaries
+Startup migration, request-plugin instance options and operational rollback.
+
+### 3. Contracts
+Preserve the old enabled/disabled policy; populated words do not imply enabled
+filtering. Migrate once and retire all five old options. Rollback restores both
+those values and the prior request-plugin instance option before old startup.
+
+### 4. Validation & Error Matrix
+Repeated startup → no duplicate instance. Disabled legacy filtering → disabled
+global filter. Failed upgrade/rollback → business rows remain unchanged.
+
+### 5. Good/Base/Bad Cases
+Good: disabled words migrate to one disabled filter. Bad: old-image-only rollback
+after deleting the options, or discarding pre-existing plugin instances.
+
+### 6. Tests Required
+Real three-engine fresh/release-upgrade startup twice, data/index/constraint
+preservation and explicit option restoration followed by old-release startup.
+
+### 7. Wrong vs Correct
+Wrong: infer rollback safety from an image switch. Correct: verify the complete
+reversible configuration transition against the preserved release baseline.
+

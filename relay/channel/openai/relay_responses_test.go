@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/dto"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
 	"github.com/gin-gonic/gin"
@@ -144,5 +145,71 @@ func TestOaiResponsesStreamHandlerIncludesResponseFailedDetails(t *testing.T) {
 	for _, diagnostic := range info.StreamStatus.Errors {
 		assert.NotContains(t, diagnostic.Message, "private.example.com")
 		assert.NotContains(t, diagnostic.Message, "route.example.net")
+	}
+}
+
+func TestResponsesToolSchemasPreserveRawJSON(t *testing.T) {
+	type schemaCase struct {
+		name  string
+		input string
+		want  string
+	}
+	tests := []schemaCase{
+		{
+			name:  "flat schema preserves precision order and explicit zero values",
+			input: `[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"z":{"const":9007199254740993},"a":{"const":0},"flag":{"const":false}}},"x-vendor":{"z":1e+30, "a":false,"n":null}}]`,
+			want:  `[{"type":"function","name":"lookup","parameters":{"type":"object","properties":{"z":{"const":9007199254740993},"a":{"const":0},"flag":{"const":false}},"additionalProperties":false},"x-vendor":{"z":1e+30, "a":false,"n":null}}]`,
+		},
+		{
+			name:  "nested Read flattens without changing opaque tools or required values",
+			input: `[{"type":"custom","format":{"z":9007199254740993, "a":0}},null,{"type":"function","function":{"name":" Read ","description":" reader ","parameters":{"type":"object","properties":{"z":{"const":9007199254740993},"pages":{"type":"string"},"a":{"const":0}},"required":["pages","z","pages",9007199254740993,false,"a"]}},"strict":true,"x-vendor":{"z":0,"a":false}}]`,
+			want:  `[{"type":"custom","format":{"z":9007199254740993, "a":0}},null,{"type":"function","strict":true,"x-vendor":{"z":0,"a":false},"name":"Read","description":" reader ","parameters":{"type":"object","properties":{"z":{"const":9007199254740993},"a":{"const":0}},"required":["z",9007199254740993,false,"a"],"additionalProperties":false}}]`,
+		},
+		{
+			name:  "flat members override legacy nested members",
+			input: `[{"type":"function","function":{"name":"ignored","description":"ignored","parameters":{"properties":{"ignored":{}}}},"name":"flat","description":"kept","parameters":{"properties":{"z":{"const":9007199254740993},"a":{"const":0}},"additionalProperties":true}}]`,
+			want:  `[{"type":"function","name":"flat","description":"kept","parameters":{"properties":{"z":{"const":9007199254740993},"a":{"const":0}},"additionalProperties":true}}]`,
+		},
+		{
+			name:  "recursive closure preserves escaped names and opaque schema members",
+			input: `[{"type":"function","parameters":{"properties":{"n.est":{"items":[{"properties":{"z":{"const":9007199254740993},"a":{"const":0}}}]},"nullable":null},"anyOf":[{"properties":{}}],"oneOf":[{"items":{"properties":{}}}],"allOf":[{"properties":{},"additionalProperties":true}],"required":"invalid","ignored":null,"additionalProperties":null,"x-vendor":{"z":9007199254740993, "a":0}}}]`,
+			want:  `[{"type":"function","parameters":{"properties":{"n.est":{"items":[{"properties":{"z":{"const":9007199254740993},"a":{"const":0}},"additionalProperties":false}]},"nullable":null},"anyOf":[{"properties":{},"additionalProperties":false}],"oneOf":[{"items":{"properties":{},"additionalProperties":false}}],"allOf":[{"properties":{},"additionalProperties":true}],"x-vendor":{"z":9007199254740993, "a":0},"additionalProperties":false}}]`,
+		},
+		{
+			name:  "Read drops an empty required list after removing pages",
+			input: `[{"type":"function","name":" rEaD ","parameters":{"properties":{"pages":{"type":"string"}},"required":["pages","pages"]}}]`,
+			want:  `[{"type":"function","name":" rEaD ","parameters":{"properties":{},"additionalProperties":false}}]`,
+		},
+	}
+	for _, parameters := range []string{"", "null", "false", "0", `"invalid"`, "[]", "{ }"} {
+		input := `[{"type":"function"`
+		if parameters != "" {
+			input += `,"parameters":` + parameters
+		}
+		tests = append(tests, schemaCase{
+			name:  "default parameters " + parameters,
+			input: input + `}]`,
+			want:  `[{"type":"function","parameters":{"type":"object","properties":{},"additionalProperties":false}}]`,
+		})
+	}
+	for _, input := range []string{
+		"", "null", `{ "type":"function" }`,
+		`[{"type":"function"},1]`, `[{"type":"function"},]`,
+		`[null,{"type":"web_search","x-vendor":{"z":9007199254740993, "a":false}}]`,
+	} {
+		tests = append(tests, schemaCase{name: "unchanged " + input, input: input, want: input})
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request := dto.OpenAIResponsesRequest{Model: "gpt-4o-mini", Tools: []byte(tt.input)}
+			info := &relaycommon.RelayInfo{OriginModelName: request.Model, ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeOpenAI}}
+			converted, err := (&Adaptor{}).ConvertOpenAIResponsesRequest(nil, info, request)
+			require.NoError(t, err)
+			normalized, ok := converted.(dto.OpenAIResponsesRequest)
+			require.True(t, ok)
+			assert.Equal(t, tt.want, string(normalized.Tools))
+			assert.Equal(t, tt.input, string(request.Tools), "normalization must not mutate the retry input")
+			assert.Equal(t, tt.want, string(normalizeResponsesToolSchemas(normalized.Tools)), "normalization must be idempotent")
+		})
 	}
 }

@@ -2914,3 +2914,69 @@ and reverse-proxy status/assets, option hashes, mounts and image-only rollback.
 Wrong: trust a pre-fix candidate tag or compare `old['Mounts'] == new['Mounts']`.
 Correct: require matching image ID/revision and compare mounts keyed by destination.
 
+## Scenario: Final gateway body identity and replay ownership
+
+### 1. Scope / Trigger
+Changing request plugins, gateway-owned scalar normalization or HTTP/WS send paths.
+
+### 2. Signatures / Boundaries
+`requestplugin.Egress` returns the body to send and `*types.NewAPIError`;
+`PassThrough` accepts `common.ReplayableBody`.
+
+### 3. Contracts
+Apply channel/plugin transformations and transport envelopes before final
+normalization and Egress inspection. Send exactly the returned bytes; no body
+mutation afterward. Preserve raw schema order, integers, zero and false.
+Borrow unchanged replay bodies, inspect through independent readers, and do
+not materialize an unchanged disk body with `Bytes()`. Changed storage owns
+its closer; public Responses preparation retains a non-nil success closer.
+Responses tool flattening/object closure must use ordered/raw edits too: adding
+`additionalProperties:false` never permits changing a large integer, numeric
+spelling or unrelated member order. Keep the `Read.pages` compatibility cleanup
+without generic `map[string]any` decode/re-encode of tools or schemas.
+
+### 4. Validation & Error Matrix
+Late `fast`/oversized cache-key insertion → normalize before inspection/send.
+Passthrough → preserve hook permissions, cursor and original retry storage.
+
+### 5. Good/Base/Bad Cases
+Good: plugin-observed body equals HTTP body/WS frame. Bad: adding a WS envelope
+or re-marshaling after inspection, or closing borrowed request storage.
+
+### 6. Tests Required
+Exercise real local HTTP and WS frames, filtered/channel/global passthrough,
+memory/disk bodies, late override reinsertion and cursor/closer lifetimes.
+
+### 7. Wrong vs Correct
+Wrong: call Egress then send an earlier buffer. Correct: propagate and send
+its returned body, including on native Responses and passthrough paths.
+
+## Scenario: Scoped request-plugin channel bindings
+
+### 1. Scope / Trigger
+Channel create/update or request-plugin binding editors.
+
+### 2. Signatures / Boundaries
+Instance `plugin_scope` is authoritative in both channel API validation and UI.
+
+### 3. Contracts
+Any non-nil scope forbids a channel binding, including disabled scopes. Hide
+these instances from candidates; retain existing invalid bindings visibly
+with an explanation and removal action. Preserve credential-file imports.
+
+### 4. Validation & Error Matrix
+Scoped binding → reject server-side with the stable frontend translation key;
+legacy scoped binding → display/removal remains possible, never silent deletion.
+
+### 5. Good/Base/Bad Cases
+Good: remove an ineffective legacy binding. Bad: treating disabled scope as
+unscoped or relying on UI filtering as authorization.
+
+### 6. Tests Required
+Controller validation covers scoped/disabled instances; channel UI tests cover
+candidate exclusion, legacy removal and unchanged ordinary/file-import modes.
+
+### 7. Wrong vs Correct
+Wrong: check only `scope.enabled`. Correct: distinguish nil scope from every
+configured scope at the authoritative server boundary.
+

@@ -118,6 +118,26 @@ func TestImportChannelsTaskPluginRequiresBindPermission(t *testing.T) {
 	adminDenied := postImportChannel(t, 2, common.RoleAdminUser, payload, credential)
 	assert.Contains(t, adminDenied.Body.String(), "task plugin channels require the task_plugin.bind permission")
 	assert.Contains(t, adminDenied.Body.String(), `"success":false`)
+
+	t.Run("New API extension import also requires bind permission", func(t *testing.T) {
+		response := postImportChannel(t, 2, common.RoleAdminUser, payload, `{"channel_type":60,"api_key":"secret"}`)
+		assert.Contains(t, response.Body.String(), "task plugin channels require the task_plugin.bind permission")
+		assert.Contains(t, response.Body.String(), `"success":false`)
+	})
+
+	t.Run("provider checkKey validates imported credentials", func(t *testing.T) {
+		_, err := jsplugin.DefaultRegistry.Register(`export const meta = {apiVersion: 1, key: "channel-bind-import", name: "Import", version: "1.0.0", author: {name: "Test"}, baseUrl: "https://vendor.example", relay: [{incoming_path: "/v1/chat/completions", upstream_path: "/chat"}]};
+export function checkKey() { return {error: "Imported credential rejected"}; }`, jsplugin.Options{})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister("channel-bind-import")) })
+		response := postImportChannel(t, 1, common.RoleRootUser, payload, credential)
+		assert.Contains(t, response.Body.String(), "Imported credential rejected")
+		assert.Contains(t, response.Body.String(), `"success":false`)
+		assert.NotContains(t, response.Body.String(), "secret")
+		var count int64
+		require.NoError(t, model.DB.Model(&model.Channel{}).Count(&count).Error)
+		assert.Zero(t, count)
+	})
 }
 
 func TestUpdateChannelTaskPluginRequiresBindPermission(t *testing.T) {
