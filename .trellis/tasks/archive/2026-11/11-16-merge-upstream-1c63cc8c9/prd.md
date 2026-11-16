@@ -2,7 +2,7 @@
 
 ## Goal
 
-Integrate the reviewed upstream target into local main, preserve native relay/custom administration contracts, fix the identified integration defects, and verify in isolation without changing production.
+Integrate the reviewed upstream target into local main, preserve native relay/custom administration contracts, fix the identified integration defects, verify in isolation, then commit, push and deploy the verified immutable candidate under explicit release authorization.
 
 ## Frozen inputs
 
@@ -10,7 +10,7 @@ Integrate the reviewed upstream target into local main, preserve native relay/cu
 - Upstream target: 1c63cc8c903630cf16611515d81b9785134daf19
 - Upstream base: c046559bbd8b154e88e69905f60e71a5f4f1e5aa
 - Reviewed synthetic tree: e05a63cc8832d33c767124cc26d401301eca589f
-- User authorizes integration and requires disk awareness. Deployment, push, production writes and deletion of existing data/resources are out of scope.
+- Initial authorization covered integration and disk-aware isolated verification only. The user's subsequent explicit instruction, “提交推送并部署”, authorizes the two-parent merge commit, non-force origin/main push, private production backup and application-only deployment described below; unrelated data and resources remain protected.
 
 ## Requirements
 
@@ -28,7 +28,7 @@ Integrate the reviewed upstream target into local main, preserve native relay/cu
 
 - Initial root available: 66618261504 bytes (approximately 62 GiB); reserve at least 20 GiB throughout.
 - Reuse installed dependencies and existing database images; use one worktree and one candidate binary, bounded compiler/test parallelism, and sequential database engine scenarios.
-- No Docker/system prune, old cache/backup deletion, running-container/image/volume removal, or production restarts.
+- No Docker/system prune, old cache/backup deletion, or unrelated container/image/volume removal. After private backup and rollback preparation, recreate only the production application; never restart PostgreSQL, Redis or other dependencies.
 - Temporary database containers, volumes, binaries and fixtures must be uniquely named and cleaned only if created by this task.
 - Preserve the three pre-existing untracked task directories.
 
@@ -39,7 +39,9 @@ Integrate the reviewed upstream target into local main, preserve native relay/cu
 - Real SQLite/MySQL/PostgreSQL fresh and representative-upgrade migration verification, repeated startup, data preservation and rollback evidence; actual Redis integrity/quota tests.
 - Isolated gateway HTTP/WS checks for native protocols, raw JSON/normalization, large disk bodies, retries/cancellation, plugin execution and billing. No paid or production upstream inference.
 - Browser proof of the changed administration surfaces using isolated fixtures.
-- Report exact commands/results, remaining scope, disk before/after and unchanged production baseline. Do not commit or push without the required commit confirmation.
+- Report exact commands/results, remaining scope and disk before/after. Preserve the frozen merge parents, push non-force to the existing origin/main, and bind the committed source to the already-verified image without rebuilding it or mislabelling the source-tree digest as a Git SHA.
+- Before cutover, capture exact production configuration and stored overrides, validate a fresh PostgreSQL custom dump and retain an executable application/configuration-boundary rollback. Restore only the five retired sensitive options and original request-plugin instances on rollback; never restore the whole database automatically.
+- After cutover, prove the exact image/version/health, unchanged environment/mounts/command/restart/network and dependency identities/lifecycles, preserved settings and stored plugins, disabled global sensitive filter with real keywords retained, direct/NGINX public pages and linked assets, and the public browser sign-in surface without logging in.
 
 ## Known activation boundaries
 

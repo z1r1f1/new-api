@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
-- **Last Active**: 2026-11-02
+- **Total Sessions**: 9
+- **Last Active**: 2026-11-16
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~289 | Active |
+| `journal-1.md` | ~325 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-11-16 | Upstream integration and immutable production release | `b2ea6c04e900a012a03e3e3b04555865dab23ff6` | `main` |
 | 8 | 2026-11-02 | Merge upstream c046559bb and redeploy rc.47 | `ae5d2476043073b8a1e4a1f15351590e09c6cfb1`, `9b6fcd223b79a1aa8f954a2c7ebb1e78f1b3c4d9` | `integrate/upstream-20261102-c046559bb` |
 | 7 | 2026-10-24 | Merge upstream 33c61a242 and deploy native DeepSeek protocols | `ea4b3d6759055365f13285b0ee82ad36ce70296a` | `integrate/upstream-20261024-native-deepseek` |
 | 6 | 2026-10-22 | Merge upstream d8e65613c and deploy rc.46 | `b2756cb0e`, `3cf656554` | `integration/upstream-d8e65613c-20261022` |

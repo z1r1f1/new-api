@@ -290,3 +290,36 @@ Merged the reviewed50 upstream commits, corrected replayable raw normalization, 
 ### Next Steps
 
 - None - task complete
+
+
+## Session 9: Upstream integration and immutable production release
+
+**Date**: 2026-11-16
+**Task**: Upstream integration and immutable production release
+**Branch**: `main`
+
+### Summary
+
+Explicit user release authorization completed. True two-parent merge pushed non-force to origin/main;2998 committed source files matched the accepted manifest. Reused immutable de18fe889882 image as v1.0.0-rc.51-local.20261116; app-only cutover healthy. PostgreSQL/Redis and all six original dependencies unchanged;104 options outside sensitive migration boundary, stored plugins and8 channel overrides preserved. Fresh0600 PostgreSQL custom backup plus TOC/SHA and bounded application/configuration rollback retained. Direct3001/NGINX8999 public pages and real JS/CSS, plus fresh public sign-in browser proof passed without login/OAuth/paid calls. Prior acceptance: root8106,relaykit605,frontend171; real SQLite3.50.4/MySQL8.4.11/PostgreSQL16.13 fresh/upgrade/idempotence/old-local rollback;43HTTP+4stored-overrides;66Redis observations. Authentication references: OWASP Authentication/Session Management/MFA/OAuth2 and ASVS5.0.0; no blanket compliance claim. Evidence and rollback: .runtime/prod/deploy-backups/20261116T035020Z; isolated evidence: .runtime/integration/20261116-1c63cc8c9. Runtime/private data and three original task directories remain excluded.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b2ea6c04e900a012a03e3e3b04555865dab23ff6` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
